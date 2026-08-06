@@ -171,6 +171,39 @@ These are absence-of-implementation failures, not regressions.
   minimal-length, positivity and coordinate-size checks plus negative and positive
   vectors were added. Cycle 2 returned PASS with a non-gating stale focused-test
   count nit, which is corrected above.
+- Commit: `59275eac9a7ab64ed5248e16c45fcadc218436d7`.
+
+### Milestone 4: explicit profiles and trust policy
+
+- Acceptance:
+  1. Final OpenID 1.0/OARI development behavior and iGrant Draft 13/18 behavior are
+     separate immutable profiles with versions, source URLs, formats, identifiers,
+     algorithms, key policy, trust sources and retirement rules.
+  2. Unknown profiles and unsupported format/identifier/algorithm combinations fail
+     explicitly with no permissive fallback.
+  3. Trust uses evidence-bearing `trusted`, `untrusted`, `invalid` and
+     `indeterminate` verdicts, never a Boolean.
+  4. A trusted verdict requires fresh valid evidence for every profile-required
+     source; missing or stale evidence becomes indeterminate and rejects.
+  5. Strict and invalid states always reject. Permitted one-time consent preserves
+     the untrusted verdict and never upgrades it to trusted.
+- Review cycle: 2
+- Changed paths: `Package.swift`, `Packages/Sources/ProfileDomain/**`,
+  `Packages/Sources/TrustDomain/**`, `Packages/Tests/ProfileDomainTests/**`,
+  `Packages/Tests/TrustDomainTests/**`, `docs/EVIDENCE.md`.
+- Checks:
+  - First `swift test`: failed on a shadowed initializer parameter in
+    `StaticProfileRegistry`; fixed with explicit property assignment.
+  - `swift test` after trust fixes: pass, 24 tests in 7 suites.
+  - Simulator `xcodebuild ... test`: pass, two app tests.
+  - `git diff --check`: pass.
+  - `python3 Scripts/check_tracked_secrets.py`: pass, 41 repository files inspected.
+- Review findings: cycle 1 found final-document URLs on the draft profile,
+  contradictory evidence acceptance and no profile-owned maximum evidence age.
+  Draft 13/18 now use revision-specific archived URLs; profiles define source-specific
+  maximum age and validity; invalid/not-found/unavailable conflicts and malformed or
+  stale timestamps fail closed with negative tests. Cycle 2 returned PASS with a
+  non-gating stale evidence-ledger count, corrected above.
 - Commit: this milestone commit; exact SHA is recorded in the session ledger after creation.
 
 ### Milestone 1: domain contracts
