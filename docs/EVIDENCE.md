@@ -136,6 +136,41 @@ These are absence-of-implementation failures, not regressions.
   A non-gating stale test-count nit was corrected. Keychain duplicate
   creation races now reload the winning key, and keychain access failures remain
   distinguishable from corrupt ciphertext.
+- Commit: `6348ccf24289050b9a732c9efb9496969c18ecf4`.
+
+### Milestone 3: device-bound signing keys
+
+- Acceptance:
+  1. ES256 private keys are generated in Keychain, with explicit required/preferred
+     Secure Enclave or lower-assurance software policy and no silent policy change.
+  2. Secure Enclave keys use private-key-only operations and user-presence access
+     controls when requested; software keys are explicitly labelled lower assurance.
+  3. Signing supports profile-appropriate JOSE raw and X9.62 DER forms, while only
+     public key material can be exported.
+  4. Key deletion makes subsequent signing fail with key-not-found.
+  5. Focused cryptographic lifecycle and malformed-signature tests pass.
+- Review cycle: 2
+- Changed paths: `Packages/Sources/WalletDomain/KeyModels.swift`,
+  `Packages/Sources/WalletDomain/WalletPorts.swift`,
+  `Packages/Sources/WalletVault/DeviceBoundKeyProvider.swift`,
+  `Packages/Tests/WalletVaultTests/DeviceBoundKeyProviderTests.swift`,
+  `docs/EVIDENCE.md`.
+- Checks:
+  - First `swift test`: failed because macOS command-line Keychain creation cannot
+    use the access-control form without an application entitlement. Software keys
+    that do not request user presence now use the equivalent
+    `WhenUnlockedThisDeviceOnly` accessibility attribute directly; protected and
+    Secure Enclave keys retain access-control flags.
+  - Focused key-provider tests after strict-DER fix: pass, three tests.
+  - Full `swift test` after strict-DER fix: pass, 15 tests in 5 suites.
+  - Simulator `xcodebuild ... test`: pass, two app tests.
+  - `git diff --check`: pass.
+  - `python3 Scripts/check_tracked_secrets.py`: pass, 34 repository files inspected.
+- Review findings: cycle 1 found that the DER converter did not enforce its outer
+  sequence boundary or canonical positive INTEGER/length encodings. Strict boundary,
+  minimal-length, positivity and coordinate-size checks plus negative and positive
+  vectors were added. Cycle 2 returned PASS with a non-gating stale focused-test
+  count nit, which is corrected above.
 - Commit: this milestone commit; exact SHA is recorded in the session ledger after creation.
 
 ### Milestone 1: domain contracts

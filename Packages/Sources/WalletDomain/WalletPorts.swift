@@ -17,10 +17,12 @@ public protocol KeyProvider: Sendable {
     func createKey(
         purpose: KeyPurpose,
         algorithm: SigningAlgorithm,
-        requiresUserPresence: Bool
+        requiresUserPresence: Bool,
+        protection: KeyProtectionPolicy
     ) async throws -> KeyRecord
 
     func sign(_ request: SigningRequest) async throws -> Data
+    func publicKey(id: KeyID) async throws -> PublicKeyMaterial
     func deleteKey(id: KeyID) async throws
 }
 

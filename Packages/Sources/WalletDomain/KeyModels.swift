@@ -31,6 +31,27 @@ public enum KeyAssurance: String, Codable, Sendable {
     case keychainSoftware
 }
 
+public enum KeyProtectionPolicy: String, Codable, Sendable {
+    case secureEnclaveRequired
+    case secureEnclavePreferred
+    case keychainSoftware
+}
+
+public enum SignatureFormat: String, Codable, Sendable {
+    case joseRaw
+    case x962DER
+}
+
+public struct PublicKeyMaterial: Equatable, Sendable {
+    public let algorithm: SigningAlgorithm
+    public let x963Representation: Data
+
+    public init(algorithm: SigningAlgorithm, x963Representation: Data) {
+        self.algorithm = algorithm
+        self.x963Representation = x963Representation
+    }
+}
+
 public struct KeyRecord: Codable, Equatable, Identifiable, Sendable {
     public let id: KeyID
     public let purpose: KeyPurpose
@@ -60,10 +81,17 @@ public struct SigningRequest: Equatable, Sendable {
     public let keyID: KeyID
     public let payload: Data
     public let userAuthenticationReason: String
+    public let signatureFormat: SignatureFormat
 
-    public init(keyID: KeyID, payload: Data, userAuthenticationReason: String) {
+    public init(
+        keyID: KeyID,
+        payload: Data,
+        userAuthenticationReason: String,
+        signatureFormat: SignatureFormat = .joseRaw
+    ) {
         self.keyID = keyID
         self.payload = payload
         self.userAuthenticationReason = userAuthenticationReason
+        self.signatureFormat = signatureFormat
     }
 }
