@@ -1,0 +1,29 @@
+# Xcode user state and build output
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.p12
+*.p8
+*.pfx
+*.pem
+*.mobileprovision
+*.cer
+*.crt
+*.der
+*.jks
+*.key
+
+# macOS
+.DS_Store

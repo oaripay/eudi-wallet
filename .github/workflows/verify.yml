@@ -1,0 +1,33 @@
+name: verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: [self-hosted, macOS, ARM64, oari-swift-6-3]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify toolchain
+        run: |
+          test "$(xcodebuild -version | sed -n '1p')" = "Xcode 26.5"
+          swift --version | grep -F "Apple Swift version 6.3.2"
+          xcodegen --version
+      - name: Generate project
+        run: xcodegen generate
+      - name: Check generated project
+        run: git diff --exit-code -- OARIWallet.xcodeproj
+      - name: Test
+        run: >-
+          xcodebuild -project OARIWallet.xcodeproj -scheme OARIWallet
+          -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
+      - name: Scan tracked files for private material
+        run: python3 Scripts/check_tracked_secrets.py
