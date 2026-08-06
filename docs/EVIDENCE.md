@@ -106,6 +106,41 @@ These are absence-of-implementation failures, not regressions.
   returned PASS with one non-gating ignore-list alignment nit, which was applied.
 - Commit: this milestone commit; exact SHA is recorded in the session ledger after creation.
 
+Session ledger commit: `ec32eefe40760713bbef870ba95223deb3cbf050`.
+
+### Milestone 1: domain contracts
+
+- Acceptance:
+  1. Credential metadata separates format, profile, cryptographic validity, issuer
+     trust, status, legal classification, subject identity and holder binding.
+  2. Key records are purpose-bound and declare algorithm and assurance without
+     exposing private key material.
+  3. Audit events are redacted by construction and cannot contain credential values,
+     proofs, tokens or nonces.
+  4. Async repository, audit and key-provider ports have no UI, network or SDK
+     dependency.
+  5. Swift Package tests and the consuming iOS app tests pass.
+- Review cycle: 2
+- Changed paths: `Package.swift`, `Packages/Sources/WalletDomain/**`,
+  `Packages/Tests/WalletDomainTests/**`, `project.yml`, `OARIWallet.xcodeproj/**`,
+  `OARIWallet/WalletHomeView.swift`, `OARIWalletTests/WalletHomeModelTests.swift`,
+  `.github/workflows/verify.yml`, `docs/EVIDENCE.md`.
+- Checks:
+  - `swift test`: pass, four domain tests.
+  - First simulator test attempt: failed because the app test omitted an explicit
+    `Foundation` import for `Date`; fixed before review.
+  - Simulator test after fix: pass, two app tests.
+  - `xcodegen generate`: pass; generated project includes the local package product.
+  - `git diff --check`: pass.
+  - `python3 Scripts/check_tracked_secrets.py`: pass, 25 repository files inspected.
+- Review findings: cycle 1 found that free-form audit strings could carry sensitive
+  values despite redacted field names. Audit counterparties and claim identifiers
+  are now SHA-256 digests, policy/reason metadata uses closed types, and custom digest
+  decoding rejects non-canonical input. Cycle 2 passed with a minor Unicode-number
+  validation issue; validation is now restricted to ASCII lowercase hexadecimal and
+  has a negative Unicode-numeral test.
+- Commit: this milestone commit; exact SHA is recorded in the session ledger after creation.
+
 ## Release blockers and assumptions
 
 - No target Member State, national wallet-provider scheme, conformity assessor,

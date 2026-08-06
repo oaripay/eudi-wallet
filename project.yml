@@ -27,12 +27,19 @@ settings:
       SWIFT_COMPILATION_MODE: wholemodule
       VALIDATE_PRODUCT: YES
 
+packages:
+  OARIWalletModules:
+    path: .
+
 targets:
   OARIWallet:
     type: application
     platform: iOS
     sources:
       - path: OARIWallet
+    dependencies:
+      - package: OARIWalletModules
+        product: WalletDomain
     info:
       path: OARIWallet/Info.plist
       properties:

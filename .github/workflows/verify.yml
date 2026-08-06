@@ -25,6 +25,8 @@ jobs:
         run: xcodegen generate
       - name: Check generated project
         run: git diff --exit-code -- OARIWallet.xcodeproj
+      - name: Test domain modules
+        run: swift test
       - name: Test
         run: >-
           xcodebuild -project OARIWallet.xcodeproj -scheme OARIWallet

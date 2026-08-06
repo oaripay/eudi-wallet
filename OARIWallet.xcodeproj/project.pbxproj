@@ -12,6 +12,7 @@
 		50E4B63A02FCE912491E9274 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 051EC40A072443D8A1AD6F8F /* Preview Assets.xcassets */; };
 		717E9D0BA010D82E6B472E9A /* WalletHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 120B3806626FFE5B786EC131 /* WalletHomeView.swift */; };
 		859822E8E1B9F5710C7CB11D /* OARIWalletApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1246C8F696C46B04A1F8C118 /* OARIWalletApp.swift */; };
+		DA9C95C3A1EBB113099E759B /* WalletDomain in Frameworks */ = {isa = PBXBuildFile; productRef = C8E03DE70A77820E952DA657 /* WalletDomain */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -30,10 +31,22 @@
 		1246C8F696C46B04A1F8C118 /* OARIWalletApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OARIWalletApp.swift; sourceTree = "<group>"; };
 		3D48C70F5B38EA38FB85E5DD /* OARIWalletTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = OARIWalletTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9E474F66245A91AA1BA8CAC2 /* WalletHomeModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletHomeModelTests.swift; sourceTree = "<group>"; };
+		AE13F939F92953AFB41FC1B0 /* eudi-wallet */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "eudi-wallet"; path = .; sourceTree = SOURCE_ROOT; };
 		BEA31C9F65F5B50D6F48CEC6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		E6EB7F18DFECA15C3F21B5B9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		FCCFFBE7BDE16FED06107EF7 /* OARIWallet.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = OARIWallet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		FCEADAF372E8E9077E7CDE33 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DA9C95C3A1EBB113099E759B /* WalletDomain in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		24E2ACB32E5587CB3D6BE7B0 /* Preview Content */ = {
@@ -51,6 +64,14 @@
 				3D48C70F5B38EA38FB85E5DD /* OARIWalletTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		4A3652471B69189DB6962027 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				AE13F939F92953AFB41FC1B0 /* eudi-wallet */,
+			);
+			path = Packages;
 			sourceTree = "<group>";
 		};
 		7197A416CA8E5B642E357078 /* OARIWallet */ = {
@@ -78,6 +99,7 @@
 			children = (
 				7197A416CA8E5B642E357078 /* OARIWallet */,
 				A87908E50AB7E151804F6DF8 /* OARIWalletTests */,
+				4A3652471B69189DB6962027 /* Packages */,
 				2CF0DD4C207B6C4E8EB99FD7 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -109,6 +131,7 @@
 			buildPhases = (
 				2B37DB5CBC45D33CB09CFFC7 /* Sources */,
 				6C393B6ECAB1E0772A40BC08 /* Resources */,
+				FCEADAF372E8E9077E7CDE33 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -116,6 +139,7 @@
 			);
 			name = OARIWallet;
 			packageProductDependencies = (
+				C8E03DE70A77820E952DA657 /* WalletDomain */,
 			);
 			productName = OARIWallet;
 			productReference = FCCFFBE7BDE16FED06107EF7 /* OARIWallet.app */;
@@ -144,6 +168,9 @@
 			);
 			mainGroup = D0522ABF0AB7D8DE586851F9;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				D5614F0732D2C04D9F86DFBF /* XCLocalSwiftPackageReference "." */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 2CF0DD4C207B6C4E8EB99FD7 /* Products */;
 			projectDirPath = "";
@@ -433,6 +460,20 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		D5614F0732D2C04D9F86DFBF /* XCLocalSwiftPackageReference "." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = .;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C8E03DE70A77820E952DA657 /* WalletDomain */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = WalletDomain;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 79EAF3AD609F0791EFCB8C8C /* Project object */;
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import WalletDomain
 
 struct WalletHomeModel: Equatable, Sendable {
     let title: String
@@ -10,6 +11,14 @@ struct WalletHomeModel: Equatable, Sendable {
         status: "Wallet setup required",
         detail: "No credentials are stored. Issuance and presentation remain disabled until a supported profile is configured."
     )
+
+    static func credentialCountDescription(_ credentials: [CredentialRecord]) -> String {
+        switch credentials.count {
+        case 0: "No credentials"
+        case 1: "1 credential"
+        default: "\(credentials.count) credentials"
+        }
+    }
 }
 
 struct WalletHomeView: View {
