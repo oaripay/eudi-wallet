@@ -104,9 +104,39 @@ These are absence-of-implementation failures, not regressions.
 - Review findings: cycle 1 found a major gap in the CI private-material scan and a
   minor stale evidence record. Both were fixed and focused checks passed. Cycle 2
   returned PASS with one non-gating ignore-list alignment nit, which was applied.
-- Commit: this milestone commit; exact SHA is recorded in the session ledger after creation.
+- Commit: `ec32eefe40760713bbef870ba95223deb3cbf050`.
 
-Session ledger commit: `ec32eefe40760713bbef870ba95223deb3cbf050`.
+### Milestone 2: encrypted local vault
+
+- Acceptance:
+  1. Credential payload and metadata are AES-256-GCM encrypted at rest using a master
+     key stored with `WhenUnlockedThisDeviceOnly` Keychain accessibility.
+  2. Credential save, restart/read and deletion behavior is covered by tests.
+  3. Ciphertext tampering fails closed and never returns a credential.
+  4. Redacted audit events use the same protected encrypted-at-rest boundary and
+     survive restart/deletion.
+  5. Vault files use complete file protection, are excluded from backup and are
+     written atomically.
+- Review cycle: 3
+- Changed paths: `Package.swift`, `Packages/Sources/WalletVault/**`,
+  `Packages/Tests/WalletVaultTests/**`, `docs/EVIDENCE.md`.
+- Checks:
+  - First `swift test`: failed because a test-only URL helper was file-private to
+    another test file; changed to module-internal.
+  - `swift test` after all fixes: pass, 12 tests in 4 suites, including ciphertext
+    substitution and locked-keychain error semantics.
+  - `git diff --check`: pass.
+  - `python3 Scripts/check_tracked_secrets.py`: pass, 32 repository files inspected.
+  - Simulator `xcodebuild ... test`: pass, two app tests.
+- Review findings: cycle 1 found that valid AES-GCM ciphertext could be substituted
+  between credential files. Credential encryption now authenticates a versioned
+  domain marker and credential ID as AAD, verifies decoded ID equality, and includes
+  a substitution test. Audit ciphertext has a separate versioned AAD domain. Cycle 2
+  returned PASS. Cycle 3 also returned PASS after the keychain error-semantics work.
+  A non-gating stale test-count nit was corrected. Keychain duplicate
+  creation races now reload the winning key, and keychain access failures remain
+  distinguishable from corrupt ciphertext.
+- Commit: this milestone commit; exact SHA is recorded in the session ledger after creation.
 
 ### Milestone 1: domain contracts
 
@@ -139,7 +169,7 @@ Session ledger commit: `ec32eefe40760713bbef870ba95223deb3cbf050`.
   decoding rejects non-canonical input. Cycle 2 passed with a minor Unicode-number
   validation issue; validation is now restricted to ASCII lowercase hexadecimal and
   has a negative Unicode-numeral test.
-- Commit: this milestone commit; exact SHA is recorded in the session ledger after creation.
+- Commit: `0c6b8e43a18ba027442356f4dbae2870c9658f47`.
 
 ## Release blockers and assumptions
 
