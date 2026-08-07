@@ -19,6 +19,9 @@ struct WalletKitIOSIntegrationTests {
         }
         #else
         #expect(try await WalletKitRuntimeProbe.loadDocumentCount(trustAnchor: anchor) == 0)
+        try await WalletKitRuntimeProbe.rejectMalformedOperationalInputs(trustAnchor: anchor)
+        try await WalletKitRuntimeProbe.useInjectedOperationalTransport(trustAnchor: anchor)
+        try await WalletKitRuntimeProbe.reconcileDurableOperationalState(trustAnchor: anchor)
         #endif
     }
 }

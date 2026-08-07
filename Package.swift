@@ -32,6 +32,14 @@ let package = Package(
             url: "https://github.com/apple/swift-certificates.git",
             exact: "1.19.4"
         ),
+        .package(
+            url: "https://github.com/eu-digital-identity-wallet/eudi-lib-ios-openid4vci-swift.git",
+            exact: "0.53.0"
+        ),
+        .package(
+            url: "https://github.com/airsidemobile/JOSESwift.git",
+            exact: "3.0.0"
+        ),
     ],
     targets: [
         .target(
@@ -87,6 +95,8 @@ let package = Package(
                     package: "eudi-lib-ios-iso18013-security"
                 ),
                 .product(name: "X509", package: "swift-certificates"),
+                .product(name: "OpenID4VCI", package: "eudi-lib-ios-openid4vci-swift"),
+                .product(name: "JOSESwift", package: "joseswift"),
             ],
             path: "Packages/Sources/EudiWalletKitAdapter"
         ),

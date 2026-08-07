@@ -42,6 +42,22 @@ public actor EncryptedCredentialMetadataRepository: CredentialMetadataRepository
         }
     }
 
+    public func replaceMetadata(_ credential: CredentialRecord) async throws {
+        let file = fileURL(credential.id)
+        guard files.exists(file) else { throw WalletRepositoryError.credentialNotFound }
+        do {
+            let plaintext = try encoder.encode(credential)
+            try files.write(
+                cipher.seal(plaintext, authenticating: context(for: credential.id)),
+                to: file
+            )
+        } catch let error as WalletRepositoryError {
+            throw error
+        } catch {
+            throw WalletRepositoryError.storageFailure
+        }
+    }
+
     public func deleteMetadata(id: CredentialID) async throws {
         let file = fileURL(id)
         guard files.exists(file) else { throw WalletRepositoryError.credentialNotFound }

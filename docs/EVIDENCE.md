@@ -152,7 +152,7 @@ loop receives one independent review and one final local commit.
   PASS with minor direct-transport test debt. Public `did:key` input is additionally
   length-bounded after review.
 - Commit: this milestone commit; exact SHA is recorded in the session ledger after creation.
-- Commit: pending.
+- Commit: `afb77756e71359093552c7be524010af52281f76`.
 
 ## Baseline failures
 
@@ -184,7 +184,8 @@ These are absence-of-implementation failures, not regressions.
 | Toolchain | Xcode 26.5, Swift 6.3.2, iOS 17 minimum | Verified locally |
 | OpenID4VCI | Final 1.0 plus isolated iGrant Draft 13 | Planned |
 | OpenID4VP | Final 1.0 plus isolated iGrant Draft 18 | Planned |
-| VCDM | W3C VCDM 2.0, concrete JWT VC per OARI profile | Planned |
+| EBSI VCDM 1.1 | Exact representation/proof/DID/schema/status profile not yet frozen | Blocked pending real EBSI profile matrix and backend selection |
+| EBSI VCDM 2.0 | Separate named profiles only; must not be inferred from `jwt_vc_json` or JSON parsing | Blocked pending demonstrated issuer/verifier support |
 | Wallet Kit | `eudi-lib-ios-wallet-kit` v0.39.1, commit `79005ab4bf0399238c1c9ebff9ee7d8a42c521f9` | Exact package resolved; adapter foundation under Loop A review |
 | OARI LPID | `provisionalOariLPID`, development only | Backend implemented with provisional status index |
 | EBSI onboarding | `ebsiOnboardingCredential`, development only | Backend recipient proof bypass is a security blocker |
@@ -367,6 +368,133 @@ These are absence-of-implementation failures, not regressions.
   rejects raw credential symbols across every production Swift source. Cycle-4 review
   returned PASS. It noted non-gating direct test debt for certificate validity and
   key-usage branches. A stale release-readiness row was corrected after review.
+- Commit: `3f3850c1fee06d45d57c599744ab8a23c4d4d603`.
+
+### Loop B — complete EUDI/eIDAS application
+
+#### Presentation-during-issuance adapter milestone
+
+- Acceptance: expose Wallet Kit pending issuance only through neutral handles; bind
+  one pending transaction to its Wallet Kit OpenID4VP session/result; validate
+  issuer/verifier origins; resume only accepted matching presentations through
+  `EudiWallet.resumePendingIssuance`; preserve repeated pending results; update OARI
+  metadata and durable audit/recovery without exporting raw documents or keys.
+- Review cycle: 4 of 4, final verdict `FAIL` before the final replacement-ID crash
+  fix. Cycles found and repaired public protocol-URL leakage, incorrect origin/audit
+  ordering, non-issued completion audit, missing repeated-pending URL handling and
+  replacement-handle drift.
+- Post-cycle-4 repair: pre-metadata recovery now retains both original and replacement
+  Wallet Kit document references when IDs differ, and reconciliation deletes both
+  plus mapped metadata on rollback. The same neutral handle is retained for a valid
+  replacement pending document. This repair is verified locally but cannot receive
+  another review within the milestone's four-cycle limit.
+- Changed paths: `Packages/Sources/EudiWalletKitAdapter/EudiWalletKitAdapter.swift`,
+  `Packages/Sources/WalletDomain/WalletPorts.swift`,
+  `Packages/Tests/EudiWalletKitAdapterTests/EudiWalletKitAdapterTests.swift`,
+  `Packages/Tests/WalletVaultTests/EncryptedWalletOperationRecoveryStoreTests.swift`.
+- Verification: `swift test` passes 71 tests in 18 suites; focused adapter passes 14
+  tests; focused encrypted recovery passes 3 tests; `git diff --check`, Wallet Kit
+  boundary verification and private-material scan pass.
+- Baseline failures: none for package tests. Real staging PID presentation-during-
+  issuance remains unavailable because no staging issuer/verifier/trust configuration
+  has been supplied.
+- Commit: none. Status is `BLOCKED` because final reviewer PASS was not obtained and
+  staging interoperability is absent.
+- Universal-link callback follow-up: `project.yml` and all three generated OARIWallet
+  Debug/Release/ReleaseTesting configurations set
+  `CODE_SIGN_ENTITLEMENTS = OARIWallet/OARIWallet.entitlements`; the file declares
+  `applinks:oari.io`, matching the ReleaseTesting callback origin
+  `https://oari.io/oauth/callback`. The incremental ReleaseTesting simulator integration
+  command passed. Simulator ad-hoc signing produced an empty effective entitlement
+  dictionary, so this is not device evidence: provisioning, hosted AASA verification,
+  a signed physical-device build and universal-link callback behavior remain explicit
+  external gates.
+- Consolidated review cycle 4 found the ReleaseTesting callback used the
+  `wallet.dev.oari.io` subdomain while the checked-in entitlement declared
+  `applinks:oari.io`. The callback and allowed application redirect origin now use
+  `https://oari.io/oauth/callback`, matching the entitlement. This post-cycle-4 repair
+  is locally checked but cannot receive another review in the exhausted milestone;
+  no commit or completion claim is permitted.
+- Authorized callback-alignment follow-up review cycle 1 returned `PASS`. A fresh
+  post-repair incremental ReleaseTesting `WalletKitIOSIntegrationTests` run also
+  completed with `TEST SUCCEEDED`. The consolidated EUDI operational foundation is
+  eligible for a local commit after final diff/staging/secrets inspection; physical
+  AASA/provisioning/universal-link behavior remains an external release gate.
+
+- Acceptance:
+  1. OpenID4VCI authorization-code and pre-authorized-code offers execute only for
+     configured issuer hosts with PAR, PKCE/DPoP, proof binding, signed metadata,
+     WRPRC validation, transaction-code rules and attestation hooks enabled.
+  2. Batch and deferred issuance remain Wallet Kit-owned and expose only neutral
+     summaries and stable document references to OARI metadata storage.
+  3. OpenID4VP request/JAR and DCQL processing execute only for configured verifier
+     hosts; requester evidence, requested claims, warnings and consent are exposed
+     without exposing SDK types.
+  4. Required claims cannot be deselected, rejection cannot disclose claims, and
+     successful direct-post/direct-post-JWT delivery is recorded in redacted audit.
+  5. mdoc QR engagement and BLE use the same one-time bounded presentation session,
+     selection, authentication, trust and audit boundary.
+  6. Operational state is bounded and expiring, unapproved network destinations and
+     redirects fail closed, and every operational method remains blocked in Debug.
+   7. ReleaseTesting must exercise the selected staging SDK-backed issuance and
+      presentation journeys for SD-JWT and mdoc; malformed, expired, replayed,
+      untrusted and unsupported cases must fail closed.
+- Review cycle: 3
+- Current checks:
+  - Baseline `swift test`: pass, 66 tests in 17 suites.
+  - After durable recovery and audit-outbox work, `swift test`: pass, 68 tests
+    in 18 suites before final focused test additions.
+  - Focused adapter tests: pass, 12 tests.
+  - ReleaseTesting iOS operational probe: pass; Wallet Kit storage, malformed-input
+    rejection and injected transport routing execute without external network.
+  - Wallet Kit boundary, executable dependency and private-material checks: pass.
+- Current implementation:
+  - Strict VCI configuration, neutral offer/issuance/deferred models, transaction-code
+    validation, attestation hooks, bounded one-time offer/session state and redacted
+    issuance/presentation audit are implemented behind the adapter.
+  - OpenID4VP/DCQL claim review, required-claim selection, direct response submission,
+    mdoc BLE QR engagement and deferred retry are exposed as neutral adapter methods.
+  - Issuer/verifier host allowlists, injected transport, redirect rejection and Debug
+    operational containment are enforced.
+- Review findings: cycle 1 found caller-controlled authorization redirects, a shared
+  issuer/verifier host union, accepted 3xx responses, host-only rather than canonical
+  origin policy, missing metadata/status lifecycle mapping, and incomplete end-to-end
+  fixtures. The redirect override is removed; the configured app redirect is now the
+  sole VCI callback. Task-local flow scope separates issuer and verifier network
+  origins, canonical HTTPS origins preserve explicit non-default ports, and both
+  injected and URLSession transports reject 3xx. Metadata now stores stable Wallet Kit
+  document IDs, supports atomic replacement, rolls back issuance on mapping failure,
+  updates deferred completion, deletes with the SDK document, and obtains status via
+  an OARI status-provider port. Full positive/negative protocol fixtures remain open.
+  Cycle 2 found ignored rollback failures and insufficient restart evidence. An
+  encrypted recovery journal now records issuance, deferred issuance and deletion
+  intent before crossing the Wallet Kit/OARI storage boundary, reconciles on restart,
+  and retains failed work for retry; encrypted restart/tamper tests and a reconstructed
+  metadata-replacement test pass. Cycle 3 found a delete-all bypass, concurrent
+  baseline rollback risk, inline unverified JAR acceptance, unvalidated success
+  redirects, and no durable post-delivery audit. Lifecycle mutations are now
+  serialized, delete-all is journaled, inline JARs require the allowlisted request-URI
+  path, success redirects require an allowlisted HTTPS verifier origin, and a redacted
+  idempotent audit outbox is persisted before delivery. Complete SDK-backed fixtures
+  remain the gating cycle-3 finding.
+- Cleanup: the exploratory deterministic issuer/verifier target and duplicate iOS
+  fixture test were removed. They were useful for diagnosing Wallet Kit boundaries
+  but were not production infrastructure and could not prove EBSI or certification
+  interoperability. The remaining 69 package tests in 18 suites cover the retained
+  OARI policy, trust, storage, recovery, audit and Wallet Kit adapter boundaries.
+- Current blocker: a real staging issuer/verifier is required to prove the Wallet Kit
+  PID-to-new-credential presentation-during-issuance journey. No local mock is now
+  counted as AC-B7 or as positive end-to-end evidence.
+- Baseline/verification interruption: the focused ReleaseTesting Xcode test was
+  interrupted by the command timeout at 120 seconds and again at 600 seconds while
+  rebuilding transitive `swift-syntax`; neither run reached compilation of changed
+  application sources or test execution and neither is recorded as a product failure.
+- The prior incremental ReleaseTesting result remains evidence only for the retained
+  malformed-input, redirect, storage, recovery and audit probes; references to the
+  removed deterministic issuance fixture are no longer acceptance evidence.
+- Remaining before exit: complete deterministic signed VCI/VP SD-JWT and mdoc
+  journeys, stable Wallet Kit-document-to-OARI-metadata lifecycle mapping, status
+  integration, full negative fixtures, independent review and final verification.
 - Commit: pending.
 
 ### Milestone 5: presentation authorization state machine

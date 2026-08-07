@@ -78,6 +78,7 @@ targets:
         PRODUCT_NAME: OARIWallet
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: OARIWallet/OARIWallet.entitlements
         DEVELOPMENT_ASSET_PATHS: '"OARIWallet/Preview Content"'
         ENABLE_PREVIEWS: YES
         GENERATE_INFOPLIST_FILE: NO

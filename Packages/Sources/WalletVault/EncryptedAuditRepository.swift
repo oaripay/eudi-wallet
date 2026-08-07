@@ -32,6 +32,7 @@ public actor EncryptedAuditRepository: AuditRepository {
 
     public func append(_ event: AuditEvent) async throws {
         var current = try await events()
+        guard !current.contains(where: { $0.id == event.id }) else { return }
         current.append(event)
         do {
             try files.write(

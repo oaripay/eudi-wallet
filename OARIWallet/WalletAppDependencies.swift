@@ -108,6 +108,9 @@ private actor FixtureCredentialRepository: CredentialMetadataRepository {
     func saveMetadata(_ credential: CredentialRecord) async throws {
         storage[credential.id] = credential
     }
+    func replaceMetadata(_ credential: CredentialRecord) async throws {
+        storage[credential.id] = credential
+    }
     func deleteMetadata(id: CredentialID) async throws { storage[id] = nil }
 }
 

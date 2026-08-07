@@ -22,6 +22,7 @@ struct EncryptedAuditRepositoryTests {
             keyStore: fixture.keyStore
         )
         try await repository.append(event)
+        try await repository.append(event)
 
         let disk = try fixture.onlyFile(in: fixture.auditDirectory).readData()
         #expect(!disk.contains(Data("did:example:requester".utf8)))

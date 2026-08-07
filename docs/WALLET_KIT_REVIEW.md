@@ -81,5 +81,7 @@ and must be reviewed on every lockfile change.
   source-level scan and regression test.
 - Validate real signed issuer metadata, WRP certificates and status tokens.
 - Validate storage deletion/key lifecycle on a physical device.
-- Validate SD-JWT, mdoc, BLE and OpenID4VP with deterministic fixtures.
+- Validate SD-JWT, mdoc, BLE and OpenID4VP with the pinned SDK tests plus real
+  staging issuer/verifier interoperability; do not treat a local mock transport
+  as production evidence.
 - Update the SBOM and notices for every lockfile change.

@@ -230,5 +230,6 @@ actor MemoryCredentialRepository: CredentialMetadataRepository {
     private var stored: [CredentialID: CredentialRecord] = [:]
     func credentials() async throws -> [CredentialRecord] { Array(stored.values) }
     func saveMetadata(_ credential: CredentialRecord) async throws { stored[credential.id] = credential }
+    func replaceMetadata(_ credential: CredentialRecord) async throws { stored[credential.id] = credential }
     func deleteMetadata(id: CredentialID) async throws { stored[id] = nil }
 }

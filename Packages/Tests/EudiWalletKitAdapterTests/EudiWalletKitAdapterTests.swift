@@ -1,7 +1,8 @@
-import EudiWalletKitAdapter
+@testable import EudiWalletKitAdapter
 import Foundation
 import Security
 import Testing
+import WalletDomain
 
 struct EudiWalletKitAdapterTests {
     @Test("Selected Wallet Kit revision is immutable and explicit")
@@ -72,6 +73,298 @@ struct EudiWalletKitAdapterTests {
         await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
             try await adapter.deleteAllDocuments()
         }
+        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
+            try await adapter.reconcilePendingOperations()
+        }
+        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
+            try await adapter.deleteDocument(id: "document", status: "issued")
+        }
+        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
+            _ = try await adapter.resolveIssuanceOffer(
+                uri: "https://issuer.example/credential-offer"
+            )
+        }
+        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
+            _ = try await adapter.issueResolvedOffer(
+                id: UUID(),
+                profileID: "test-profile",
+                selectedConfigurationIDs: ["pid"],
+                transactionCode: nil,
+                promptMessage: "Issue PID"
+            )
+        }
+        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
+            _ = try await adapter.retryDeferredIssuance(
+                issuerName: "https://issuer.example",
+                documentID: "document"
+            )
+        }
+        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
+            _ = try await adapter.loadPendingIssuances()
+        }
+        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
+            _ = try await adapter.beginPendingIssuancePresentation(id: UUID())
+        }
+        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
+            _ = try await adapter.beginOpenID4VPPresentation(
+                requestURI: "openid4vp://authorize?request=fixture"
+            )
+        }
+        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
+            _ = try await adapter.beginBLEEngagement()
+        }
+        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
+            _ = try await adapter.receiveBLEPresentationRequest(id: UUID())
+        }
+        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
+            _ = try await adapter.submitPresentation(
+                id: UUID(),
+                selectedClaimIDs: [],
+                userAccepted: false
+            )
+        }
+    }
+
+    @Test("Operational configuration requires a private redirect scheme and client identifier")
+    func operationalConfigurationValidation() throws {
+        #expect(throws: EudiWalletKitAdapterError.invalidOperationalConfiguration) {
+            try EudiOperationalConfiguration(
+                clientID: " ",
+                authorizationRedirectURI: URL(string: "oari-wallet://authorize")!,
+                attestationProvider: FixtureAttestationProvider(),
+                auditRepository: MemoryAuditRepository(),
+                auditPolicy: .development,
+                auditPolicyVersion: AuditPolicyVersion(rawValue: 1),
+                metadataRepository: MemoryMetadataRepository(),
+                recoveryStore: MemoryRecoveryStore(),
+                statusProvider: FixtureStatusProvider(),
+                allowedIssuerOrigins: ["https://issuer.example"],
+                allowedVerifierOrigins: ["https://verifier.example"],
+                allowedApplicationRedirectOrigins: ["https://wallet.example"]
+            )
+        }
+        #expect(throws: EudiWalletKitAdapterError.invalidOperationalConfiguration) {
+            try EudiOperationalConfiguration(
+                clientID: "ftp",
+                authorizationRedirectURI: URL(string: "ftp://authorize")!,
+                attestationProvider: FixtureAttestationProvider(),
+                auditRepository: MemoryAuditRepository(),
+                auditPolicy: .development,
+                auditPolicyVersion: AuditPolicyVersion(rawValue: 1),
+                metadataRepository: MemoryMetadataRepository(),
+                recoveryStore: MemoryRecoveryStore(),
+                statusProvider: FixtureStatusProvider(),
+                allowedIssuerOrigins: ["https://issuer.example"],
+                allowedVerifierOrigins: ["https://verifier.example"],
+                allowedApplicationRedirectOrigins: ["https://wallet.example"]
+            )
+        }
+        #expect(throws: EudiWalletKitAdapterError.invalidOperationalConfiguration) {
+            try EudiOperationalConfiguration(
+                clientID: "oari-wallet",
+                authorizationRedirectURI: URL(string: "file://authorize")!,
+                attestationProvider: FixtureAttestationProvider(),
+                auditRepository: MemoryAuditRepository(),
+                auditPolicy: .development,
+                auditPolicyVersion: AuditPolicyVersion(rawValue: 1),
+                metadataRepository: MemoryMetadataRepository(),
+                recoveryStore: MemoryRecoveryStore(),
+                statusProvider: FixtureStatusProvider(),
+                allowedIssuerOrigins: ["https://issuer.example"],
+                allowedVerifierOrigins: ["https://verifier.example"],
+                allowedApplicationRedirectOrigins: ["https://wallet.example"]
+            )
+        }
+        #expect(throws: EudiWalletKitAdapterError.invalidOperationalConfiguration) {
+            try EudiOperationalConfiguration(
+                clientID: "oari-wallet",
+                authorizationRedirectURI: URL(string: "https://wallet.example/callback")!,
+                attestationProvider: FixtureAttestationProvider(),
+                auditRepository: MemoryAuditRepository(),
+                auditPolicy: .development,
+                auditPolicyVersion: AuditPolicyVersion(rawValue: 1),
+                metadataRepository: MemoryMetadataRepository(),
+                recoveryStore: MemoryRecoveryStore(),
+                statusProvider: FixtureStatusProvider(),
+                allowedIssuerOrigins: ["https://issuer.example"],
+                allowedVerifierOrigins: ["https://verifier.example"],
+                allowedApplicationRedirectOrigins: ["https://wallet.example"]
+            )
+        }
+        let configuration = try EudiOperationalConfiguration(
+            clientID: "oari-wallet",
+            authorizationRedirectURI: URL(string: "https://wallet.example/oauth/callback")!,
+            attestationProvider: FixtureAttestationProvider(),
+            auditRepository: MemoryAuditRepository(),
+            auditPolicy: .development,
+            auditPolicyVersion: AuditPolicyVersion(rawValue: 1),
+            metadataRepository: MemoryMetadataRepository(),
+            recoveryStore: MemoryRecoveryStore(),
+            statusProvider: FixtureStatusProvider(),
+            allowedIssuerOrigins: ["https://issuer.example"],
+            allowedVerifierOrigins: ["https://verifier.example"],
+            allowedApplicationRedirectOrigins: ["https://wallet.example"]
+        )
+        #expect(configuration.clientID == "oari-wallet")
+        #expect(try configuration.validateIssuanceOfferURI(
+            "https://issuer.example/offer"
+        ) == "https://issuer.example/offer")
+        #expect(throws: EudiWalletKitAdapterError.unapprovedIssuer) {
+            try configuration.validateIssuanceOfferURI("https://evil.example/offer")
+        }
+        #expect(throws: EudiWalletKitAdapterError.unapprovedIssuer) {
+            try configuration.validateIssuanceOfferURI("https://issuer.example:8443/offer")
+        }
+        #expect(try configuration.validateIssuanceOfferURI(
+            "openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffer"
+        ).hasPrefix("openid-credential-offer:"))
+        #expect(try configuration.validatePresentationRequestURI(
+            "openid4vp://authorize?request_uri=https%3A%2F%2Fverifier.example%2Frequest"
+        ).hasPrefix("openid4vp:"))
+        #expect(throws: EudiWalletKitAdapterError.unapprovedVerifier) {
+            try configuration.validatePresentationRequestURI(
+                "openid4vp://authorize?request_uri=https%3A%2F%2Fevil.example%2Frequest"
+            )
+        }
+        #expect(throws: EudiWalletKitAdapterError.unapprovedVerifier) {
+            try configuration.validatePresentationRequestURI(
+                "openid4vp://authorize?request=unverified-inline-jar"
+            )
+        }
+        #expect(try configuration.validatePendingIssuancePresentationURI(
+            "https://issuer.example/presentation-authorization"
+        ) == "https://issuer.example/presentation-authorization")
+        #expect(try configuration.validatePendingIssuancePresentationURI(
+            "openid4vp://authorize?request_uri=https%3A%2F%2Fverifier.example%2Frequest"
+        ).hasPrefix("openid4vp:"))
+        #expect(throws: EudiWalletKitAdapterError.unapprovedIssuer) {
+            try configuration.validatePendingIssuancePresentationURI(
+                "https://evil.example/presentation-authorization"
+            )
+        }
+    }
+
+    @Test("Wallet Kit registers strict VCI operational configuration behind adapter")
+    func operationalWalletInitialization() throws {
+        let baseline = try EudiWalletKitBaseline(
+            serviceName: "io.oari.wallet.operational-configuration-tests"
+        )
+        let configuration = try EudiOperationalConfiguration(
+            clientID: "oari-wallet",
+            authorizationRedirectURI: URL(string: "https://wallet.example/oauth/callback")!,
+            attestationProvider: FixtureAttestationProvider(),
+            auditRepository: MemoryAuditRepository(),
+            auditPolicy: .development,
+            auditPolicyVersion: AuditPolicyVersion(rawValue: 1),
+            metadataRepository: MemoryMetadataRepository(),
+            recoveryStore: MemoryRecoveryStore(),
+            statusProvider: FixtureStatusProvider(),
+            allowedIssuerOrigins: ["https://issuer.example"],
+            allowedVerifierOrigins: ["https://verifier.example"],
+            allowedApplicationRedirectOrigins: ["https://wallet.example"]
+        )
+        let trustSource = try approvedSystemTrustSource()
+        let adapter = try baseline.makeWallet(
+            trustSource: trustSource,
+            operationalConfiguration: configuration
+        )
+        #expect(adapter.trustProfileID == trustSource.profileID)
+    }
+
+    @Test("Transaction code rules are exact and ASCII numeric")
+    func transactionCodeValidation() {
+        let numeric = EudiTransactionCodeRequirement(
+            inputMode: "numeric",
+            length: 6,
+            displayDescription: nil
+        )
+        #expect(numeric.accepts("123456"))
+        #expect(!numeric.accepts("12345"))
+        #expect(!numeric.accepts("１２３４５６"))
+        let text = EudiTransactionCodeRequirement(
+            inputMode: "text",
+            length: nil,
+            displayDescription: nil
+        )
+        #expect(text.accepts("A-123"))
+        #expect(!text.accepts("A 123"))
+    }
+
+    @Test("Pending issuance handles are stable per Wallet Kit document and removable")
+    func pendingIssuanceState() async {
+        let state = EudiOperationalState()
+        let credentialID = CredentialID()
+        let first = await state.upsertPending(
+            documentID: "pending-document",
+            issuerName: "https://issuer.example",
+            profileID: "eudi-final-1",
+            metadataCredentialID: credentialID,
+            presentationRequestURI: "https://issuer.example/presentation"
+        )
+        let reconstructed = await state.upsertPending(
+            documentID: "pending-document",
+            issuerName: "https://issuer.example",
+            profileID: "eudi-final-1",
+            metadataCredentialID: credentialID,
+            presentationRequestURI: "https://issuer.example/presentation"
+        )
+        #expect(first == reconstructed)
+        #expect(await state.pending(id: first)?.documentID == "pending-document")
+        await state.replacePending(
+            id: first,
+            documentID: "replacement-pending-document",
+            issuerName: "https://issuer.example",
+            profileID: "eudi-final-1",
+            metadataCredentialID: credentialID,
+            presentationRequestURI: "https://issuer.example/replacement-presentation"
+        )
+        #expect(await state.pending(id: first)?.documentID == "replacement-pending-document")
+        await state.removePending(id: first)
+        #expect(await state.pending(id: first) == nil)
+    }
+
+    @Test("Pending issuance policy never loses a repeated pending document")
+    func pendingIssuancePolicy() throws {
+        #expect(try EudiPendingIssuancePolicy.nextPresentationURI(
+            status: "pending",
+            candidate: "https://issuer.example/presentation"
+        ) == "https://issuer.example/presentation")
+        #expect(try EudiPendingIssuancePolicy.nextPresentationURI(
+            status: "issued",
+            candidate: nil
+        ) == nil)
+        #expect(throws: EudiWalletKitAdapterError.invalidPendingIssuance) {
+            _ = try EudiPendingIssuancePolicy.nextPresentationURI(status: "pending", candidate: nil)
+        }
+        #expect(throws: EudiWalletKitAdapterError.unexpectedPendingIssuanceStatus) {
+            _ = try EudiPendingIssuancePolicy.nextPresentationURI(status: "deferred", candidate: nil)
+        }
+        #expect(EudiPendingIssuancePolicy.recoveryReferences(
+            originalDocumentID: "original",
+            resumedDocumentID: "replacement",
+            resumedStatus: "issued"
+        ) == [
+            WalletDocumentRecoveryReference(id: "original", status: "pending"),
+            WalletDocumentRecoveryReference(id: "replacement", status: "issued"),
+        ])
+        #expect(EudiPendingIssuancePolicy.recoveryReferences(
+            originalDocumentID: "same-document",
+            resumedDocumentID: "same-document",
+            resumedStatus: "pending"
+        ) == [WalletDocumentRecoveryReference(id: "same-document", status: "pending")])
+        #expect(EudiPendingIssuancePolicy.mergeObservedRecoveryReferences(
+            affected: [WalletDocumentRecoveryReference(id: "same-document", status: "pending")],
+            newlyCreated: [],
+            changedOriginal: WalletDocumentRecoveryReference(id: "same-document", status: "issued")
+        ) == [WalletDocumentRecoveryReference(id: "same-document", status: "issued")])
+        #expect(EudiPendingIssuancePolicy.mergeObservedRecoveryReferences(
+            affected: [WalletDocumentRecoveryReference(id: "original", status: "pending")],
+            newlyCreated: [WalletDocumentRecoveryReference(id: "replacement", status: "issued")],
+            changedOriginal: nil
+        ) == [
+            WalletDocumentRecoveryReference(id: "original", status: "pending"),
+            WalletDocumentRecoveryReference(id: "replacement", status: "issued"),
+        ])
     }
 
     @Test("Malformed trust anchors fail before Wallet Kit initialization")
@@ -152,4 +445,40 @@ struct EudiWalletKitAdapterTests {
     H6E78TkGq1BoyW0HZfILX8VVvxrczMuyp/VAZP48QE9eWkge6OQCjUtSv1FWeQlFMot1Wjdj0rq+
     OZaxuJKYgGezcJamUYOXmj+gvlknAVOvuPeg2wwk/Sq988g=
     """
+}
+
+private struct FixtureAttestationProvider: EudiWalletAttestationProviding {
+    func walletAttestation(publicJWK: String) async throws -> String { "fixture-wallet-attestation" }
+    func keyAttestation(publicJWKs: [String], nonce: String?) async throws -> String {
+        "fixture-key-attestation"
+    }
+}
+
+private actor MemoryAuditRepository: AuditRepository {
+    private var storage: [AuditEvent] = []
+    func events() async throws -> [AuditEvent] { storage }
+    func append(_ event: AuditEvent) async throws { storage.append(event) }
+    func deleteAll() async throws { storage = [] }
+}
+
+private actor MemoryMetadataRepository: CredentialMetadataRepository {
+    private var storage: [CredentialID: CredentialRecord] = [:]
+    func credentials() async throws -> [CredentialRecord] { Array(storage.values) }
+    func saveMetadata(_ credential: CredentialRecord) async throws { storage[credential.id] = credential }
+    func replaceMetadata(_ credential: CredentialRecord) async throws { storage[credential.id] = credential }
+    func deleteMetadata(id: CredentialID) async throws { storage[id] = nil }
+}
+
+private actor MemoryRecoveryStore: WalletOperationRecoveryStore {
+    private var storage: [UUID: WalletOperationRecovery] = [:]
+    func recoveries() async throws -> [WalletOperationRecovery] { Array(storage.values) }
+    func saveRecovery(_ recovery: WalletOperationRecovery) async throws { storage[recovery.id] = recovery }
+    func replaceRecovery(_ recovery: WalletOperationRecovery) async throws { storage[recovery.id] = recovery }
+    func deleteRecovery(id: UUID) async throws { storage[id] = nil }
+}
+
+private struct FixtureStatusProvider: EudiCredentialStatusProviding {
+    func status(for document: EudiWalletDocumentSummary) async throws -> CredentialStatusState {
+        .notEvaluated
+    }
 }

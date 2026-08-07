@@ -71,6 +71,7 @@ public struct HolderBinding: Codable, Equatable, Sendable {
 public struct CredentialRecord: Codable, Equatable, Identifiable, Sendable {
     public let id: CredentialID
     public let configurationID: String
+    public let walletDocumentID: String?
     public let displayName: String
     public let format: CredentialFormat
     public let profileID: String
@@ -88,6 +89,7 @@ public struct CredentialRecord: Codable, Equatable, Identifiable, Sendable {
     public init(
         id: CredentialID = CredentialID(),
         configurationID: String,
+        walletDocumentID: String? = nil,
         displayName: String,
         format: CredentialFormat,
         profileID: String,
@@ -104,6 +106,7 @@ public struct CredentialRecord: Codable, Equatable, Identifiable, Sendable {
     ) {
         self.id = id
         self.configurationID = configurationID
+        self.walletDocumentID = walletDocumentID
         self.displayName = displayName
         self.format = format
         self.profileID = profileID

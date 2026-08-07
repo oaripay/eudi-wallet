@@ -9,9 +9,10 @@ struct EncryptedCredentialMetadataRepositoryTests {
     func metadataOnlyRoundTrip() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let keyStore = StaticVaultKeyStore(key: SymmetricKey(size: .bits256))
         let repository = try EncryptedCredentialMetadataRepository(
             directory: root,
-            keyStore: StaticVaultKeyStore(key: SymmetricKey(size: .bits256))
+            keyStore: keyStore
         )
         let record = CredentialRecord(
             configurationID: "pid",
@@ -32,7 +33,25 @@ struct EncryptedCredentialMetadataRepositoryTests {
         ))
         #expect(!bytes.contains(Data("issuer-reference".utf8)))
 
-        try await repository.deleteMetadata(id: record.id)
-        #expect(try await repository.credentials().isEmpty)
+        let updated = CredentialRecord(
+            id: record.id,
+            configurationID: record.configurationID,
+            walletDocumentID: "wallet-kit-document-1",
+            displayName: "Updated PID",
+            format: record.format,
+            profileID: record.profileID,
+            issuerIdentifier: record.issuerIdentifier,
+            status: .valid,
+            createdAt: record.createdAt
+        )
+        try await repository.replaceMetadata(updated)
+        let restartedRepository = try EncryptedCredentialMetadataRepository(
+            directory: root,
+            keyStore: keyStore
+        )
+        #expect(try await restartedRepository.credentials() == [updated])
+
+        try await restartedRepository.deleteMetadata(id: record.id)
+        #expect(try await restartedRepository.credentials().isEmpty)
     }
 }
