@@ -430,6 +430,11 @@ These are absence-of-implementation failures, not regressions.
   -only-testing:OARIWalletTests/WalletKitIOSIntegrationTests
   -only-testing:OARIWalletTests/WalletAppModelTests test`; result `TEST SUCCEEDED` on
   the iOS 26.5 iPhone 17 Pro simulator. CI now enforces both ReleaseTesting suites.
+- Commits: `8857044` (`feat: add wallet onboarding and profile status`), `3f2d430`
+  (`test: verify unavailable wallet guidance`) and `1a061bc` (`ci: verify eudi
+  release journeys`). Local EUDI code/UI/release-evidence reviews pass; real staging
+  and physical-device gates below still prevent a production-readiness claim and
+  therefore block the EBSI implementation loop under `AGENTS.md`.
 
 #### Presentation-during-issuance adapter milestone
 
