@@ -53,7 +53,8 @@ jobs:
           -project OARIWallet.xcodeproj -scheme OARIWallet
           -configuration ReleaseTesting
           -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
-          -only-testing:OARIWalletTests/WalletKitIOSIntegrationTests test
+          -only-testing:OARIWalletTests/WalletKitIOSIntegrationTests
+          -only-testing:OARIWalletTests/WalletAppModelTests test
       - name: Scan tracked files for private material
         run: python3 Scripts/check_tracked_secrets.py
       - name: Secret scan

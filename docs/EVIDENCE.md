@@ -423,6 +423,13 @@ These are absence-of-implementation failures, not regressions.
   `WalletKitIOSIntegrationTests` after onboarding, lifecycle and availability gating.
   Real staging issuer/verifier, signed-device associated domains, Secure Enclave,
   biometrics, camera and BLE remain external gates.
+- Exact combined command: `xcodebuild -project OARIWallet.xcodeproj -scheme OARIWallet
+  -configuration ReleaseTesting -skipMacroValidation -derivedDataPath
+  /Users/mika/Library/Developer/Xcode/DerivedData/OARIWallet-enegewkjsnafdmbnaywknlvsmotw
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+  -only-testing:OARIWalletTests/WalletKitIOSIntegrationTests
+  -only-testing:OARIWalletTests/WalletAppModelTests test`; result `TEST SUCCEEDED` on
+  the iOS 26.5 iPhone 17 Pro simulator. CI now enforces both ReleaseTesting suites.
 
 #### Presentation-during-issuance adapter milestone
 
