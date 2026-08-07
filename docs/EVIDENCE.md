@@ -419,6 +419,10 @@ These are absence-of-implementation failures, not regressions.
   guidance in Scanner/Settings. All Wallet Kit entry points share the same operational
   availability predicate; inconsistent service-plus-disabled-profile tests invoke no
   service operation.
+- Final incremental ReleaseTesting run passed both `WalletAppModelTests` and
+  `WalletKitIOSIntegrationTests` after onboarding, lifecycle and availability gating.
+  Real staging issuer/verifier, signed-device associated domains, Secure Enclave,
+  biometrics, camera and BLE remain external gates.
 
 #### Presentation-during-issuance adapter milestone
 
