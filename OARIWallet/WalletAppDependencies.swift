@@ -1,10 +1,12 @@
 import Foundation
+import ProtocolEngine
 import WalletDomain
 import WalletVault
 
 struct WalletAppDependencies: Sendable {
     let credentials: any CredentialRepository
     let audit: any AuditRepository
+    let localAuthenticator: any LocalAuthenticator
 
     static func make(configuration: AppConfiguration = .current()) -> Result<WalletAppDependencies, Error> {
 #if DEBUG
@@ -35,7 +37,8 @@ struct WalletAppDependencies: Sendable {
                 audit: EncryptedAuditRepository(
                     directory: root.appendingPathComponent("audit", isDirectory: true),
                     keyStore: keyStore
-                )
+                ),
+                localAuthenticator: SystemLocalAuthenticator()
             )
         }
     }
@@ -47,7 +50,8 @@ struct WalletAppDependencies: Sendable {
     ) -> WalletAppDependencies {
         WalletAppDependencies(
             credentials: FixtureCredentialRepository(credentials: credentials),
-            audit: FixtureAuditRepository(events: events)
+            audit: FixtureAuditRepository(events: events),
+            localAuthenticator: FixtureLocalAuthenticator()
         )
     }
 
@@ -86,6 +90,9 @@ struct WalletAppDependencies: Sendable {
 
 #if DEBUG
 private enum FixtureError: Error { case storageUnavailable }
+private struct FixtureLocalAuthenticator: LocalAuthenticator {
+    func authenticate(reason: String) async throws {}
+}
 
 private actor FixtureCredentialRepository: CredentialRepository {
     private var storage: [CredentialID: CredentialEnvelope]

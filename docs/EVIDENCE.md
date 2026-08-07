@@ -458,4 +458,28 @@ These are absence-of-implementation failures, not regressions.
   generic Release simulator build. Both OS-dispatch tests pass on the booted iPhone
   17 Pro; the suite now contains six installed-app journeys. Cycle 2 returned PASS
   with one non-gating naming nit for the separate Debug-injected review fixture.
+- Commit: `53a67fe`.
+
+### R2 native device interaction iteration
+
+- Acceptance:
+  1. Production local authentication uses `deviceOwnerAuthentication`, requires a
+     nonempty transaction-specific reason, and fails closed on denial/unavailability.
+  2. Camera QR scanning uses the system VisionKit scanner and sends decoded text
+     through the same bounded classifier as pasted/deep-link input.
+  3. Simulator UI exposes a clear camera-unavailable fallback without weakening
+     production camera behavior.
+  4. Scanner delivery is one-shot per presented scanner session.
+- Review cycle: 1
+- Checks:
+  - Focused local-auth tests: pass, three tests.
+  - Full `swift test`: pass, 58 tests in 16 suites.
+  - iPhone 17 Pro app build: pass under Swift 6 strict concurrency.
+  - Simulator camera-fallback XCUITest: pass.
+  - Camera and pasted-code model route test: included in hosted app suite.
+  - Release simulator build: pass after composing the production authenticator.
+  - Gitleaks and Semgrep: pass, zero findings.
+- Review findings: cycle 1 returned PASS with one Release API hardening issue. The
+  injectable authentication evaluator initializer is now internal and available to
+  package tests only; production clients can construct only the system evaluator.
 - Commit: this milestone commit; exact SHA is recorded in the session ledger after creation.

@@ -92,6 +92,7 @@ private struct CredentialTile: View {
 struct WalletScannerView: View {
     @Environment(\.colorScheme) private var scheme
     @ObservedObject var model: WalletAppModel
+    @State private var isCameraPresented = false
 
     var body: some View {
         NavigationStack {
@@ -114,6 +115,13 @@ struct WalletScannerView: View {
                         .buttonStyle(OariPrimaryButtonStyle())
                         .disabled(model.scanInput.isEmpty)
                         .accessibilityIdentifier("scanner.review")
+                        Button {
+                            isCameraPresented = true
+                        } label: {
+                            Label("Scan with camera", systemImage: "camera.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .accessibilityIdentifier("scanner.camera")
                     }
                 }
                 ScanResultView(result: model.scanResult, input: model.scanInput)
@@ -122,6 +130,9 @@ struct WalletScannerView: View {
             .padding(OariSpacing.x5)
             .background(OariColor.background(scheme))
             .navigationTitle("Scan")
+            .sheet(isPresented: $isCameraPresented) {
+                CameraQRScannerSheet(onCode: model.handleScannedCode)
+            }
         }
     }
 }

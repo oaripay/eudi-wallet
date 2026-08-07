@@ -82,7 +82,11 @@ final class WalletAppModel: ObservableObject {
     }
 
     func handleIncomingURL(_ url: URL) {
-        scanInput = url.absoluteString
+        handleScannedCode(url.absoluteString)
+    }
+
+    func handleScannedCode(_ code: String) {
+        scanInput = code
         classifyScan()
         selectedTab = .scan
     }

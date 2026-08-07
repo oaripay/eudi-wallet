@@ -44,6 +44,16 @@ struct WalletAppModelTests {
         #expect(!model.isPrivacyCoverVisible)
     }
 
+    @Test("Camera and pasted codes share the bounded classification route")
+    func scannedCode() {
+        let model = WalletAppModel(allowedHosts: ["issuer.example"])
+        model.handleScannedCode(
+            "https://issuer.example/offer?credential_offer=fixture"
+        )
+        #expect(model.scanResult == .issuance)
+        #expect(model.selectedTab == .scan)
+    }
+
     @Test("Repository failure is explicit and does not imply an empty loaded wallet")
     func repositoryFailure() async {
         let model = WalletAppModel()

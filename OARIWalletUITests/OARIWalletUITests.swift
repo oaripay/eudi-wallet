@@ -57,6 +57,16 @@ final class OARIWalletUITests: XCTestCase {
         XCTAssertTrue(element(app, "wallet.storage-error").waitForExistence(timeout: 5))
     }
 
+    func testCameraFallbackIsExplicitOnSimulator() {
+        let app = launch(fixture: "empty")
+        app.tabBars.buttons["Scan"].tap()
+        element(app, "scanner.camera").tap()
+        XCTAssertTrue(
+            element(app, "scanner.camera-unavailable")
+                .waitForExistence(timeout: 5)
+        )
+    }
+
     func testIncomingPresentationURLRoutesToReviewEntry() {
         let app = launch(fixture: "empty")
         app.open(URL(string: "openid4vp://authorize?request=fixture")!)
