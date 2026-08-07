@@ -13,6 +13,7 @@ struct AppConfiguration: Sendable {
     let incomingURL: URL?
     let disablesAnimations: Bool
     let ebsiDevelopmentEnabled: Bool
+    let ebsiLocalAuthorityEnabled: Bool
 
     static func current(
         arguments: [String] = ProcessInfo.processInfo.arguments
@@ -29,13 +30,20 @@ struct AppConfiguration: Sendable {
         let incomingURL: URL? = nil
         let fixtureHosts: Set<String> = []
 #endif
+        #if DEBUG
+        let ebsiDevelopmentEnabled = !arguments.contains("--disable-ebsi-development")
+        #else
+        let ebsiDevelopmentEnabled = arguments.contains("--enable-ebsi-development") &&
+            ProcessInfo.processInfo.environment["OARI_EBSI_DEVELOPMENT"] == "1"
+        #endif
         return AppConfiguration(
             allowedHosts: Set(["wallet.dev.oari.io"]).union(fixtureHosts),
             fixture: fixture,
             incomingURL: incomingURL,
             disablesAnimations: arguments.contains("--disable-animations"),
-            ebsiDevelopmentEnabled: arguments.contains("--enable-ebsi-development") ||
-                ProcessInfo.processInfo.environment["OARI_EBSI_DEVELOPMENT"] == "1"
+            ebsiDevelopmentEnabled: ebsiDevelopmentEnabled,
+            ebsiLocalAuthorityEnabled: arguments.contains("--enable-local-ebsi-authority") ||
+                ProcessInfo.processInfo.environment["OARI_EBSI_LOCAL_AUTHORITY"] == "1"
         )
     }
 

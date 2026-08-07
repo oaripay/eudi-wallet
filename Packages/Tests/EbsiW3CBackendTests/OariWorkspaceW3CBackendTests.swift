@@ -71,6 +71,30 @@ struct OariWorkspaceW3CBackendTests {
             _ = try await backend.issue(id: offer.id, allowUntrusted: false, transactionCode: "123456")
         }
     }
+
+    @Test("Authorization-code offer completes final PID presentation challenge")
+    func authorizationPresentation() async throws {
+        let backend = OariWorkspaceW3CBackend(
+            transport: FixtureWorkspaceTransport(),
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(),
+            credentialStore: FixtureCredentialStore(),
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .oariVcdm2Jwt()
+        )
+        let json = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["oari-v2"],"grants":{"authorization_code":{"issuer_state":"issuer-state"}}}"#
+        let encoded = json.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
+        let offer = try await backend.resolveOffer("openid-credential-offer://?credential_offer=\(encoded)")
+        #expect(offer.authorizationRequired)
+        let challenge = try await backend.beginPresentationRequired(
+            id: offer.id,
+            allowUntrusted: false
+        )
+        #expect(challenge.responseMode == "ia_post")
+        #expect(challenge.dcqlQuery["credentials"] != nil)
+        #expect(try await backend.submitPresentation(id: offer.id, vpToken: "valid.pid.vp") == "auth-code")
+        #expect(try await backend.issue(id: offer.id, allowUntrusted: false, transactionCode: nil).count == 1)
+    }
 }
 
 private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
@@ -88,6 +112,11 @@ private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
             response = #"{"token_endpoint":"https://issuer.example/token"}"#
         case "/token":
             response = #"{"access_token":"access","c_nonce":"nonce-1"}"#
+        case "/authorize-challenge", "/authorize":
+            if String(decoding: body ?? Data(), as: UTF8.self).contains("issuer_state") {
+                return WorkspaceHTTPResponse(statusCode: 403, body: Data(#"{"error":"insufficient_authorization","interaction_type_required":"urn:openid:dcp:ia:openid4vp_presentation","auth_session":"auth-session","openid4vp_request":{"response_type":"vp_token","response_mode":"ia_post","nonce":"vp-nonce","dcql_query":{"credentials":[{"id":"pid","format":"dc+sd-jwt"}]}}}"#.utf8))
+            }
+            response = #"{"authorization_code":"auth-code","code":"auth-code"}"#
         case "/credential":
             response = #"{"credentials":[{"credential":"header.payload.signature"}]}"#
         default: throw WorkspaceBackendError.invalidResponse

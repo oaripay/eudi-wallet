@@ -45,7 +45,8 @@ public struct EBSIChainEndpoint: Codable, Equatable, Identifiable, Sendable {
     }
 
     private static func validatedBaseURL(_ url: URL) throws -> URL {
-        guard url.scheme?.lowercased() == "https", url.host != nil,
+        guard (url.scheme?.lowercased() == "https" ||
+            (url.scheme?.lowercased() == "http" && url.host == "127.0.0.1")), url.host != nil,
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else {
             throw EBSIEndpointError.invalidEndpoint
         }
@@ -59,6 +60,16 @@ public struct EBSIChainEndpoint: Codable, Equatable, Identifiable, Sendable {
             didRegistryURL: URL(string: "https://ebsi.oari.io/did-registry/v5/identifiers")!,
             trustedIssuersRegistryURL: URL(string: "https://ebsi.oari.io/trusted-issuers-registry/v5/issuers")!,
             trustedSchemasRegistryURL: URL(string: "https://ebsi.oari.io/trusted-schemas-registry/v3/schemas")!
+        )
+    }
+
+    public static func localAuthority() throws -> EBSIChainEndpoint {
+        try EBSIChainEndpoint(
+            id: "local-authority",
+            displayName: "Local OARI Authority",
+            didRegistryURL: URL(string: "http://127.0.0.1:4080/openid")!,
+            trustedIssuersRegistryURL: URL(string: "http://127.0.0.1:4080/openid")!,
+            trustedSchemasRegistryURL: URL(string: "http://127.0.0.1:4080/openid")!
         )
     }
 }

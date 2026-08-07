@@ -403,7 +403,7 @@ private actor FixtureEbsiWallet: EbsiW3COperating {
             counterpartyIdentifier: "did:ebsi:unregistered-issuer",
             displayName: "Development issuer", trustOutcome: outcome,
             transactionCodeRequired: true,
-            configurationIDs: ["oari-v2"]
+            configurationIDs: ["oari-v2"], authorizationRequired: true
         )
     }
     func continueInteraction(
@@ -418,6 +418,12 @@ private actor FixtureEbsiWallet: EbsiW3COperating {
         return .completed("EBSI development flow completed.")
     }
     func cancelInteraction(id: UUID) async { cancelCount += 1 }
+    func submitPIDPresentation(id: UUID, vpToken: String) async throws -> EbsiInteractionCompletion {
+        .completed("PID submitted")
+    }
+    func completeAuthorization(id: UUID, code: String) async throws -> EbsiInteractionCompletion {
+        .completed("Authorization completed")
+    }
 }
 
 private actor FixtureEudiWallet: EudiWalletOperating {
@@ -479,6 +485,11 @@ private actor FixtureEudiWallet: EudiWalletOperating {
         guard let presentationRequest else { throw TestFailure.unavailable }
         return presentationRequest
     }
+    func submitPresentation(
+        id: UUID,
+        selectedClaimIDs: Set<String>,
+        userAccepted: Bool
+    ) async throws -> EudiPresentationResult { throw TestFailure.unavailable }
     func beginPendingIssuancePresentation(id: UUID) async throws -> EudiPresentationRequest {
         operationCount += 1
         guard let presentationRequest else { throw TestFailure.unavailable }

@@ -1,7 +1,9 @@
 # EBSI W3C profile matrix
 
-This file is the gate for the development EBSI backend. A profile is not supported
-until every column is pinned from an actual issuer/verifier interoperability fixture.
+This file describes development interoperability profiles. TIR/TSR/status membership
+is diagnostic in development and does not block a valid protocol flow. A profile is
+not enabled until its representation, proof and OpenID behavior are pinned by an
+actual issuer/verifier interoperability fixture.
 
 | Profile | VCDM | Representation | Securing mechanism | DID/key | Schema | Status | OpenID revision | State |
 |---|---|---|---|---|---|---|---|---|

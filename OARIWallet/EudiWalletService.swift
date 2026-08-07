@@ -29,6 +29,7 @@ enum EudiPresentationCompletion: Equatable, Sendable {
     case presentation
     case pendingDeclined
     case issuance(EudiIssuanceResult)
+    case externalAuthorization(String)
 }
 
 actor LiveEudiWalletService: EudiWalletOperating {
@@ -70,6 +71,7 @@ actor LiveEudiWalletService: EudiWalletOperating {
             selectedClaimIDs: selectedClaimIDs,
             userAccepted: userAccepted
         )
+        if let code = result.authorizationCode { return .externalAuthorization(code) }
         guard let pendingIssuanceID else { return .presentation }
         guard userAccepted else { return .pendingDeclined }
         return .issuance(try await adapter.resumePendingIssuance(

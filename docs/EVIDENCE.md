@@ -238,6 +238,15 @@ These are absence-of-implementation failures, not regressions.
   because authorization-code/PAR/PKCE/DPoP, batch/deferred, PID presentation_required,
   W3C VP, real TIR/TSR/schema/status semantics and fixtures, ES256K and deterministic
   router/catalog lifecycle are incomplete. No consolidated commit is permitted.
+- Post-review development work (uncommitted): local authority now serves a
+  deterministic signed P-256 W3C offer/credential; W3C backend parses authorization-
+  code grants and issuer_state, resolves final/draft presentation challenges, models
+  DCQL/nonce/state/response mode, posts final wrapped or draft plain VP tokens,
+  captures authorization code and redeems it for the credential. Focused package
+  authorization-challenge tests and complete app model tests pass. The EUDI Wallet
+  Kit response-token handoff is modeled through redirect authorization code, but the
+  exact live `wallet.dev.oari.io` PID round trip has not been executed; final review
+  remains exhausted/failed and no commit is allowed.
 | Wallet Kit | `eudi-lib-ios-wallet-kit` v0.39.1, commit `79005ab4bf0399238c1c9ebff9ee7d8a42c521f9` | Exact package resolved; adapter foundation under Loop A review |
 | OARI LPID | `provisionalOariLPID`, development only | Backend implemented with provisional status index |
 | EBSI onboarding | `ebsiOnboardingCredential`, development only | Backend recipient proof bypass is a security blocker |

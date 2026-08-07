@@ -41,7 +41,7 @@ struct WalletRootView: View {
         .sheet(isPresented: Binding(
             get: {
                 switch model.eudiFlow {
-                case .issuanceReview, .ebsiIssuanceReview, .presentationConsent, .pending, .completed, .failed, .working:
+                case .issuanceReview, .ebsiIssuanceReview, .ebsiPresentationRequired, .presentationConsent, .pending, .completed, .failed, .working:
                     true
                 case .idle, .configurationRequired:
                     false

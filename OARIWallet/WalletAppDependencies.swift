@@ -44,7 +44,9 @@ struct WalletAppDependencies: Sendable {
             )
             let ebsiWallet: (any EbsiW3COperating)?
             if configuration.ebsiDevelopmentEnabled {
-                let ebsiEndpoint = try EBSIChainEndpoint.oariDevelopment()
+                let ebsiEndpoint = try configuration.ebsiLocalAuthorityEnabled
+                    ? EBSIChainEndpoint.localAuthority()
+                    : EBSIChainEndpoint.oariDevelopment()
                 let endpointRegistry = try EBSIEndpointRegistry(
                     policy: .development,
                     endpoints: [ebsiEndpoint]
@@ -60,10 +62,15 @@ struct WalletAppDependencies: Sendable {
                 let workspaceTransport = URLSessionWorkspaceTransport()
                 let ebsiBackend = OariWorkspaceW3CBackend(
                     transport: workspaceTransport,
-                    trustEvaluator: WorkspaceTIRTrustEvaluator(
-                        tirBaseURL: ebsiEndpoint.trustedIssuersRegistryURL,
-                        transport: workspaceTransport
-                    ),
+                    trustEvaluator: configuration.ebsiLocalAuthorityEnabled
+                        ? DevelopmentIssuerOriginTrustEvaluator(
+                            trustedOrigins: [],
+                            evidenceSource: "local-authority"
+                        )
+                        : WorkspaceTIRTrustEvaluator(
+                            tirBaseURL: ebsiEndpoint.trustedIssuersRegistryURL,
+                            transport: workspaceTransport
+                        ),
                     keyProvider: DeviceBoundKeyProvider(applicationTagPrefix: "io.oari.wallet.ebsi.key"),
                     credentialStore: ebsiStore,
                     credentialValidator: NativeWorkspaceCredentialValidator(

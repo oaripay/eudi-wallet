@@ -95,6 +95,27 @@ The W3C adapter must resolve and test:
 13. authorization callback and safe cancellation;
 14. malformed, expired, replayed, unsupported and untrusted cases.
 
+The local workspace OpenID implementation is the required protocol reference for
+this development app. Its final/draft compatibility set is:
+
+- final pre-authorized-code grant;
+- final authorization-code grant;
+- issuer-state authorization challenge;
+- final `urn:openid:dcp:ia:openid4vp_presentation` interaction;
+- draft bare `openid4vp_presentation` interaction;
+- final `ia_post` response mode;
+- draft `iar-post` response mode;
+- final `openid4vp_response` containing `vp_token`;
+- draft plain `vp_token` form response;
+- inline and referenced credential offers;
+- both credential-proof shapes accepted by the workspace;
+- DCQL credential-query matching;
+- authorization-code exchange after successful PID VP.
+
+Draft 13/18 compatibility remains isolated behind named development profiles. Never
+use a draft fallback when a final request is malformed. A profile is supported only
+when an app test executes the actual workspace route and asserts its response shape.
+
 For `presentation_required`:
 
 ```text
@@ -138,23 +159,24 @@ Implement profile-bound verification, not algorithm-name recognition:
 Unknown algorithms, unsupported DID methods and ambiguous verification relationships
 fail explicitly.
 
-## Trust behavior
+## Development trust behavior
 
-Trust registration and cryptographic validity are separate:
+This is a development interoperability wallet. Registry and status membership are
+diagnostic; cryptographic and protocol validity remain mandatory:
 
 ```text
 valid + trusted                  -> continue normally
-valid + not in development list  -> blocking warning -> Continue anyway or Cancel
+valid + unregistered              -> informational warning -> Continue or Cancel
 invalid signature/proof          -> reject, no override
 expired/replayed/malformed       -> reject, no override
-indeterminate registry evidence  -> reject, no override
-production unregistered          -> reject, no override
+unsupported profile/algorithm    -> reject, no override
 ```
 
-The warning must display issuer/verifier, role, trust-chain endpoint, reasons and
-what will happen next. Continue must consume the interaction exactly once before any
-network continuation. Cancel must cancel backend state and record no successful
-issuance/presentation.
+The warning must say that this is development-only and display issuer/verifier, role,
+trust-chain endpoint, reasons and what will happen next. Continue must consume the
+interaction exactly once before any network continuation. Cancel must cancel backend
+state and record no successful issuance/presentation. Production fail-closed policy is
+outside this development acceptance gate.
 
 ## Storage and routing
 

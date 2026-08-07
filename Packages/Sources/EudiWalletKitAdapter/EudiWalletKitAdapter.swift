@@ -603,6 +603,7 @@ public struct EudiPresentationResult: Equatable, Sendable {
     public let disclosedDocumentIDs: [String]
     public let pendingIssuanceID: UUID?
     public let userAccepted: Bool
+    public let authorizationCode: String?
 }
 
 enum EudiPendingIssuancePolicy {
@@ -1857,7 +1858,11 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
             redirectURI: redirect.value,
             disclosedDocumentIDs: userAccepted ? Array(items.keys).sorted() : [],
             pendingIssuanceID: entry.pendingIssuanceID,
-            userAccepted: userAccepted
+            userAccepted: userAccepted,
+            authorizationCode: redirect.value.flatMap { url in
+                URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+                    .first(where: { $0.name == "code" || $0.name == "authorization_code" })?.value
+            }
         )
     }
 

@@ -75,6 +75,16 @@ struct EudiFlowView: View {
             Button("Cancel") { Task { await model.cancelEbsiTrustWarning() } }
                 .frame(maxWidth: .infinity)
 
+        case let .ebsiPresentationRequired(challenge):
+            Label("Present your PID", systemImage: "person.badge.shield.checkmark")
+                .font(OariTypography.heading)
+            Text("The issuer requires an OpenID4VP presentation before it can issue this W3C credential.")
+            Text("DCQL request: \(challenge.dcqlQuery.keys.sorted().joined(separator: ", "))")
+                .font(.caption).foregroundStyle(.secondary)
+            primaryButton("Review PID claims", icon: "person.text.rectangle") {
+                await model.startEudiPresentationForEbsi(challenge)
+            }
+
         case let .presentationConsent(request):
             Label("Share identity information", systemImage: "person.badge.shield.checkmark")
                 .font(OariTypography.heading)

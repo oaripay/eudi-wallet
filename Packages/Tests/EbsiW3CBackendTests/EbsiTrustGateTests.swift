@@ -36,12 +36,16 @@ struct EbsiTrustGateTests {
             counterpartyIdentifier: "did:ebsi:issuer",
             role: .issuer
         ) == .reject([.invalidSignature]))
-        #expect(gate.evaluate(
+        let indeterminate = gate.evaluate(
             verdict: .indeterminate(reasons: [.trustSourceUnavailable], evidence: []),
             environment: .development,
             counterpartyIdentifier: "did:ebsi:issuer",
             role: .issuer
-        ) == .reject([.trustSourceUnavailable]))
+        )
+        guard case .requireExplicitWarning = indeterminate else {
+            Issue.record("Development registry outage should warn, not block valid protocol flow")
+            return
+        }
     }
 
     private var evidence: TrustEvidence {

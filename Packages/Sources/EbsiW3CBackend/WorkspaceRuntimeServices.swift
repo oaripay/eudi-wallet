@@ -54,7 +54,8 @@ public final class URLSessionWorkspaceTransport: NSObject, WorkspaceHTTPTranspor
     }
 
     private static func validatePublicHTTPS(_ url: URL) throws {
-        guard url.scheme?.lowercased() == "https", let host = url.host?.lowercased(),
+        guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased(),
+              scheme == "https" || (scheme == "http" && (host == "127.0.0.1" || host == "localhost")),
               url.user == nil, url.password == nil, url.fragment == nil,
               host != "localhost", host != "::1", !host.hasSuffix(".local"),
               !Self.isPrivateIPv4Literal(host), !Self.isReservedIPv6Literal(host) else {

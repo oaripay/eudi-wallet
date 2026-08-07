@@ -38,6 +38,7 @@ final class WalletAppModel: ObservableObject {
     private var eudiWallet: (any EudiWalletOperating)?
     private var ebsiWallet: (any EbsiW3COperating)?
     private var activeEbsiInteractionID: UUID?
+    private var activeEbsiChallenge: WorkspacePresentationChallenge?
     private var activeEbsiInteraction: EbsiResolvedInteraction?
     private var activeEbsiAllowsUntrusted = false
     private var repositories: (credentials: any CredentialMetadataRepository, audit: any AuditRepository)?
@@ -77,6 +78,7 @@ final class WalletAppModel: ObservableObject {
         case failed(String)
         case configurationRequired(String)
         case ebsiIssuanceReview(EbsiResolvedInteraction)
+        case ebsiPresentationRequired(WorkspacePresentationChallenge)
     }
 
     enum CredentialActionState: Equatable {
@@ -234,6 +236,43 @@ final class WalletAppModel: ObservableObject {
         }
     }
 
+    func startEudiPresentationForEbsi(_ challenge: WorkspacePresentationChallenge) async {
+        guard let eudiWallet else {
+            eudiFlow = .configurationRequired("EUDI Wallet Kit is not configured for PID presentation.")
+            return
+        }
+        activeEbsiChallenge = challenge
+        let requestObject: String
+        if let signedRequest = challenge.signedRequest {
+            requestObject = signedRequest
+        } else {
+            var object: [String: Any] = [
+                "response_type": "vp_token",
+                "response_mode": "direct_post",
+                "response_uri": challenge.authorizationEndpoint.absoluteString,
+                "nonce": challenge.nonce,
+                "dcql_query": challenge.dcqlQuery,
+            ]
+            if let state = challenge.authSession ?? challenge.state { object["state"] = state }
+            guard let data = try? JSONSerialization.data(withJSONObject: object),
+                  let encoded = String(data: data, encoding: .utf8),
+                  let escaped = encoded.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+                eudiFlow = .failed("The issuer returned an invalid PID presentation request.")
+                return
+            }
+            requestObject = escaped
+        }
+        let requestURI = "openid4vp://authorize?request=\(requestObject)"
+        do {
+            eudiFlow = .working("Preparing PID presentation…")
+            let request = try await eudiWallet.beginOpenID4VPPresentation(requestURI: requestURI)
+            selectedClaimIDs = Set(request.claims.filter(\.required).map(\.id))
+            eudiFlow = .presentationConsent(request)
+        } catch {
+            eudiFlow = .failed(Self.safeMessage(error))
+        }
+    }
+
     private func prepareEbsiInteraction(allowUntrusted: Bool) {
         guard let interaction = activeEbsiInteraction else {
             eudiFlow = .failed("The EBSI transaction expired before consent.")
@@ -258,6 +297,7 @@ final class WalletAppModel: ObservableObject {
         activeEbsiInteraction = nil
         switch result {
         case let .completed(message), let .pending(message): eudiFlow = .completed(message)
+        case let .presentationRequired(challenge): eudiFlow = .ebsiPresentationRequired(challenge)
         }
     }
 
@@ -338,6 +378,19 @@ final class WalletAppModel: ObservableObject {
                 activePendingIssuanceID = nil
                 activePendingIssuance = nil
                 eudiFlow = .completed(accepted ? "Approved claims were shared." : "Request declined. Nothing was shared.")
+            case let .externalAuthorization(code):
+                guard let id = activeEbsiInteractionID, let ebsiWallet else {
+                    eudiFlow = .failed("The EBSI authorization transaction expired.")
+                    return
+                }
+                let result = try await ebsiWallet.completeAuthorization(id: id, code: code)
+                activeEbsiInteractionID = nil
+                activeEbsiInteraction = nil
+                activeEbsiChallenge = nil
+                switch result {
+                case let .completed(message), let .pending(message): eudiFlow = .completed(message)
+                case .presentationRequired: eudiFlow = .failed("The issuer requested another unsupported presentation step.")
+                }
             }
         } catch {
             eudiFlow = .failed(Self.safeMessage(error))
