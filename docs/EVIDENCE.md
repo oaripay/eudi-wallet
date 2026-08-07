@@ -66,6 +66,37 @@ VCI and 6c execution wiring, with one independent review and one final commit.
 - OARI semantic design system, vault/scanner/review/warning/history/settings screens,
   app dependency wiring, themes and accessibility evidence.
 
+#### M7 acceptance
+
+1. Brand colors, spacing, radii, typography and motion are centralized in an
+   `OariDesignSystem` SwiftUI product derived from the CSS source of truth.
+2. Wallet, scanner, history and settings screens consume semantic tokens with dark
+   and light themes and no color-only trust state.
+3. App state loads credential metadata and redacted audit events through domain ports,
+   never credential values, proofs, tokens or nonces.
+4. Scanner input uses the M6 bounded classifier and cannot silently execute a request.
+5. Dynamic Type, VoiceOver labels, reduced-motion token behavior and explicit
+   development/not-certified copy are present.
+
+- Review cycle: 2
+- Changed paths: `Package.swift`, `project.yml`, `OARIWallet.xcodeproj/**`,
+  `Packages/Sources/OariDesignSystem/**`, `OARIWallet/**`, `OARIWalletTests/**`,
+  `docs/EVIDENCE.md`.
+- Checks:
+  - `xcodegen generate`: pass.
+  - `swift test`: pass, 44 tests in 11 suites.
+  - Simulator `xcodebuild ... test`: pass, three app-model tests after review fixes.
+  - First final private-material scan found the scanner attempted to read tracked
+    files deleted by this milestone. The scanner now skips deleted paths; rerun passed
+    for 64 repository files.
+- Review findings: cycle 1 found no concrete protected-repository composition/load,
+  no scanner review/warning route, and a raw button foreground color. The app now
+  composes encrypted credential/audit repositories, loads them with explicit failure
+  state, links classified input to a non-executing Not verified review screen, and
+  uses a semantic action-foreground token. Cycle 2 returned PASS with a non-gating
+  stale simulator-test count, corrected above.
+- Commit: this milestone commit; exact SHA is recorded in the session ledger after creation.
+
 ### M8: Interoperability and release readiness
 
 - DID/EBSI trust and status clients, reviewed Wallet Kit pin, iGrant fixtures, SBOM,

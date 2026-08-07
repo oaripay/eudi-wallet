@@ -57,6 +57,8 @@ def main() -> int:
     violations: list[str] = []
 
     for path in candidate_paths():
+        if not path.exists():
+            continue
         normalized_name = path.name.lower()
         if normalized_name in FORBIDDEN_NAMES or path.suffix.lower() in FORBIDDEN_SUFFIXES:
             violations.append(f"forbidden private-material filename: {path}")

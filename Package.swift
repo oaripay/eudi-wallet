@@ -15,6 +15,7 @@ let package = Package(
         .library(name: "TrustDomain", targets: ["TrustDomain"]),
         .library(name: "PresentationDomain", targets: ["PresentationDomain"]),
         .library(name: "ProtocolEngine", targets: ["ProtocolEngine"]),
+        .library(name: "OariDesignSystem", targets: ["OariDesignSystem"]),
     ],
     targets: [
         .target(
@@ -45,6 +46,10 @@ let package = Package(
             name: "ProtocolEngine",
             dependencies: ["PresentationDomain", "ProfileDomain", "TrustDomain", "WalletDomain"],
             path: "Packages/Sources/ProtocolEngine"
+        ),
+        .target(
+            name: "OariDesignSystem",
+            path: "Packages/Sources/OariDesignSystem"
         ),
         .testTarget(
             name: "WalletDomainTests",

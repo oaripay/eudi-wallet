@@ -40,6 +40,12 @@ targets:
     dependencies:
       - package: OARIWalletModules
         product: WalletDomain
+      - package: OARIWalletModules
+        product: ProtocolEngine
+      - package: OARIWalletModules
+        product: OariDesignSystem
+      - package: OARIWalletModules
+        product: WalletVault
     info:
       path: OARIWallet/Info.plist
       properties:
