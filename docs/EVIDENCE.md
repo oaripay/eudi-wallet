@@ -426,3 +426,36 @@ These are absence-of-implementation failures, not regressions.
 - Money transmission and A2A execution remain enterprise responsibilities. The app
   may present credentials or produce separately reviewed action-bound authorization,
   but identity presentation alone never executes an irreversible transfer.
+
+### R1 production harness iteration
+
+- Acceptance:
+  1. Installed-app tests launch deterministic empty, populated and storage-failure
+     states without production Keychain or network dependencies.
+  2. XCUITest covers core tabs, credential/history rendering, scanner rejection,
+     non-executing review and incoming URL routing.
+  3. OpenID4VP and OpenID4VCI URL schemes route through the bounded classifier.
+  4. Inactive/background lifecycle state obscures wallet content.
+  5. Accessibility identifiers provide stable automation selectors.
+- Review cycle: 2
+- Checks:
+  - First app build found a missing explicit `return` in fixture composition; fixed.
+  - First UI compile found Swift 6 main-actor isolation requirements; test class now
+    runs on `MainActor`.
+  - First simulator launch encountered a CoreSimulator service crash before app
+    launch; explicit named-device boot and retry succeeded.
+  - Initial UI assertions used child text hidden by combined accessibility elements;
+    stable semantic identifiers replaced element-type-dependent queries.
+  - `swift test`: pass, 55 tests in 15 suites.
+  - Hosted app model tests: pass, five tests.
+  - XCUITest on booted iPhone 17 Pro: pass, five installed-app journeys.
+  - Debug simulator builds: pass on iPhone 17e and iPad mini.
+  - Release simulator build: pass; fixture parsing/repositories compile only in Debug.
+  - Private-material scan and `git diff --check`: pass at pre-review checkpoint.
+- Review findings: cycle 1 found incoming-URL UI tests used Debug launch injection
+  rather than OS URL dispatch, and Release was not CI-enforced. XCUITest now opens
+  both registered VP and VCI schemes through `XCUIApplication.open`; CI adds a
+  generic Release simulator build. Both OS-dispatch tests pass on the booted iPhone
+  17 Pro; the suite now contains six installed-app journeys. Cycle 2 returned PASS
+  with one non-gating naming nit for the separate Debug-injected review fixture.
+- Commit: this milestone commit; exact SHA is recorded in the session ledger after creation.

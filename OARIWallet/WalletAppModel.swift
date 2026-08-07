@@ -6,12 +6,26 @@ import OariDesignSystem
 
 @MainActor
 final class WalletAppModel: ObservableObject {
+    enum Tab: Hashable {
+        case wallet
+        case scan
+        case history
+        case settings
+    }
+
     @Published private(set) var credentials: [CredentialRecord] = []
     @Published private(set) var auditEvents: [AuditEvent] = []
     @Published var theme: OariTheme = .dark
     @Published var scanInput = ""
     @Published private(set) var scanResult: ScanResult = .idle
     @Published private(set) var loadingState: LoadingState = .idle
+    @Published private(set) var isPrivacyCoverVisible = false
+    @Published var selectedTab: Tab = .wallet
+    private let allowedHosts: Set<String>
+
+    init(allowedHosts: Set<String> = ["wallet.dev.oari.io"]) {
+        self.allowedHosts = allowedHosts
+    }
 
     enum LoadingState: Equatable {
         case idle
@@ -55,7 +69,7 @@ final class WalletAppModel: ObservableObject {
         }
     }
 
-    func classifyScan(allowedHosts: Set<String>) {
+    func classifyScan() {
         do {
             switch try ProtocolInputClassifier(allowedHosts: allowedHosts).classify(scanInput) {
             case .openID4VP: scanResult = .presentation
@@ -65,5 +79,15 @@ final class WalletAppModel: ObservableObject {
         } catch {
             scanResult = .rejected("The code is malformed or is not from an approved host.")
         }
+    }
+
+    func handleIncomingURL(_ url: URL) {
+        scanInput = url.absoluteString
+        classifyScan()
+        selectedTab = .scan
+    }
+
+    func setPrivacyCoverVisible(_ visible: Bool) {
+        isPrivacyCoverVisible = visible
     }
 }

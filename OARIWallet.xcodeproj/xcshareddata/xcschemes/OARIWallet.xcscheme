@@ -35,6 +35,20 @@
                ReferencedContainer = "container:OARIWallet.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "25260E0128D5512EBAF00E67"
+               BuildableName = "OARIWalletUITests.xctest"
+               BlueprintName = "OARIWalletUITests"
+               ReferencedContainer = "container:OARIWallet.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -63,6 +77,17 @@
                BlueprintIdentifier = "40C225644F0733B5BABDA5FF"
                BuildableName = "OARIWalletTests.xctest"
                BlueprintName = "OARIWalletTests"
+               ReferencedContainer = "container:OARIWallet.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "25260E0128D5512EBAF00E67"
+               BuildableName = "OARIWalletUITests.xctest"
+               BlueprintName = "OARIWalletUITests"
                ReferencedContainer = "container:OARIWallet.xcodeproj">
             </BuildableReference>
          </TestableReference>

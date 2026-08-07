@@ -34,6 +34,11 @@ jobs:
         run: >-
           xcodebuild -project OARIWallet.xcodeproj -scheme OARIWallet
           -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
+      - name: Verify Release build
+        run: >-
+          xcodebuild -project OARIWallet.xcodeproj -scheme OARIWallet
+          -configuration Release
+          -destination 'generic/platform=iOS Simulator' build
       - name: Scan tracked files for private material
         run: python3 Scripts/check_tracked_secrets.py
       - name: Secret scan

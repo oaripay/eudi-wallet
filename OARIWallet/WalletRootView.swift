@@ -5,16 +5,56 @@ struct WalletRootView: View {
     @ObservedObject var model: WalletAppModel
 
     var body: some View {
-        TabView {
+        TabView(selection: $model.selectedTab) {
             WalletVaultView(model: model)
-                .tabItem { Label("Wallet", systemImage: "wallet.pass") }
+                .tag(WalletAppModel.Tab.wallet)
+                .tabItem {
+                    Label("Wallet", systemImage: "wallet.pass")
+                        .accessibilityIdentifier("tab.wallet")
+                }
             WalletScannerView(model: model)
-                .tabItem { Label("Scan", systemImage: "qrcode.viewfinder") }
+                .tag(WalletAppModel.Tab.scan)
+                .tabItem {
+                    Label("Scan", systemImage: "qrcode.viewfinder")
+                        .accessibilityIdentifier("tab.scan")
+                }
             WalletHistoryView(model: model)
-                .tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
+                .tag(WalletAppModel.Tab.history)
+                .tabItem {
+                    Label("History", systemImage: "clock.arrow.circlepath")
+                        .accessibilityIdentifier("tab.history")
+                }
             WalletSettingsView(model: model)
-                .tabItem { Label("Settings", systemImage: "gearshape") }
+                .tag(WalletAppModel.Tab.settings)
+                .tabItem {
+                    Label("Settings", systemImage: "gearshape")
+                        .accessibilityIdentifier("tab.settings")
+                }
         }
         .tint(OariColor.action)
+        .overlay {
+            if model.isPrivacyCoverVisible {
+                WalletPrivacyCover()
+                    .accessibilityIdentifier("privacy.cover")
+            }
+        }
+    }
+}
+
+private struct WalletPrivacyCover: View {
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        ZStack {
+            OariColor.background(scheme).ignoresSafeArea()
+            VStack(spacing: OariSpacing.x4) {
+                Image(systemName: "lock.shield.fill")
+                    .font(.largeTitle)
+                Text("OARI Wallet locked")
+                    .font(OariTypography.heading)
+            }
+            .foregroundStyle(OariColor.textPrimary(scheme))
+            .accessibilityElement(children: .combine)
+        }
     }
 }

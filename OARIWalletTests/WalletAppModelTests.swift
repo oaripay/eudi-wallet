@@ -16,14 +16,32 @@ struct WalletAppModelTests {
     func scanClassification() {
         let model = WalletAppModel()
         model.scanInput = "https://evil.example/present?request=x"
-        model.classifyScan(allowedHosts: ["wallet.dev.oari.io"])
+        model.classifyScan()
         guard case .rejected = model.scanResult else {
             Issue.record("Unapproved host must reject")
             return
         }
         model.scanInput = "https://wallet.dev.oari.io/present?request=x"
-        model.classifyScan(allowedHosts: ["wallet.dev.oari.io"])
+        model.classifyScan()
         #expect(model.scanResult == .presentation)
+    }
+
+    @Test("Incoming URL is classified through the same bounded scanner route")
+    func incomingURL() {
+        let model = WalletAppModel(allowedHosts: ["verifier.example"])
+        model.handleIncomingURL(URL(string: "openid4vp://authorize?request=x")!)
+        #expect(model.scanResult == .presentation)
+        #expect(model.scanInput.hasPrefix("openid4vp://"))
+        #expect(model.selectedTab == .scan)
+    }
+
+    @Test("Privacy cover state follows explicit lifecycle input")
+    func privacyCover() {
+        let model = WalletAppModel()
+        model.setPrivacyCoverVisible(true)
+        #expect(model.isPrivacyCoverVisible)
+        model.setPrivacyCoverVisible(false)
+        #expect(!model.isPrivacyCoverVisible)
     }
 
     @Test("Repository failure is explicit and does not imply an empty loaded wallet")

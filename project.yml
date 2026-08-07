@@ -59,6 +59,13 @@ targets:
           - UIInterfaceOrientationPortrait
         NSFaceIDUsageDescription: Authenticate before sharing credentials or approving sensitive wallet actions.
         NSCameraUsageDescription: Scan credential offers and presentation requests.
+        CFBundleURLTypes:
+          - CFBundleURLName: io.oari.wallet.openid4vp
+            CFBundleURLSchemes:
+              - openid4vp
+          - CFBundleURLName: io.oari.wallet.openid4vci
+            CFBundleURLSchemes:
+              - openid-credential-offer
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.oari.wallet
@@ -84,12 +91,26 @@ targets:
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/OARIWallet.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OARIWallet"
         BUNDLE_LOADER: "$(TEST_HOST)"
 
+  OARIWalletUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: OARIWalletUITests
+    dependencies:
+      - target: OARIWallet
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.oari.wallet.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: OARIWallet
+
 schemes:
   OARIWallet:
     build:
       targets:
         OARIWallet: all
         OARIWalletTests: [test]
+        OARIWalletUITests: [test]
     test:
       gatherCoverageData: true
       coverageTargets:
@@ -98,6 +119,9 @@ schemes:
         - name: OARIWalletTests
           parallelizable: true
           randomExecutionOrder: true
+        - name: OARIWalletUITests
+          parallelizable: false
+          randomExecutionOrder: false
     run:
       config: Debug
     archive:

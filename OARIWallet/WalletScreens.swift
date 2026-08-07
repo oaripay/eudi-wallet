@@ -16,6 +16,7 @@ struct WalletVaultView: View {
                         .foregroundStyle(OariColor.textSecondary(scheme))
                     Text(model.credentialCountDescription)
                         .font(OariTypography.title)
+                        .accessibilityIdentifier("wallet.credential-count")
                     if case let .failed(message) = model.loadingState {
                         OariCard {
                             OariStatusBadge("Wallet storage unavailable", kind: .invalid)
@@ -24,6 +25,7 @@ struct WalletVaultView: View {
                                 .foregroundStyle(OariColor.textSecondary(scheme))
                         }
                         .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("wallet.storage-error")
                     }
                     if model.credentials.isEmpty {
                         OariCard {
@@ -64,6 +66,7 @@ private struct CredentialTile: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(credential.displayName), \(statusLabel)")
+        .accessibilityIdentifier("wallet.credential.\(credential.configurationID)")
     }
 
     private var statusLabel: String {
@@ -104,11 +107,13 @@ struct WalletScannerView: View {
                             .background(OariColor.surfaceInset(scheme))
                             .clipShape(RoundedRectangle(cornerRadius: OariRadius.medium))
                             .accessibilityLabel("Wallet code")
+                            .accessibilityIdentifier("scanner.input")
                         Button("Review code") {
-                            model.classifyScan(allowedHosts: ["wallet.dev.oari.io"])
+                            model.classifyScan()
                         }
                         .buttonStyle(OariPrimaryButtonStyle())
                         .disabled(model.scanInput.isEmpty)
+                        .accessibilityIdentifier("scanner.review")
                     }
                 }
                 ScanResultView(result: model.scanResult, input: model.scanInput)
@@ -134,14 +139,20 @@ private struct ScanResultView: View {
             } label: {
                 OariStatusBadge("Review presentation request", kind: .warning)
             }
+            .accessibilityIdentifier("scanner.result.presentation")
         case .issuance:
             NavigationLink {
                 WalletRequestReviewView(kind: .issuance, source: input)
             } label: {
                 OariStatusBadge("Review credential offer", kind: .warning)
             }
-        case .unsupported: OariStatusBadge("Unsupported wallet request", kind: .indeterminate)
-        case let .rejected(reason): OariStatusBadge(reason, kind: .invalid)
+            .accessibilityIdentifier("scanner.result.issuance")
+        case .unsupported:
+            OariStatusBadge("Unsupported wallet request", kind: .indeterminate)
+                .accessibilityIdentifier("scanner.result.unsupported")
+        case let .rejected(reason):
+            OariStatusBadge(reason, kind: .invalid)
+                .accessibilityIdentifier("scanner.result.rejected")
         }
     }
 }
@@ -164,7 +175,10 @@ private struct WalletRequestReviewView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: OariSpacing.x5) {
                 OariStatusBadge("Not verified", kind: .warning)
-                Text(kind.title).font(OariTypography.title)
+                    .accessibilityIdentifier("review.not-verified")
+                Text(kind.title)
+                    .font(OariTypography.title)
+                    .accessibilityIdentifier("review.screen")
                 OariCard {
                     VStack(alignment: .leading, spacing: OariSpacing.x3) {
                         Label("Review required", systemImage: "exclamationmark.triangle.fill")
@@ -205,9 +219,11 @@ struct WalletHistoryView: View {
                 }
                 .accessibilityElement(children: .combine)
             }
+            .accessibilityIdentifier("history.list")
             .overlay {
                 if model.auditEvents.isEmpty {
                     ContentUnavailableView("No activity", systemImage: "clock", description: Text("Completed wallet actions appear here without credential values."))
+                        .accessibilityIdentifier("history.empty")
                 }
             }
             .scrollContentBackground(.hidden)
@@ -231,11 +247,13 @@ struct WalletSettingsView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    .accessibilityIdentifier("settings.theme")
                 }
                 Section("Security") {
                     Label("Private keys stay on this device", systemImage: "lock.shield")
                     Label("Credentials are excluded from backup", systemImage: "externaldrive.badge.xmark")
                     Label("Development build, not certified", systemImage: "exclamationmark.triangle")
+                        .accessibilityIdentifier("settings.certification")
                 }
             }
             .scrollContentBackground(.hidden)
