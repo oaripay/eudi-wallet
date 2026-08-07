@@ -48,11 +48,11 @@ for clean-environment checks after it exists.
 
 ## Compact milestone map
 
-The original architecture build loop and the initial delivery list are consolidated
-into M0-M8. M0-M5 are completed implementation slices. M6 merges build-loop phases
-3 and 4 (protocol engine); M7 maps to phase 5 (product UI); M8 maps to phases 6 and
-7 (interoperability and release readiness). M6 is internally developed as 6a VP, 6b
-VCI and 6c execution wiring, with one independent review and one final commit.
+The original architecture build loop and initial delivery list are consolidated into
+four production loops described in `docs/IMPLEMENTATION-PLAN.md`: A SDK foundation,
+B operational wallet, C product/compatibility, and D release evidence. Existing M0-M8
+commits are historical foundation evidence, not additional future loops. Each A-D
+loop receives one independent review and one final local commit.
 
 ### M6: Protocol engine
 
@@ -184,7 +184,7 @@ These are absence-of-implementation failures, not regressions.
 | OpenID4VCI | Final 1.0 plus isolated iGrant Draft 13 | Planned |
 | OpenID4VP | Final 1.0 plus isolated iGrant Draft 18 | Planned |
 | VCDM | W3C VCDM 2.0, concrete JWT VC per OARI profile | Planned |
-| Wallet Kit | `eudi-lib-ios-wallet-kit` 0.16.4 evaluation candidate | Exact source revision and API review required before adapter milestone |
+| Wallet Kit | `eudi-lib-ios-wallet-kit` v0.39.1, commit `79005ab4bf0399238c1c9ebff9ee7d8a42c521f9` | Selected exact baseline; not yet in package graph, Loop A required |
 | OARI LPID | `provisionalOariLPID`, development only | Backend implemented with provisional status index |
 | EBSI onboarding | `ebsiOnboardingCredential`, development only | Backend recipient proof bypass is a security blocker |
 | Business user/admin | `OariBusinessWalletUserCredential` | Blocked: schema and issuance path missing |
@@ -203,11 +203,10 @@ These are absence-of-implementation failures, not regressions.
   - `xcodebuild -project OARIWallet.xcodeproj -scheme OARIWallet -derivedDataPath <temp>/oari-m0-build -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build`: pass.
   - `xcodebuild -project OARIWallet.xcodeproj -scheme OARIWallet -derivedDataPath <temp>/oari-m0-test -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test`: pass, one test.
   - `python3 Scripts/check_tracked_secrets.py`: pass, 18 repository files inspected.
-- Implementation check note: an initial build attempt declared Wallet Kit 0.16.4
+- Implementation check note: an earlier build attempt declared Wallet Kit 0.16.4
   directly and concurrent Xcode package resolution collided in shared DerivedData.
-  No adapter uses the SDK yet, so the premature dependency declaration was removed.
-  Future Xcode checks use separate DerivedData paths, and SDK addition remains gated
-  on an exact reviewed source revision.
+  No adapter uses the SDK yet; the selected v0.39.1 baseline is recorded and SDK
+  acquisition/package resolution is now Loop A.
 - Review findings: cycle 1 found a major gap in the CI private-material scan and a
   minor stale evidence record. Both were fixed and focused checks passed. Cycle 2
   returned PASS with one non-gating ignore-list alignment nit, which was applied.

@@ -22,8 +22,8 @@ warning flow must never be represented as equivalent to regulated validation.
 - Xcode: 26.5 (build 17F42).
 - Swift compiler: 6.3.2; project language mode: Swift 6.
 - Minimum iOS: 17.0.
-- Candidate EUDI Wallet Kit: exact version 0.16.4 is recorded for evaluation but is
-  not yet a build dependency. It must not be linked into a production adapter until
-  its source revision, API, transitive dependencies, license and protocol profiles
-  have been reviewed and recorded. A version label alone is not an adequate
-  production dependency pin.
+- EUDI Wallet Kit: exact version `v0.39.1`, commit
+  `79005ab4bf0399238c1c9ebff9ee7d8a42c521f9` is selected but not yet a build
+  dependency. It must not be used in a production adapter until its source,
+  transitive dependencies, license, API and protocol profiles are reviewed and
+  recorded. A version label alone is not adequate production evidence.

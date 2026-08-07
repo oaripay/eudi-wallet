@@ -8,9 +8,10 @@ CryptoKit. `syft` generates `sbom.spdx.json` from the committed workspace.
 
 ## EUDI Wallet Kit gate
 
-`eudi-lib-ios-wallet-kit` 0.16.4 remains an evaluation candidate, not a build
-dependency. No locally accessible source checkout or authoritative reviewed commit
-SHA was available on 2026-08-07. A version label is not treated as a source pin.
+`eudi-lib-ios-wallet-kit` v0.39.1 is the selected integration baseline, pinned to
+commit `79005ab4bf0399238c1c9ebff9ee7d8a42c521f9`. It is not yet a build dependency
+in the OARI package graph. The vendor checkout and package resolution must be
+acquired and reviewed in Loop A; a version label alone is not sufficient evidence.
 
 Integration is blocked until a human reviewer records:
 
@@ -21,7 +22,8 @@ Integration is blocked until a human reviewer records:
 5. Key-custody, logging, network and storage review.
 6. Fixture and physical-device interoperability results.
 
-No production or certification claim depends on the unintegrated candidate.
+No production or certification claim depends on the unintegrated SDK until Loop A
+and the SDK-backed interoperability loops pass.
 
 ## iGrant compatibility
 
