@@ -29,15 +29,6 @@ public protocol PresentationDelivery: Sendable {
     ) async throws
 }
 
-public protocol IssuedCredentialValidator: Sendable {
-    func validate(
-        encodedCredential: Data,
-        request: IssuanceRequest,
-        profile: InteroperabilityProfile,
-        at date: Date
-    ) async throws -> CredentialEnvelope
-}
-
 public protocol WalletUnitAttestationProvider: Sendable {
     func attestation(profile: InteroperabilityProfile, at date: Date) async throws -> String
 }

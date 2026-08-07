@@ -8,16 +8,13 @@ public enum IssuanceExecutionResult: Equatable, Sendable {
 }
 
 public struct IssuanceExecutionCoordinator: Sendable {
-    private let validator: any IssuedCredentialValidator
-    private let repository: any CredentialRepository
+    private let repository: any CredentialMetadataRepository
     private let auditRepository: any AuditRepository
 
     public init(
-        validator: any IssuedCredentialValidator,
-        repository: any CredentialRepository,
+        repository: any CredentialMetadataRepository,
         auditRepository: any AuditRepository
     ) {
-        self.validator = validator
         self.repository = repository
         self.auditRepository = auditRepository
     }
@@ -36,29 +33,26 @@ public struct IssuanceExecutionCoordinator: Sendable {
                 throw ProtocolExecutionError.invalidCredential
             }
             return .deferred(transactionID: transactionID, retryAfter: interval)
-        case let .issued(encodedCredential):
-            guard !encodedCredential.isEmpty else {
+        case let .issued(metadata):
+            guard metadata.configurationID == request.configurationID,
+                  metadata.profileID == profile.id.rawValue,
+                  metadata.issuerIdentifier == request.issuer.absoluteString,
+                  metadata.cryptographicValidity == .valid else {
                 throw ProtocolExecutionError.invalidCredential
             }
-            let envelope = try await validator.validate(
-                encodedCredential: encodedCredential,
-                request: request,
-                profile: profile,
-                at: date
-            )
-            try await repository.save(envelope)
+            try await repository.saveMetadata(metadata)
             try await auditRepository.append(
                 AuditEvent(
                     operation: .issuance,
                     outcome: .completed,
                     occurredAt: date,
                     counterpartyIdentifierDigest: .sha256(request.issuer.absoluteString),
-                    credentialIDs: [envelope.record.id],
+                    credentialIDs: [metadata.id],
                     policy: policy,
                     policyVersion: policyVersion
                 )
             )
-            return .stored(envelope.record.id)
+            return .stored(metadata.id)
         }
     }
 }

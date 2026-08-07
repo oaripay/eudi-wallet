@@ -9,6 +9,7 @@ xcuserdata/
 .build/
 .swiftpm/
 Package.resolved
+!Package.resolved
 
 # Local configuration and secrets
 .env

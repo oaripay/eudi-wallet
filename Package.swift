@@ -17,6 +17,21 @@ let package = Package(
         .library(name: "ProtocolEngine", targets: ["ProtocolEngine"]),
         .library(name: "OariDesignSystem", targets: ["OariDesignSystem"]),
         .library(name: "IdentityDomain", targets: ["IdentityDomain"]),
+        .library(name: "EudiWalletKitAdapter", targets: ["EudiWalletKitAdapter"]),
+    ],
+    dependencies: [
+        .package(
+            url: "https://github.com/eu-digital-identity-wallet/eudi-lib-ios-wallet-kit.git",
+            exact: "0.39.1"
+        ),
+        .package(
+            url: "https://github.com/eu-digital-identity-wallet/eudi-lib-ios-iso18013-security.git",
+            exact: "0.24.2"
+        ),
+        .package(
+            url: "https://github.com/apple/swift-certificates.git",
+            exact: "1.19.4"
+        ),
     ],
     targets: [
         .target(
@@ -57,6 +72,24 @@ let package = Package(
             dependencies: ["TrustDomain"],
             path: "Packages/Sources/IdentityDomain"
         ),
+        .target(
+            name: "EudiWalletKitAdapter",
+            dependencies: [
+                "WalletDomain",
+                "ProfileDomain",
+                "TrustDomain",
+                .product(
+                    name: "EudiWalletKit",
+                    package: "eudi-lib-ios-wallet-kit"
+                ),
+                .product(
+                    name: "MdocSecurity18013",
+                    package: "eudi-lib-ios-iso18013-security"
+                ),
+                .product(name: "X509", package: "swift-certificates"),
+            ],
+            path: "Packages/Sources/EudiWalletKitAdapter"
+        ),
         .testTarget(
             name: "WalletDomainTests",
             dependencies: ["WalletDomain"],
@@ -92,6 +125,11 @@ let package = Package(
             dependencies: ["ProtocolEngine", "PresentationDomain", "ProfileDomain", "TrustDomain", "WalletDomain"],
             path: "Packages/Tests/ProtocolEngineTests",
             resources: [.process("Fixtures")]
+        ),
+        .testTarget(
+            name: "EudiWalletKitAdapterTests",
+            dependencies: ["EudiWalletKitAdapter"],
+            path: "Packages/Tests/EudiWalletKitAdapterTests"
         ),
     ],
     swiftLanguageModes: [.v6]

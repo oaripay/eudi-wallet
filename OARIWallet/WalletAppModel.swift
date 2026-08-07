@@ -51,7 +51,7 @@ final class WalletAppModel: ObservableObject {
     }
 
     func load(
-        credentials repository: any CredentialRepository,
+        credentials repository: any CredentialMetadataRepository,
         audit auditRepository: any AuditRepository
     ) async throws {
         credentials = try await repository.credentials()

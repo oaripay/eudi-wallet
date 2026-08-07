@@ -1,0 +1,26 @@
+import Foundation
+import Testing
+@testable import OARIWallet
+
+@MainActor
+struct WalletKitIOSIntegrationTests {
+    @Test("iOS trust path constructs and operational storage obeys build policy")
+    func iosTrustAndOperationalRuntime() async throws {
+        let anchorURL = try #require(
+            Bundle(for: BundleToken.self).url(
+                forResource: "TestTrustAnchor",
+                withExtension: "bin"
+            )
+        )
+        let anchor = try Data(contentsOf: anchorURL)
+        #if DEBUG
+        await #expect(throws: WalletKitRuntimeProbeError.debugLoggingBlocked) {
+            _ = try await WalletKitRuntimeProbe.loadDocumentCount(trustAnchor: anchor)
+        }
+        #else
+        #expect(try await WalletKitRuntimeProbe.loadDocumentCount(trustAnchor: anchor) == 0)
+        #endif
+    }
+}
+
+private final class BundleToken {}

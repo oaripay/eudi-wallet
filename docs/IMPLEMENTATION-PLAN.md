@@ -100,8 +100,8 @@ git diff --check
 ## Current state
 
 ```text
-Current loop: A — SDK foundation
-Current application commit: 66145378339b5fa6f89e1518e7609bd9af6eb458
-SDK integration: pending
+Current loop: A — SDK foundation review
+Current application commit before Loop A: 9348467
+SDK integration: exact dependency and adapter foundation implemented; cycle-3 repairs under final review
 Production readiness: blocked until loops A-D and external gates pass
 ```

@@ -1,10 +1,11 @@
 import Foundation
 
-public protocol CredentialRepository: Sendable {
+/// OARI-owned display and policy metadata. Raw Wallet Kit document bytes and
+/// document-bound keys must never cross this boundary.
+public protocol CredentialMetadataRepository: Sendable {
     func credentials() async throws -> [CredentialRecord]
-    func credential(id: CredentialID) async throws -> CredentialEnvelope?
-    func save(_ credential: CredentialEnvelope) async throws
-    func delete(id: CredentialID) async throws
+    func saveMetadata(_ credential: CredentialRecord) async throws
+    func deleteMetadata(id: CredentialID) async throws
 }
 
 public protocol AuditRepository: Sendable {

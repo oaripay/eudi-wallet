@@ -4,7 +4,7 @@ import WalletDomain
 import WalletVault
 
 struct WalletAppDependencies: Sendable {
-    let credentials: any CredentialRepository
+    let credentials: any CredentialMetadataRepository
     let audit: any AuditRepository
     let localAuthenticator: any LocalAuthenticator
 
@@ -30,8 +30,8 @@ struct WalletAppDependencies: Sendable {
             ).appendingPathComponent("OARIWallet", isDirectory: true)
             let keyStore = KeychainVaultKeyStore(service: "io.oari.wallet.vault")
             return try WalletAppDependencies(
-                credentials: EncryptedCredentialRepository(
-                    directory: root.appendingPathComponent("credentials", isDirectory: true),
+                credentials: EncryptedCredentialMetadataRepository(
+                    directory: root.appendingPathComponent("credential-metadata", isDirectory: true),
                     keyStore: keyStore
                 ),
                 audit: EncryptedAuditRepository(
@@ -45,7 +45,7 @@ struct WalletAppDependencies: Sendable {
 
 #if DEBUG
     private static func fixture(
-        credentials: [CredentialEnvelope],
+        credentials: [CredentialRecord],
         events: [AuditEvent]
     ) -> WalletAppDependencies {
         WalletAppDependencies(
@@ -72,7 +72,7 @@ struct WalletAppDependencies: Sendable {
             createdAt: date
         )
         return fixture(
-            credentials: [CredentialEnvelope(record: record, encodedCredential: Data())],
+            credentials: [record],
             events: [
                 AuditEvent(
                     operation: .issuance,
@@ -94,20 +94,21 @@ private struct FixtureLocalAuthenticator: LocalAuthenticator {
     func authenticate(reason: String) async throws {}
 }
 
-private actor FixtureCredentialRepository: CredentialRepository {
-    private var storage: [CredentialID: CredentialEnvelope]
+private actor FixtureCredentialRepository: CredentialMetadataRepository {
+    private var storage: [CredentialID: CredentialRecord]
 
-    init(credentials: [CredentialEnvelope]) {
-        storage = Dictionary(uniqueKeysWithValues: credentials.map { ($0.record.id, $0) })
+    init(credentials: [CredentialRecord]) {
+        storage = Dictionary(uniqueKeysWithValues: credentials.map { ($0.id, $0) })
     }
 
     func credentials() async throws -> [CredentialRecord] {
-        storage.values.map(\.record).sorted { $0.createdAt > $1.createdAt }
+        storage.values.sorted { $0.createdAt > $1.createdAt }
     }
 
-    func credential(id: CredentialID) async throws -> CredentialEnvelope? { storage[id] }
-    func save(_ credential: CredentialEnvelope) async throws { storage[credential.record.id] = credential }
-    func delete(id: CredentialID) async throws { storage[id] = nil }
+    func saveMetadata(_ credential: CredentialRecord) async throws {
+        storage[credential.id] = credential
+    }
+    func deleteMetadata(id: CredentialID) async throws { storage[id] = nil }
 }
 
 private actor FixtureAuditRepository: AuditRepository {

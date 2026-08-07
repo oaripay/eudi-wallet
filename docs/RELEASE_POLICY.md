@@ -23,7 +23,8 @@ warning flow must never be represented as equivalent to regulated validation.
 - Swift compiler: 6.3.2; project language mode: Swift 6.
 - Minimum iOS: 17.0.
 - EUDI Wallet Kit: exact version `v0.39.1`, commit
-  `79005ab4bf0399238c1c9ebff9ee7d8a42c521f9` is selected but not yet a build
-  dependency. It must not be used in a production adapter until its source,
-  transitive dependencies, license, API and protocol profiles are reviewed and
-  recorded. A version label alone is not adequate production evidence.
+  `79005ab4bf0399238c1c9ebff9ee7d8a42c521f9` is a locked build dependency behind
+  `EudiWalletKitAdapter`. Its source, package graph, Apache-2.0 notice and initial
+  adapter boundary are recorded in `WALLET_KIT_REVIEW.md`. Operational SDK flows
+  remain blocked by the documented sensitive Debug logging and Loop B conformance
+  gates; dependency integration alone is not production evidence.

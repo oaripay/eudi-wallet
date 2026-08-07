@@ -11,6 +11,7 @@ options:
 configs:
   Debug: debug
   Release: release
+  ReleaseTesting: release
 
 settings:
   base:
@@ -24,6 +25,9 @@ settings:
     Debug:
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
     Release:
+      SWIFT_COMPILATION_MODE: wholemodule
+      VALIDATE_PRODUCT: YES
+    ReleaseTesting:
       SWIFT_COMPILATION_MODE: wholemodule
       VALIDATE_PRODUCT: YES
 
@@ -46,6 +50,8 @@ targets:
         product: OariDesignSystem
       - package: OARIWalletModules
         product: WalletVault
+      - package: OARIWalletModules
+        product: EudiWalletKitAdapter
     info:
       path: OARIWallet/Info.plist
       properties:
@@ -76,6 +82,9 @@ targets:
         ENABLE_PREVIEWS: YES
         GENERATE_INFOPLIST_FILE: NO
         SUPPORTS_MACCATALYST: NO
+      configs:
+        ReleaseTesting:
+          ENABLE_TESTABILITY: YES
 
   OARIWalletTests:
     type: bundle.unit-test

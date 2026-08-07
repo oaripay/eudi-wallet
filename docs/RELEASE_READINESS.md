@@ -26,7 +26,7 @@
 | Production EBSI | network, registry endpoints, trust anchors and credentials | BLOCKED: not supplied |
 | RP registration | authoritative register/WRP certificate source | BLOCKED: not supplied |
 | Wallet attestation | provider, issuance, renewal, revocation and privacy policy | BLOCKED: provider not selected |
-| Wallet Kit | reviewed immutable source revision and integration evidence | BLOCKED: source revision unavailable |
+| Wallet Kit | reviewed immutable source revision and integration evidence | BLOCKED: revision pinned and foundation verified; production trust/profile mapping, physical-device interoperability and upstream Debug logging posture remain unresolved |
 | iGrant production | tenant/API access and production interoperability evidence | BLOCKED: access unavailable |
 | Legal/privacy | DPO/legal approval, DPIA and jurisdiction-specific retention | BLOCKED: human approval required |
 | Penetration test | independent report and remediated findings | BLOCKED: not commissioned |

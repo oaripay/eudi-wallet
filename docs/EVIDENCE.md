@@ -5,9 +5,10 @@
 1. The repository produces a native Swift 6.3 SwiftUI iOS application from a
    reproducible project definition, with no signing required for simulator tests.
 2. Domain code is isolated from UI, networking and SDKs through explicit ports.
-3. Credentials and redacted audit events persist locally with iOS data protection;
+3. Wallet Kit owns raw credential documents and document-bound keys. OARI metadata
+   and redacted audit events persist locally with iOS data protection; OARI
    device-bound key records are purpose-specific and deletion removes associated
-   material.
+   OARI material.
 4. Every trust decision returns a verdict plus evidence. Invalid, expired,
    unregistered or unsupported-profile inputs fail closed in regulated strict mode.
 5. OpenID4VP requests are treated as untrusted input. Parsing, transport checks,
@@ -78,7 +79,7 @@ loop receives one independent review and one final local commit.
 5. Dynamic Type, VoiceOver labels, reduced-motion token behavior and explicit
    development/not-certified copy are present.
 
-- Review cycle: 2
+- Review cycle: 3
 - Changed paths: `Package.swift`, `project.yml`, `OARIWallet.xcodeproj/**`,
   `Packages/Sources/OariDesignSystem/**`, `OARIWallet/**`, `OARIWalletTests/**`,
   `docs/EVIDENCE.md`.
@@ -184,7 +185,7 @@ These are absence-of-implementation failures, not regressions.
 | OpenID4VCI | Final 1.0 plus isolated iGrant Draft 13 | Planned |
 | OpenID4VP | Final 1.0 plus isolated iGrant Draft 18 | Planned |
 | VCDM | W3C VCDM 2.0, concrete JWT VC per OARI profile | Planned |
-| Wallet Kit | `eudi-lib-ios-wallet-kit` v0.39.1, commit `79005ab4bf0399238c1c9ebff9ee7d8a42c521f9` | Selected exact baseline; not yet in package graph, Loop A required |
+| Wallet Kit | `eudi-lib-ios-wallet-kit` v0.39.1, commit `79005ab4bf0399238c1c9ebff9ee7d8a42c521f9` | Exact package resolved; adapter foundation under Loop A review |
 | OARI LPID | `provisionalOariLPID`, development only | Backend implemented with provisional status index |
 | EBSI onboarding | `ebsiOnboardingCredential`, development only | Backend recipient proof bypass is a security blocker |
 | Business user/admin | `OariBusinessWalletUserCredential` | Blocked: schema and issuance path missing |
@@ -311,6 +312,62 @@ These are absence-of-implementation failures, not regressions.
   stale timestamps fail closed with negative tests. Cycle 2 returned PASS with a
   non-gating stale evidence-ledger count, corrected above.
 - Commit: this milestone commit; exact SHA is recorded in the session ledger after creation.
+
+### Loop A — SDK foundation
+
+- Acceptance:
+  1. Approved Wallet Kit tag/commit and Apache license/notice are verified.
+  2. The application uses an exact package version and commits all resolved revisions.
+  3. Only `EudiWalletKitAdapter` imports Wallet Kit; configuration defaults to user
+     authentication, strict trust, signed metadata/WRPRC validation and no file log.
+  4. Wallet Kit constructs behind the adapter only with explicit profile-bound,
+     digest-pinned CA trust anchors and
+     exposes OARI-neutral document summaries.
+  5. Storage ownership and security no-go findings are documented before operational
+     flows begin.
+- Review cycle: 4
+- Checks:
+  - Vendor tag/SHA verification: pass.
+  - Initial manifest resolution failed because `dependencies` preceded `products`;
+    manifest order fixed.
+  - Exact package resolution: pass, 24 locked revisions.
+  - First trust-source implementation selected the unavailable optional ETSI path;
+    compiler evidence led to the supported `SecTrust`/`rootIaca` mapping.
+  - Focused adapter tests after cycle-2 fixes: pass, nine tests.
+  - Full package suite after cycle-3 fixes: pass, 63 tests in 17 suites.
+  - First Xcode build stopped for pinned `CopyablePlugin` macro approval; automated
+    commands now use `-skipMacroValidation` only with the reviewed lockfile.
+  - First iOS adapter compile exposed the optional ETSI trust initializer while
+    macOS exposes `rootIaca`; conditional platform mapping now compiles both paths.
+  - iPhone 17 Pro Debug build: pass with the exact SDK graph.
+  - Final iPhone 17 Pro Debug app tests: pass, seven XCTest tests plus Swift Testing.
+  - Final ReleaseTesting Wallet Kit iOS operation probe: pass.
+  - Generic Release simulator build: pass.
+  - First working-tree Gitleaks run scanned ignored `.build` package fixtures and
+    reported upstream values; `.build/` alone is now excluded and the application
+    working-tree scan passes.
+  - Final Semgrep: pass, 46 application/adapter Swift targets, zero findings.
+  - Syft SBOM: regenerated, 26 packages including ten EUDI components.
+  - Statium license review: both malformed conflict sides and README identify
+    Apache-2.0; legal source-hygiene confirmation remains a release gate.
+  - Sensitive SDK Debug logging: operational adapter methods now fail in Debug and
+    a regression test enforces the gate.
+- Review findings: cycle 2 found that DER parsing alone allowed a syntactically valid
+  leaf or unapproved CA to become an anchor, and that production app composition
+  still selected the historical raw-byte credential vault. Trust sources are now
+  profile-bound and digest-pinned, validate CA constraints, signing usage and dates,
+  and reject valid leaf/unapproved anchors. Production composition now uses an
+  encrypted metadata-only repository; a CI architecture check enforces both the sole
+  SDK import and raw-document ownership boundary.
+  Cycle 3 found that the historical raw-byte envelope/repository and validator still
+  compiled in production modules despite not being composed by the app. Those APIs,
+  storage implementation and tests are removed. Protocol issuance now accepts only
+  Wallet Kit-validated `CredentialRecord` metadata and rebinds it to the reviewed
+  issuer/configuration/profile before metadata persistence. The boundary verifier now
+  rejects raw credential symbols across every production Swift source. Cycle-4 review
+  returned PASS. It noted non-gating direct test debt for certificate validity and
+  key-usage branches. A stale release-readiness row was corrected after review.
+- Commit: pending.
 
 ### Milestone 5: presentation authorization state machine
 

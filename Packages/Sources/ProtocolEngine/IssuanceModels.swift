@@ -117,6 +117,8 @@ public struct CredentialRequest: Equatable, Sendable {
 }
 
 public enum CredentialResponse: Equatable, Sendable {
-    case issued(encodedCredential: Data)
+    /// Metadata for a document already validated and retained by Wallet Kit.
+    /// Raw credential bytes never cross into ProtocolEngine.
+    case issued(metadata: CredentialRecord)
     case deferred(transactionID: String, interval: TimeInterval)
 }

@@ -118,7 +118,7 @@ struct ExecutionCoordinatorTests {
         #expect(await session.state == .reviewApproved)
     }
 
-    @Test("Issued credential validates before atomic repository save")
+    @Test("Wallet Kit metadata is rebound before atomic metadata save")
     func issuanceExecution() async throws {
         let credentials = MemoryCredentialRepository()
         let audit = MemoryAuditRepository()
@@ -130,11 +130,20 @@ struct ExecutionCoordinatorTests {
             grant: .preAuthorizedCode(code: "code", txCodeRequired: false)
         )
         let result = try await IssuanceExecutionCoordinator(
-            validator: FixtureCredentialValidator(),
             repository: credentials,
             auditRepository: audit
         ).process(
-            response: .issued(encodedCredential: Data("credential".utf8)),
+            response: .issued(metadata: CredentialRecord(
+                configurationID: request.configurationID,
+                displayName: "Credential",
+                format: .jwtVC,
+                profileID: profile.id.rawValue,
+                issuerIdentifier: request.issuer.absoluteString,
+                cryptographicValidity: .valid,
+                issuerTrust: .trusted,
+                status: .valid,
+                createdAt: Date(timeIntervalSince1970: 1_754_524_800)
+            )),
             request: request,
             profile: profile,
             policy: .development,
@@ -210,30 +219,6 @@ struct FixtureDelivery: PresentationDelivery {
     func deliver(_ presentation: SignedPresentation, to responseURI: URL, state: String?) async throws {}
 }
 
-struct FixtureCredentialValidator: IssuedCredentialValidator {
-    func validate(
-        encodedCredential: Data,
-        request: IssuanceRequest,
-        profile: InteroperabilityProfile,
-        at date: Date
-    ) async throws -> CredentialEnvelope {
-        CredentialEnvelope(
-            record: CredentialRecord(
-                configurationID: request.configurationID,
-                displayName: "Credential",
-                format: .jwtVC,
-                profileID: profile.id.rawValue,
-                issuerIdentifier: request.issuer.absoluteString,
-                cryptographicValidity: .valid,
-                issuerTrust: .trusted,
-                status: .valid,
-                createdAt: date
-            ),
-            encodedCredential: encodedCredential
-        )
-    }
-}
-
 actor MemoryAuditRepository: AuditRepository {
     private var stored: [AuditEvent] = []
     func events() async throws -> [AuditEvent] { stored }
@@ -241,10 +226,9 @@ actor MemoryAuditRepository: AuditRepository {
     func deleteAll() async throws { stored = [] }
 }
 
-actor MemoryCredentialRepository: CredentialRepository {
-    private var stored: [CredentialID: CredentialEnvelope] = [:]
-    func credentials() async throws -> [CredentialRecord] { stored.values.map(\.record) }
-    func credential(id: CredentialID) async throws -> CredentialEnvelope? { stored[id] }
-    func save(_ credential: CredentialEnvelope) async throws { stored[credential.record.id] = credential }
-    func delete(id: CredentialID) async throws { stored[id] = nil }
+actor MemoryCredentialRepository: CredentialMetadataRepository {
+    private var stored: [CredentialID: CredentialRecord] = [:]
+    func credentials() async throws -> [CredentialRecord] { Array(stored.values) }
+    func saveMetadata(_ credential: CredentialRecord) async throws { stored[credential.id] = credential }
+    func deleteMetadata(id: CredentialID) async throws { stored[id] = nil }
 }

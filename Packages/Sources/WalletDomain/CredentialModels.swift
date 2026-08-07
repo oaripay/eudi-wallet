@@ -119,13 +119,3 @@ public struct CredentialRecord: Codable, Equatable, Identifiable, Sendable {
         self.createdAt = createdAt
     }
 }
-
-public struct CredentialEnvelope: Equatable, Sendable {
-    public let record: CredentialRecord
-    public let encodedCredential: Data
-
-    public init(record: CredentialRecord, encodedCredential: Data) {
-        self.record = record
-        self.encodedCredential = encodedCredential
-    }
-}
