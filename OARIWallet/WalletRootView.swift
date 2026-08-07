@@ -3,6 +3,7 @@ import SwiftUI
 
 struct WalletRootView: View {
     @ObservedObject var model: WalletAppModel
+    @State private var isCameraPresented = false
 
     var body: some View {
         TabView(selection: $model.selectedTab) {
@@ -32,11 +33,31 @@ struct WalletRootView: View {
                 }
         }
         .tint(OariColor.action)
+        .overlay(alignment: .bottomTrailing) {
+            Button {
+                isCameraPresented = true
+            } label: {
+                Image(systemName: "qrcode.viewfinder")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(OariColor.textOnAction)
+                    .frame(width: 60, height: 60)
+                    .oariGlassAction()
+            }
+            .accessibilityLabel("Scan QR code")
+            .accessibilityHint("Opens the camera to scan a credential offer or presentation request")
+            .accessibilityIdentifier("root.scan-camera")
+            .padding(.trailing, OariSpacing.x5)
+            // Keep the 60pt action clear of the 49pt tab bar and home indicator.
+            .padding(.bottom, 92)
+        }
         .overlay {
             if model.isPrivacyCoverVisible {
                 WalletPrivacyCover()
                     .accessibilityIdentifier("privacy.cover")
             }
+        }
+        .fullScreenCover(isPresented: $isCameraPresented) {
+            CameraQRScannerSheet(onCode: model.handleScannedCode)
         }
         .sheet(isPresented: Binding(
             get: {
@@ -57,17 +78,14 @@ struct WalletRootView: View {
             WalletOnboardingView(model: model)
                 .interactiveDismissDisabled()
         }
-        .alert(item: $model.ebsiTrustWarning) { warning in
-            Alert(
-                title: Text("Untrusted EBSI \(warning.role.rawValue)"),
-                message: Text("\(warning.counterpartyIdentifier) is not in the configured trust chains (\(warning.evidenceSources.joined(separator: ", "))). Continue only for development. Reasons: \(warning.reasons.map(\.rawValue).joined(separator: ", ")). \(warning.nextAction)"),
-                primaryButton: .destructive(Text("Continue anyway")) {
-                    Task { await model.continueAfterEbsiTrustWarning() }
-                },
-                secondaryButton: .cancel {
-                    Task { await model.cancelEbsiTrustWarning() }
-                }
-            )
+        .sheet(item: $model.ebsiTrustWarning) { warning in
+            OariTrustWarningView(warning: warning) {
+                Task { await model.continueAfterEbsiTrustWarning() }
+            } cancel: {
+                Task { await model.cancelEbsiTrustWarning() }
+            }
+            .presentationDetents([.medium, .large])
+            .interactiveDismissDisabled()
         }
     }
 }

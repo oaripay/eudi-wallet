@@ -68,5 +68,85 @@ public struct OariPrimaryButtonStyle: ButtonStyle {
             .padding(.vertical, OariSpacing.x4)
             .background(OariColor.action.opacity(configuration.isPressed ? 0.78 : 1))
             .clipShape(Capsule())
+            .contentShape(Capsule())
+            .frame(minHeight: OariControl.minimumHeight)
+    }
+}
+
+public struct OariSecondaryButtonStyle: ButtonStyle {
+    public init() {}
+    public func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(OariTypography.action)
+            .foregroundStyle(OariColor.action)
+            .frame(maxWidth: .infinity, minHeight: OariControl.minimumHeight)
+            .padding(.horizontal, OariControl.horizontalPadding)
+            .background(OariColor.surfaceInset(.light).opacity(configuration.isPressed ? 0.65 : 1), in: Capsule())
+            .overlay(Capsule().stroke(OariColor.action.opacity(0.4)))
+    }
+}
+
+public struct OariDestructiveButtonStyle: ButtonStyle {
+    public init() {}
+    public func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(OariTypography.action)
+            .foregroundStyle(.red)
+            .frame(maxWidth: .infinity, minHeight: OariControl.minimumHeight)
+            .padding(.horizontal, OariControl.horizontalPadding)
+            .background(Color.red.opacity(configuration.isPressed ? 0.16 : 0.08), in: Capsule())
+    }
+}
+
+public struct OariScreen<Content: View>: View {
+    @Environment(\.colorScheme) private var scheme
+    private let content: Content
+    public init(@ViewBuilder content: () -> Content) { self.content = content() }
+    public var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: OariSpacing.x5) { content }
+                .padding(OariSpacing.x5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(OariColor.background(scheme).ignoresSafeArea())
+    }
+}
+
+public struct OariSectionHeader: View {
+    private let title: String
+    private let subtitle: String?
+    public init(_ title: String, subtitle: String? = nil) {
+        self.title = title; self.subtitle = subtitle
+    }
+    public var body: some View {
+        VStack(alignment: .leading, spacing: OariSpacing.x1) {
+            Text(title).font(OariTypography.section)
+            if let subtitle { Text(subtitle).font(OariTypography.body).foregroundStyle(.secondary) }
+        }
+    }
+}
+
+public struct OariBackendBadge: View {
+    private let text: String
+    public init(_ text: String) { self.text = text }
+    public var body: some View {
+        Text(text)
+            .font(OariTypography.label)
+            .foregroundStyle(OariColor.action)
+            .padding(.horizontal, OariSpacing.x2)
+            .padding(.vertical, OariSpacing.x1)
+            .background(OariColor.action.opacity(0.1), in: Capsule())
+    }
+}
+
+public struct OariFlowFooter<Primary: View, Secondary: View>: View {
+    private let primary: Primary
+    private let secondary: Secondary
+    public init(@ViewBuilder primary: () -> Primary, @ViewBuilder secondary: () -> Secondary) {
+        self.primary = primary(); self.secondary = secondary()
+    }
+    public var body: some View {
+        VStack(spacing: OariSpacing.x2) { primary; secondary }
+            .padding(.top, OariSpacing.x3)
     }
 }

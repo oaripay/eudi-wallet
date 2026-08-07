@@ -1,5 +1,6 @@
 import SwiftUI
 import VisionKit
+import OariDesignSystem
 
 struct CameraQRScannerSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -7,7 +8,8 @@ struct CameraQRScannerSheet: View {
     let onCode: @MainActor @Sendable (String) -> Void
 
     var body: some View {
-        NavigationStack {
+        ZStack(alignment: .topLeading) {
+            Color.black.ignoresSafeArea()
             Group {
                 if let scannerError {
                     ContentUnavailableView(
@@ -33,14 +35,19 @@ struct CameraQRScannerSheet: View {
                     .accessibilityIdentifier("scanner.camera-unavailable")
                 }
             }
-            .navigationTitle("Scan QR Code")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .accessibilityIdentifier("scanner.camera-cancel")
-                }
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 46, height: 46)
+                    .oariGlassAction(lightForeground: true)
             }
+            .accessibilityLabel("Close camera scanner")
+            .accessibilityIdentifier("scanner.camera-close")
+            .padding(.leading, 20)
+            .padding(.top, 14)
         }
     }
 }

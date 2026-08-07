@@ -66,6 +66,13 @@ public enum OariTypography {
     public static let label = Font.caption.weight(.heavy)
     public static let body = Font.body
     public static let technical = Font.system(.caption, design: .monospaced)
+    public static let section = Font.headline.weight(.semibold)
+}
+
+public enum OariControl {
+    public static let minimumHeight: CGFloat = 52
+    public static let iconSize: CGFloat = 20
+    public static let horizontalPadding: CGFloat = 20
 }
 
 public enum OariMotion {

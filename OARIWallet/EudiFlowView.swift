@@ -7,13 +7,7 @@ struct EudiFlowView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: OariSpacing.x5) {
-                    content
-                }
-                .padding(OariSpacing.x5)
-            }
-            .background(OariColor.background(scheme).ignoresSafeArea())
+            OariScreen { content }
             .navigationTitle("Wallet request")
             .navigationBarTitleDisplayMode(.inline)
         }
@@ -74,6 +68,7 @@ struct EudiFlowView: View {
             }
             Button("Cancel") { Task { await model.cancelEbsiTrustWarning() } }
                 .frame(maxWidth: .infinity)
+                .buttonStyle(OariSecondaryButtonStyle())
 
         case let .ebsiPresentationRequired(challenge):
             Label("Present your PID", systemImage: "person.badge.shield.checkmark")
@@ -116,6 +111,7 @@ struct EudiFlowView: View {
             }
             Button("Decline") { Task { await model.submitPresentation(accepted: false) } }
                 .frame(maxWidth: .infinity)
+                .buttonStyle(OariSecondaryButtonStyle())
 
         case let .pending(pending):
             Label("Identity verification required", systemImage: "hourglass.circle")
@@ -145,6 +141,7 @@ struct EudiFlowView: View {
             }
             Button("Close") { model.dismissEudiFlow() }
                 .frame(maxWidth: .infinity)
+                .buttonStyle(OariSecondaryButtonStyle())
 
         case .idle, .configurationRequired:
             EmptyView()

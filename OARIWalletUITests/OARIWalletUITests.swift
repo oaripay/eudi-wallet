@@ -44,6 +44,15 @@ final class OARIWalletUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Profile installation required"].waitForExistence(timeout: 2))
     }
 
+    func testFloatingCameraButtonIsAvailableFromWallet() {
+        let app = launch(fixture: "populated")
+        let camera = element(app, "root.scan-camera")
+        XCTAssertTrue(camera.waitForExistence(timeout: 5))
+        XCTAssertEqual(camera.label, "Scan QR code")
+        camera.tap()
+        XCTAssertTrue(element(app, "scanner.camera-close").waitForExistence(timeout: 5))
+    }
+
     func testScannerRejectsUnknownHostAndReviewsApprovedRequest() {
         let app = launch(fixture: "empty")
         app.tabBars.buttons["Scan"].tap()

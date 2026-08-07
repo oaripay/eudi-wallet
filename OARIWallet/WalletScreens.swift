@@ -8,8 +8,7 @@ struct WalletVaultView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: OariSpacing.x5) {
+            OariScreen {
                     Text(model.credentialCountDescription)
                         .font(OariTypography.title)
                         .accessibilityIdentifier("wallet.credential-count")
@@ -25,8 +24,6 @@ struct WalletVaultView: View {
                     }
                     if model.credentials.isEmpty {
                         OariCard {
-                            Label("Wallet setup required", systemImage: "lock.shield")
-                                .font(OariTypography.heading)
                             Text("No credentials are stored. Scan an approved credential offer to begin.")
                                 .font(OariTypography.body)
                                 .foregroundStyle(OariColor.textSecondary(scheme))
@@ -40,10 +37,7 @@ struct WalletVaultView: View {
                             .buttonStyle(.plain)
                         }
                     }
-                }
-                .padding(OariSpacing.x5)
             }
-            .background(OariColor.background(scheme))
             .navigationTitle("Wallet")
         }
         .sheet(item: $model.selectedCredential) { credential in
@@ -61,12 +55,17 @@ private struct CredentialDetailView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: OariSpacing.x5) {
+            OariScreen {
                     Text(credential.displayName).font(OariTypography.title)
+                    HStack {
+                        OariBackendBadge(credential.backendID == "oari-workspace-w3c" ? "OARI Workspace W3C" : "EUDI Wallet Kit")
+                        OariStatusBadge(credential.format.rawValue, kind: .indeterminate)
+                    }
                     OariCard {
                         detail("Issuer", credential.issuerIdentifier)
                         detail("Format", credential.format.rawValue)
+                        detail("Profile", credential.profileID)
+                        detail("Backend document", credential.backendDocumentID ?? credential.walletDocumentID ?? "Unavailable")
                         detail("Document state", model.documentStatus(for: credential) ?? "Unavailable")
                         detail("Credential status", credential.status.rawValue)
                         detail("Issuer trust", credential.issuerTrust.rawValue)
@@ -91,10 +90,7 @@ private struct CredentialDetailView: View {
                             .accessibilityIdentifier("credential.operationsUnavailable")
                     }
                     actionStatus
-                }
-                .padding(OariSpacing.x5)
             }
-            .background(OariColor.background(scheme).ignoresSafeArea())
             .navigationTitle("Credential details")
             .navigationBarTitleDisplayMode(.inline)
         }
@@ -180,12 +176,12 @@ struct WalletScannerView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: OariSpacing.x5) {
+            OariScreen {
                 OariCard {
                     VStack(alignment: .leading, spacing: OariSpacing.x4) {
                         Label("Scan or paste a wallet code", systemImage: "qrcode.viewfinder")
                             .font(OariTypography.heading)
-                        TextField("Approved HTTPS or wallet URL", text: $model.scanInput, axis: .vertical)
+                        TextField("Credential offer or presentation URL", text: $model.scanInput, axis: .vertical)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .padding(OariSpacing.x4)
@@ -204,10 +200,10 @@ struct WalletScannerView: View {
                         .disabled(model.scanInput.isEmpty)
                         .accessibilityIdentifier("scanner.review")
                         if model.isEbsiDevelopmentAvailable {
-                            Button("Review as EBSI development") {
-                                Task { await model.reviewEbsiScannedRequest() }
-                            }
-                            .buttonStyle(.bordered)
+                        Button("Review as EBSI development") {
+                            Task { await model.reviewEbsiScannedRequest() }
+                        }
+                            .buttonStyle(OariSecondaryButtonStyle())
                             .accessibilityIdentifier("scanner.ebsiReview")
                         }
                         Button {
@@ -248,12 +244,9 @@ struct WalletScannerView: View {
                     .accessibilityIdentifier("scanner.pendingCredential")
                 }
                 ScanResultView(result: model.scanResult, input: model.scanInput)
-                Spacer()
             }
-            .padding(OariSpacing.x5)
-            .background(OariColor.background(scheme))
             .navigationTitle("Scan")
-            .sheet(isPresented: $isCameraPresented) {
+            .fullScreenCover(isPresented: $isCameraPresented) {
                 CameraQRScannerSheet(onCode: model.handleScannedCode)
             }
         }
@@ -306,8 +299,7 @@ private struct WalletRequestReviewView: View {
     let source: String
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: OariSpacing.x5) {
+        OariScreen {
                 OariStatusBadge("Not verified", kind: .warning)
                     .accessibilityIdentifier("review.not-verified")
                 Text(kind.title)
@@ -325,13 +317,10 @@ private struct WalletRequestReviewView: View {
                             .lineLimit(4)
                     }
                 }
-                Text("Return to Scan to cancel. A continue action is shown only after protocol and trust validation.")
+                Text("Return to Scan to cancel. A continue action appears only after protocol validation.")
                     .font(OariTypography.body)
                     .foregroundStyle(OariColor.textSecondary(scheme))
-            }
-            .padding(OariSpacing.x5)
         }
-        .background(OariColor.background(scheme))
         .navigationTitle("Review")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -416,8 +405,7 @@ struct WalletOnboardingView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: OariSpacing.x6) {
+            OariScreen {
                     Image(systemName: "wallet.pass.fill")
                         .font(.system(size: 56)).foregroundStyle(OariColor.action)
                     Text("Your EUDI wallet").font(OariTypography.title)
@@ -443,10 +431,7 @@ struct WalletOnboardingView: View {
                     Button("Continue to wallet") { model.completeOnboarding() }
                         .buttonStyle(OariPrimaryButtonStyle())
                         .accessibilityIdentifier("onboarding.continue")
-                }
-                .padding(OariSpacing.x6)
             }
-            .background(OariColor.background(scheme).ignoresSafeArea())
         }
     }
 
