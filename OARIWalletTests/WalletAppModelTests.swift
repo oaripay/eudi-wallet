@@ -204,9 +204,14 @@ struct WalletAppModelTests {
             localAuthenticator: FixtureAuthenticator(), eudiWallet: service,
             eudiAvailability: .configurationRequired("Profile disabled")
         )))
+        #expect(await service.operationCount == 0)
+        inconsistent.scanInput = "https://issuer.example/offer?credential_offer=fixture"
+        await inconsistent.reviewScannedRequest()
+        #expect(await service.operationCount == 0)
         inconsistent.selectCredential(record)
         await inconsistent.deleteSelectedCredential()
         #expect(await service.lastDeleted == nil)
+        #expect(await service.operationCount == 0)
     }
 
     @Test("Credential lifecycle delegates deletion with Wallet Kit document status")
@@ -318,6 +323,7 @@ private enum TestFailure: Error { case unavailable }
 
 private actor FixtureEudiWallet: EudiWalletOperating {
     private(set) var issueCount = 0
+    private(set) var operationCount = 0
     private(set) var lastSelectedClaims: Set<String> = []
     private let pendingAtLoad: [EudiPendingIssuance]
     private let presentationRequest: EudiPresentationRequest?
@@ -344,7 +350,8 @@ private actor FixtureEudiWallet: EudiWalletOperating {
         self.retryResult = retryResult
     }
     func resolveIssuanceOffer(uri: String) async throws -> EudiIssuanceOffer {
-        EudiIssuanceOffer(
+        operationCount += 1
+        return EudiIssuanceOffer(
             id: UUID(),
             issuerName: "Fixture issuer",
             issuerLogoURL: nil,
@@ -364,14 +371,17 @@ private actor FixtureEudiWallet: EudiWalletOperating {
         transactionCode: String?,
         promptMessage: String
     ) async throws -> EudiIssuanceResult {
+        operationCount += 1
         issueCount += 1
         return EudiIssuanceResult(documents: [], metadata: [], warningCount: 0, pendingIssuances: [])
     }
     func beginOpenID4VPPresentation(requestURI: String) async throws -> EudiPresentationRequest {
+        operationCount += 1
         guard let presentationRequest else { throw TestFailure.unavailable }
         return presentationRequest
     }
     func beginPendingIssuancePresentation(id: UUID) async throws -> EudiPresentationRequest {
+        operationCount += 1
         guard let presentationRequest else { throw TestFailure.unavailable }
         return presentationRequest
     }
@@ -381,19 +391,22 @@ private actor FixtureEudiWallet: EudiWalletOperating {
         selectedClaimIDs: Set<String>,
         userAccepted: Bool
     ) async throws -> EudiPresentationCompletion {
+        operationCount += 1
         if failCompletion { throw TestFailure.unavailable }
         lastSelectedClaims = selectedClaimIDs
         return completion
     }
-    func loadPendingIssuances() async throws -> [EudiPendingIssuance] { pendingAtLoad }
-    func loadDocumentSummaries() async throws -> [EudiWalletDocumentSummary] { summaries }
-    func deleteDocument(id: String, status: String) async throws { lastDeleted = "\(id):\(status)" }
+    func loadPendingIssuances() async throws -> [EudiPendingIssuance] { operationCount += 1; return pendingAtLoad }
+    func loadDocumentSummaries() async throws -> [EudiWalletDocumentSummary] { operationCount += 1; return summaries }
+    func deleteDocument(id: String, status: String) async throws {
+        operationCount += 1; lastDeleted = "\(id):\(status)"
+    }
     func retryDeferredIssuance(issuerName: String, documentID: String) async throws -> EudiWalletDocumentSummary {
-        lastRetried = "\(issuerName):\(documentID)"
+        operationCount += 1; lastRetried = "\(issuerName):\(documentID)"
         guard let retryResult else { throw TestFailure.unavailable }
         return retryResult
     }
-    func reconcilePendingOperations() async throws {}
+    func reconcilePendingOperations() async throws { operationCount += 1 }
 }
 
 private actor EmptyMetadataRepository: CredentialMetadataRepository {

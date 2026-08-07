@@ -198,7 +198,11 @@ struct WalletScannerView: View {
                             .accessibilityLabel("Wallet code")
                             .accessibilityIdentifier("scanner.input")
                         Button("Review code") {
-                            Task { await model.reviewScannedRequest() }
+                            if model.isEudiOperational {
+                                Task { await model.reviewScannedRequest() }
+                            } else {
+                                model.classifyScan()
+                            }
                         }
                         .buttonStyle(OariPrimaryButtonStyle())
                         .disabled(model.scanInput.isEmpty)

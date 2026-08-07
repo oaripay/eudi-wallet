@@ -14,7 +14,8 @@ struct OARIWalletApp: App {
         _model = StateObject(
             wrappedValue: WalletAppModel(
                 allowedHosts: configuration.allowedHosts,
-                showsOnboarding: !UserDefaults.standard.bool(forKey: "oari.onboarding.completed")
+                showsOnboarding: configuration.fixture == .production &&
+                    !UserDefaults.standard.bool(forKey: "oari.onboarding.completed")
             )
         )
     }

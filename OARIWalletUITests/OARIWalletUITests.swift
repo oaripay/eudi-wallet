@@ -26,6 +26,24 @@ final class OARIWalletUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Completed"].exists)
     }
 
+    func testCredentialDetailExplainsUnavailableOperations() {
+        let app = launch(fixture: "populated")
+        let credential = element(app, "wallet.credential.provisionalOariLPID")
+        XCTAssertTrue(credential.waitForExistence(timeout: 5))
+        credential.tap()
+        XCTAssertTrue(app.navigationBars["Credential details"].waitForExistence(timeout: 2))
+        XCTAssertTrue(element(app, "credential.operationsUnavailable").exists)
+        XCTAssertFalse(app.buttons["Remove credential"].isEnabled)
+    }
+
+    func testMissingProfileIsVisibleInScannerAndSettings() {
+        let app = launch(fixture: "empty")
+        app.tabBars.buttons["Scan"].tap()
+        XCTAssertTrue(element(app, "scanner.configurationRequired").waitForExistence(timeout: 2))
+        app.tabBars.buttons["Settings"].tap()
+        XCTAssertTrue(app.staticTexts["Profile installation required"].waitForExistence(timeout: 2))
+    }
+
     func testScannerRejectsUnknownHostAndReviewsApprovedRequest() {
         let app = launch(fixture: "empty")
         app.tabBars.buttons["Scan"].tap()

@@ -102,7 +102,7 @@ final class WalletAppModel: ObservableObject {
             eudiAvailability = dependencies.eudiAvailability
             repositories = (dependencies.credentials, dependencies.audit)
             try await load(credentials: dependencies.credentials, audit: dependencies.audit)
-            if let eudiWallet {
+            if isEudiOperational, let eudiWallet {
                 try await eudiWallet.reconcilePendingOperations()
                 walletDocumentSummaries = Dictionary(
                     uniqueKeysWithValues: try await eudiWallet.loadDocumentSummaries().map { ($0.id, $0) }
@@ -145,10 +145,8 @@ final class WalletAppModel: ObservableObject {
 
     func reviewScannedRequest() async {
         classifyScan()
-        guard let eudiWallet else {
-            if case .idle = eudiFlow {
-                eudiFlow = .configurationRequired("EUDI wallet services are not configured for this environment.")
-            }
+        guard isEudiOperational, let eudiWallet else {
+            eudiFlow = .configurationRequired(eudiConfigurationMessage)
             return
         }
         do {
@@ -174,7 +172,10 @@ final class WalletAppModel: ObservableObject {
     }
 
     func acceptIssuance() async {
-        guard case let .issuanceReview(offer) = eudiFlow, let eudiWallet else { return }
+        guard isEudiOperational, case let .issuanceReview(offer) = eudiFlow, let eudiWallet else {
+            eudiFlow = .configurationRequired(eudiConfigurationMessage)
+            return
+        }
         eudiFlow = .working("Adding the credential securely…")
         do {
             let result = try await eudiWallet.issueResolvedOffer(
@@ -197,7 +198,10 @@ final class WalletAppModel: ObservableObject {
     }
 
     func continuePendingIssuance() async {
-        guard case let .pending(pending) = eudiFlow, let eudiWallet else { return }
+        guard isEudiOperational, case let .pending(pending) = eudiFlow, let eudiWallet else {
+            eudiFlow = .configurationRequired(eudiConfigurationMessage)
+            return
+        }
         eudiFlow = .working("Preparing PID verification…")
         do {
             activePendingIssuanceID = pending.id
@@ -211,7 +215,10 @@ final class WalletAppModel: ObservableObject {
     }
 
     func submitPresentation(accepted: Bool) async {
-        guard case let .presentationConsent(request) = eudiFlow, let eudiWallet else { return }
+        guard isEudiOperational, case let .presentationConsent(request) = eudiFlow, let eudiWallet else {
+            eudiFlow = .configurationRequired(eudiConfigurationMessage)
+            return
+        }
         eudiFlow = .working(accepted ? "Sharing approved claims…" : "Declining the request…")
         do {
             let completion = try await eudiWallet.completePresentation(
@@ -254,6 +261,10 @@ final class WalletAppModel: ObservableObject {
     var hasRecoverablePendingIssuance: Bool { activePendingIssuance != nil }
     var isEudiOperational: Bool {
         eudiWallet != nil && eudiAvailability == .available
+    }
+    private var eudiConfigurationMessage: String {
+        if case let .configurationRequired(message) = eudiAvailability { return message }
+        return "EUDI wallet services are not configured for this environment."
     }
     var preventsInteractiveFlowDismissal: Bool {
         switch eudiFlow {

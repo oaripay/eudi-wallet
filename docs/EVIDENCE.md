@@ -414,6 +414,11 @@ These are absence-of-implementation failures, not regressions.
   accessible explanation whenever no approved EUDI service is active.
 - Independent review cycle 2 returned `PASS`; Debug model tests pass 14 cases,
   including persisted onboarding and inconsistent service/profile fail-closed checks.
+- Accessibility automation follow-up review cycle 2 returned `PASS`. Focused UI tests
+  pass for disabled credential actions with an accessible explanation and for profile
+  guidance in Scanner/Settings. All Wallet Kit entry points share the same operational
+  availability predicate; inconsistent service-plus-disabled-profile tests invoke no
+  service operation.
 
 #### Presentation-during-issuance adapter milestone
 
