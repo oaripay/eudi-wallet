@@ -398,8 +398,8 @@ These are absence-of-implementation failures, not regressions.
 - Baseline failures: none for package tests. Real staging PID presentation-during-
   issuance remains unavailable because no staging issuer/verifier/trust configuration
   has been supplied.
-- Commit: none. Status is `BLOCKED` because final reviewer PASS was not obtained and
-  staging interoperability is absent.
+- Initial pending-issuance review was blocked after four cycles; the repair was then
+  covered by an authorized narrow follow-up and consolidated-foundation review.
 - Universal-link callback follow-up: `project.yml` and all three generated OARIWallet
   Debug/Release/ReleaseTesting configurations set
   `CODE_SIGN_ENTITLEMENTS = OARIWallet/OARIWallet.entitlements`; the file declares
@@ -412,13 +412,12 @@ These are absence-of-implementation failures, not regressions.
 - Consolidated review cycle 4 found the ReleaseTesting callback used the
   `wallet.dev.oari.io` subdomain while the checked-in entitlement declared
   `applinks:oari.io`. The callback and allowed application redirect origin now use
-  `https://oari.io/oauth/callback`, matching the entitlement. This post-cycle-4 repair
-  is locally checked but cannot receive another review in the exhausted milestone;
-  no commit or completion claim is permitted.
+  `https://oari.io/oauth/callback`, matching the entitlement.
 - Authorized callback-alignment follow-up review cycle 1 returned `PASS`. A fresh
   post-repair incremental ReleaseTesting `WalletKitIOSIntegrationTests` run also
-  completed with `TEST SUCCEEDED`. The consolidated EUDI operational foundation is
-  eligible for a local commit after final diff/staging/secrets inspection; physical
+  completed with `TEST SUCCEEDED`. Final diff/staging/secrets inspection passed and
+  the consolidated EUDI operational foundation was committed as `20361eb` (`feat:
+  add eudi operational wallet`). Physical
   AASA/provisioning/universal-link behavior remains an external release gate.
 
 - Acceptance:
