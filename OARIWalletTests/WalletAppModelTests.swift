@@ -192,6 +192,69 @@ struct WalletAppModelTests {
         #expect(model.eudiFlow == .configurationRequired("Install approved profile"))
     }
 
+    @Test("Credential lifecycle delegates deletion with Wallet Kit document status")
+    func credentialDeletion() async {
+        let record = CredentialRecord(
+            configurationID: "pid", walletDocumentID: "wallet-pid", displayName: "PID",
+            format: .sdJWTVC, profileID: "eudi-final-1", issuerIdentifier: "https://issuer.example",
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let service = FixtureEudiWallet(summaries: [EudiWalletDocumentSummary(
+            id: "wallet-pid", documentType: "pid", displayName: "PID",
+            format: "sjwt", status: "issued"
+        )])
+        let model = WalletAppModel()
+        await model.load(.success(WalletAppDependencies(
+            credentials: FixedMetadataRepository(records: [record]),
+            audit: EmptyAuditRepository(), localAuthenticator: FixtureAuthenticator(),
+            eudiWallet: service, eudiAvailability: .available
+        )))
+        model.selectCredential(record)
+        await model.deleteSelectedCredential()
+        #expect(model.selectedCredential == record)
+        #expect(model.credentialActionState == .completed("Credential removed."))
+        #expect(await service.lastDeleted == "wallet-pid:issued")
+    }
+
+    @Test("Deferred credential retry forwards issuer and document and reports outcome")
+    func deferredCredentialRetry() async {
+        let record = CredentialRecord(
+            configurationID: "deferred", walletDocumentID: "deferred-document", displayName: "Deferred credential",
+            format: .sdJWTVC, profileID: "eudi-final-1", issuerIdentifier: "https://issuer.example",
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let deferred = EudiWalletDocumentSummary(
+            id: "deferred-document", documentType: "credential", displayName: "Deferred credential",
+            format: "sjwt", status: "deferred"
+        )
+        let issued = EudiWalletDocumentSummary(
+            id: "deferred-document", documentType: "credential", displayName: "Deferred credential",
+            format: "sjwt", status: "issued"
+        )
+        let service = FixtureEudiWallet(summaries: [deferred], retryResult: issued)
+        let model = WalletAppModel()
+        await model.load(.success(WalletAppDependencies(
+            credentials: FixedMetadataRepository(records: [record]), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), eudiWallet: service, eudiAvailability: .available
+        )))
+        model.selectCredential(record)
+        await model.retrySelectedDeferredCredential()
+        #expect(await service.lastRetried == "https://issuer.example:deferred-document")
+        #expect(model.documentStatus(for: record) == "issued")
+        #expect(model.credentialActionState == .completed("Credential issuance completed."))
+
+        let pendingService = FixtureEudiWallet(summaries: [deferred], retryResult: deferred)
+        let pendingModel = WalletAppModel()
+        await pendingModel.load(.success(WalletAppDependencies(
+            credentials: FixedMetadataRepository(records: [record]), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), eudiWallet: pendingService, eudiAvailability: .available
+        )))
+        pendingModel.selectCredential(record)
+        await pendingModel.retrySelectedDeferredCredential()
+        #expect(pendingModel.documentStatus(for: record) == "deferred")
+        #expect(pendingModel.credentialActionState == .completed("Credential is still pending at the issuer."))
+    }
+
     private func testDependencies(_ service: FixtureEudiWallet) -> WalletAppDependencies {
         WalletAppDependencies(
             credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
@@ -231,17 +294,25 @@ private actor FixtureEudiWallet: EudiWalletOperating {
     private let presentationRequest: EudiPresentationRequest?
     private let completion: EudiPresentationCompletion
     private let failCompletion: Bool
+    private let summaries: [EudiWalletDocumentSummary]
+    private let retryResult: EudiWalletDocumentSummary?
+    private(set) var lastDeleted: String?
+    private(set) var lastRetried: String?
 
     init(
         pendingAtLoad: [EudiPendingIssuance] = [],
         presentationRequest: EudiPresentationRequest? = nil,
         completion: EudiPresentationCompletion = .presentation,
-        failCompletion: Bool = false
+        failCompletion: Bool = false,
+        summaries: [EudiWalletDocumentSummary] = [],
+        retryResult: EudiWalletDocumentSummary? = nil
     ) {
         self.pendingAtLoad = pendingAtLoad
         self.presentationRequest = presentationRequest
         self.completion = completion
         self.failCompletion = failCompletion
+        self.summaries = summaries
+        self.retryResult = retryResult
     }
     func resolveIssuanceOffer(uri: String) async throws -> EudiIssuanceOffer {
         EudiIssuanceOffer(
@@ -286,6 +357,13 @@ private actor FixtureEudiWallet: EudiWalletOperating {
         return completion
     }
     func loadPendingIssuances() async throws -> [EudiPendingIssuance] { pendingAtLoad }
+    func loadDocumentSummaries() async throws -> [EudiWalletDocumentSummary] { summaries }
+    func deleteDocument(id: String, status: String) async throws { lastDeleted = "\(id):\(status)" }
+    func retryDeferredIssuance(issuerName: String, documentID: String) async throws -> EudiWalletDocumentSummary {
+        lastRetried = "\(issuerName):\(documentID)"
+        guard let retryResult else { throw TestFailure.unavailable }
+        return retryResult
+    }
     func reconcilePendingOperations() async throws {}
 }
 
@@ -294,6 +372,17 @@ private actor EmptyMetadataRepository: CredentialMetadataRepository {
     func saveMetadata(_ credential: CredentialRecord) async throws {}
     func replaceMetadata(_ credential: CredentialRecord) async throws {}
     func deleteMetadata(id: CredentialID) async throws {}
+}
+
+private actor FixedMetadataRepository: CredentialMetadataRepository {
+    private var records: [CredentialRecord]
+    init(records: [CredentialRecord]) { self.records = records }
+    func credentials() async throws -> [CredentialRecord] { records }
+    func saveMetadata(_ credential: CredentialRecord) async throws { records.append(credential) }
+    func replaceMetadata(_ credential: CredentialRecord) async throws {
+        records.removeAll { $0.id == credential.id }; records.append(credential)
+    }
+    func deleteMetadata(id: CredentialID) async throws { records.removeAll { $0.id == id } }
 }
 
 private actor EmptyAuditRepository: AuditRepository {

@@ -38,7 +38,10 @@ struct WalletVaultView: View {
                         .accessibilityElement(children: .combine)
                     } else {
                         ForEach(model.credentials) { credential in
-                            CredentialTile(credential: credential)
+                            Button { model.selectCredential(credential) } label: {
+                                CredentialTile(credential: credential)
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -46,6 +49,85 @@ struct WalletVaultView: View {
             }
             .background(OariColor.background(scheme))
             .navigationTitle("Wallet")
+        }
+        .sheet(item: $model.selectedCredential) { credential in
+            CredentialDetailView(model: model, credential: credential)
+                .presentationDetents([.medium, .large])
+        }
+    }
+}
+
+private struct CredentialDetailView: View {
+    @Environment(\.colorScheme) private var scheme
+    @ObservedObject var model: WalletAppModel
+    let credential: CredentialRecord
+    @State private var confirmsDeletion = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: OariSpacing.x5) {
+                    Text(credential.displayName).font(OariTypography.title)
+                    OariCard {
+                        detail("Issuer", credential.issuerIdentifier)
+                        detail("Format", credential.format.rawValue)
+                        detail("Document state", model.documentStatus(for: credential) ?? "Unavailable")
+                        detail("Credential status", credential.status.rawValue)
+                        detail("Issuer trust", credential.issuerTrust.rawValue)
+                        detail("Legal profile", credential.legalClassification.rawValue)
+                        if let issuedAt = credential.issuedAt { detail("Issued", issuedAt.formatted()) }
+                        if let expiresAt = credential.expiresAt { detail("Expires", expiresAt.formatted()) }
+                    }
+                    if model.documentStatus(for: credential) == "deferred" {
+                        Button("Check deferred issuance") {
+                            Task { await model.retrySelectedDeferredCredential() }
+                        }
+                        .buttonStyle(OariPrimaryButtonStyle())
+                        .disabled(model.credentialActionIsWorking)
+                    }
+                    Button("Remove credential", role: .destructive) { confirmsDeletion = true }
+                        .frame(maxWidth: .infinity)
+                        .disabled(model.credentialActionIsWorking)
+                    actionStatus
+                }
+                .padding(OariSpacing.x5)
+            }
+            .background(OariColor.background(scheme).ignoresSafeArea())
+            .navigationTitle("Credential details")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .confirmationDialog(
+            "Remove this credential from Wallet Kit and OARI metadata?",
+            isPresented: $confirmsDeletion,
+            titleVisibility: .visible
+        ) {
+            Button("Remove credential", role: .destructive) {
+                Task { await model.deleteSelectedCredential() }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private func detail(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: OariSpacing.x1) {
+            Text(label).font(.caption).foregroundStyle(OariColor.textSecondary(scheme))
+            Text(value).font(OariTypography.body).textSelection(.enabled)
+        }
+        .padding(.vertical, OariSpacing.x1)
+    }
+
+    @ViewBuilder
+    private var actionStatus: some View {
+        switch model.credentialActionState {
+        case .idle: EmptyView()
+        case let .working(message): ProgressView(message)
+        case let .completed(message):
+            Label(message, systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+            Button("Done") { model.acknowledgeCredentialAction() }
+                .buttonStyle(OariPrimaryButtonStyle())
+        case let .failed(message):
+            Label(message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red)
+            Button("Dismiss") { model.dismissCredentialAction() }
         }
     }
 }

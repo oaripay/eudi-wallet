@@ -19,6 +19,9 @@ protocol EudiWalletOperating: Sendable {
         userAccepted: Bool
     ) async throws -> EudiPresentationCompletion
     func loadPendingIssuances() async throws -> [EudiPendingIssuance]
+    func loadDocumentSummaries() async throws -> [EudiWalletDocumentSummary]
+    func deleteDocument(id: String, status: String) async throws
+    func retryDeferredIssuance(issuerName: String, documentID: String) async throws -> EudiWalletDocumentSummary
     func reconcilePendingOperations() async throws
 }
 
@@ -76,6 +79,15 @@ actor LiveEudiWalletService: EudiWalletOperating {
     }
     func loadPendingIssuances() async throws -> [EudiPendingIssuance] {
         try await adapter.loadPendingIssuances()
+    }
+    func loadDocumentSummaries() async throws -> [EudiWalletDocumentSummary] {
+        try await adapter.loadDocumentSummaries()
+    }
+    func deleteDocument(id: String, status: String) async throws {
+        try await adapter.deleteDocument(id: id, status: status)
+    }
+    func retryDeferredIssuance(issuerName: String, documentID: String) async throws -> EudiWalletDocumentSummary {
+        try await adapter.retryDeferredIssuance(issuerName: issuerName, documentID: documentID)
     }
     func reconcilePendingOperations() async throws { try await adapter.reconcilePendingOperations() }
 }

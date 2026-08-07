@@ -392,6 +392,18 @@ These are absence-of-implementation failures, not regressions.
 - Commit: `9c20041` (`feat: add eudi wallet journeys`), including the explicitly
   approved AppIcon composition adjustment.
 
+#### Credential lifecycle UI milestone
+
+- Added accessible credential detail/status/trust/legal/date presentation using
+  metadata and Wallet Kit document summaries only.
+- Added destructive-confirmed Wallet Kit deletion with working/result acknowledgement,
+  duplicate-action prevention and metadata/summary refresh.
+- Added deferred issuance retry with exact issuer/document delegation and distinct
+  issued versus still-deferred outcomes.
+- Independent review cycle 2 returned `PASS`; Debug model tests pass 13 cases with
+  warnings-as-errors app compilation. A still-deferred regression assertion was added
+  after review to cover the remaining MINOR branch.
+
 #### Presentation-during-issuance adapter milestone
 
 - Acceptance: expose Wallet Kit pending issuance only through neutral handles; bind

@@ -26,8 +26,12 @@ final class WalletAppModel: ObservableObject {
     @Published var selectedIssuanceConfigurationIDs: Set<String> = []
     @Published var selectedClaimIDs: Set<String> = []
     @Published var transactionCode = ""
+    @Published var selectedCredential: CredentialRecord?
+    @Published private(set) var walletDocumentSummaries: [String: EudiWalletDocumentSummary] = [:]
+    @Published private(set) var credentialActionState: CredentialActionState = .idle
     private let allowedHosts: Set<String>
     private var eudiWallet: (any EudiWalletOperating)?
+    private var repositories: (credentials: any CredentialMetadataRepository, audit: any AuditRepository)?
     private var activePendingIssuanceID: UUID?
     private var activePendingIssuance: EudiPendingIssuance?
 
@@ -61,6 +65,13 @@ final class WalletAppModel: ObservableObject {
         case configurationRequired(String)
     }
 
+    enum CredentialActionState: Equatable {
+        case idle
+        case working(String)
+        case completed(String)
+        case failed(String)
+    }
+
     var credentialCountDescription: String {
         switch credentials.count {
         case 0: "No credentials"
@@ -82,9 +93,13 @@ final class WalletAppModel: ObservableObject {
         do {
             let dependencies = try dependencies.get()
             eudiWallet = dependencies.eudiWallet
+            repositories = (dependencies.credentials, dependencies.audit)
             try await load(credentials: dependencies.credentials, audit: dependencies.audit)
             if let eudiWallet {
                 try await eudiWallet.reconcilePendingOperations()
+                walletDocumentSummaries = Dictionary(
+                    uniqueKeysWithValues: try await eudiWallet.loadDocumentSummaries().map { ($0.id, $0) }
+                )
                 if let pending = try await eudiWallet.loadPendingIssuances().first {
                     activePendingIssuanceID = pending.id
                     activePendingIssuance = pending
@@ -239,6 +254,77 @@ final class WalletAppModel: ObservableObject {
 
     func returnToPendingIssuance() {
         if let activePendingIssuance { eudiFlow = .pending(activePendingIssuance) }
+    }
+
+    func selectCredential(_ credential: CredentialRecord) {
+        credentialActionState = .idle
+        selectedCredential = credential
+    }
+
+    func deleteSelectedCredential() async {
+        guard !credentialActionIsWorking,
+              let credential = selectedCredential,
+              let documentID = credential.walletDocumentID,
+              let eudiWallet else { return }
+        credentialActionState = .working("Removing credential…")
+        do {
+            try await eudiWallet.deleteDocument(
+                id: documentID,
+                status: walletDocumentSummaries[documentID]?.status ?? "issued"
+            )
+            try await refreshWalletState()
+            credentialActionState = .completed("Credential removed.")
+        } catch {
+            credentialActionState = .failed(Self.safeMessage(error))
+        }
+    }
+
+    func retrySelectedDeferredCredential() async {
+        guard !credentialActionIsWorking,
+              let credential = selectedCredential,
+              let documentID = credential.walletDocumentID,
+              let eudiWallet else { return }
+        credentialActionState = .working("Checking deferred issuance…")
+        do {
+            let summary = try await eudiWallet.retryDeferredIssuance(
+                issuerName: credential.issuerIdentifier,
+                documentID: documentID
+            )
+            try await refreshWalletState()
+            walletDocumentSummaries[summary.id] = summary
+            credentialActionState = summary.status == "issued"
+                ? .completed("Credential issuance completed.")
+                : .completed("Credential is still pending at the issuer.")
+        } catch {
+            credentialActionState = .failed(Self.safeMessage(error))
+        }
+    }
+
+    func dismissCredentialAction() { credentialActionState = .idle }
+    var credentialActionIsWorking: Bool {
+        if case .working = credentialActionState { true } else { false }
+    }
+    func acknowledgeCredentialAction() {
+        if case .completed = credentialActionState,
+           let selectedCredential,
+           !credentials.contains(where: { $0.id == selectedCredential.id }) {
+            self.selectedCredential = nil
+        }
+        credentialActionState = .idle
+    }
+
+    func documentStatus(for credential: CredentialRecord) -> String? {
+        credential.walletDocumentID.flatMap { walletDocumentSummaries[$0]?.status }
+    }
+
+    private func refreshWalletState() async throws {
+        guard let repositories else { return }
+        try await load(credentials: repositories.credentials, audit: repositories.audit)
+        if let eudiWallet {
+            walletDocumentSummaries = Dictionary(
+                uniqueKeysWithValues: try await eudiWallet.loadDocumentSummaries().map { ($0.id, $0) }
+            )
+        }
     }
 
     private static func safeMessage(_ error: Error) -> String {
