@@ -389,6 +389,8 @@ These are absence-of-implementation failures, not regressions.
   `WalletAppModelTests` pass 11 tests with warnings-as-errors app compilation. One
   transient simulator `No such process` launch was recorded separately; a subsequent
   complete test run passed.
+- Commit: `9c20041` (`feat: add eudi wallet journeys`), including the explicitly
+  approved AppIcon composition adjustment.
 
 #### Presentation-during-issuance adapter milestone
 
