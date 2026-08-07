@@ -52,6 +52,8 @@ targets:
         product: WalletVault
       - package: OARIWalletModules
         product: EudiWalletKitAdapter
+      - package: OARIWalletModules
+        product: EbsiW3CBackend
     info:
       path: OARIWallet/Info.plist
       properties:

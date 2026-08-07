@@ -1,4 +1,6 @@
 import Foundation
+import EbsiW3CBackend
+import IdentityDomain
 import ProtocolEngine
 import WalletDomain
 import WalletVault
@@ -9,6 +11,7 @@ struct WalletAppDependencies: Sendable {
     let localAuthenticator: any LocalAuthenticator
     let eudiWallet: (any EudiWalletOperating)?
     let eudiAvailability: EudiWalletAvailability
+    let ebsiWallet: (any EbsiW3COperating)?
 
     static func make(configuration: AppConfiguration = .current()) -> Result<WalletAppDependencies, Error> {
 #if DEBUG
@@ -31,20 +34,62 @@ struct WalletAppDependencies: Sendable {
                 create: true
             ).appendingPathComponent("OARIWallet", isDirectory: true)
             let keyStore = KeychainVaultKeyStore(service: "io.oari.wallet.vault")
-            return try WalletAppDependencies(
-                credentials: EncryptedCredentialMetadataRepository(
-                    directory: root.appendingPathComponent("credential-metadata", isDirectory: true),
+            let metadataRepository = try EncryptedCredentialMetadataRepository(
+                directory: root.appendingPathComponent("credential-metadata", isDirectory: true),
+                keyStore: keyStore
+            )
+            let auditRepository = try EncryptedAuditRepository(
+                directory: root.appendingPathComponent("audit", isDirectory: true),
+                keyStore: keyStore
+            )
+            let ebsiWallet: (any EbsiW3COperating)?
+            if configuration.ebsiDevelopmentEnabled {
+                let ebsiEndpoint = try EBSIChainEndpoint.oariDevelopment()
+                let endpointRegistry = try EBSIEndpointRegistry(
+                    policy: .development,
+                    endpoints: [ebsiEndpoint]
+                )
+                let registryClient = try MultiEndpointEBSIRegistryClient(
+                    registry: endpointRegistry,
+                    httpClient: URLSessionBoundedHTTPSClient()
+                )
+                let ebsiStore = try EncryptedEbsiCredentialStore(
+                    directory: root.appendingPathComponent("ebsi-credentials", isDirectory: true),
                     keyStore: keyStore
-                ),
-                audit: EncryptedAuditRepository(
-                    directory: root.appendingPathComponent("audit", isDirectory: true),
-                    keyStore: keyStore
-                ),
+                )
+                let workspaceTransport = URLSessionWorkspaceTransport()
+                let ebsiBackend = OariWorkspaceW3CBackend(
+                    transport: workspaceTransport,
+                    trustEvaluator: WorkspaceTIRTrustEvaluator(
+                        tirBaseURL: ebsiEndpoint.trustedIssuersRegistryURL,
+                        transport: workspaceTransport
+                    ),
+                    keyProvider: DeviceBoundKeyProvider(applicationTagPrefix: "io.oari.wallet.ebsi.key"),
+                    credentialStore: ebsiStore,
+                    credentialValidator: NativeWorkspaceCredentialValidator(
+                        resolver: CompositeDIDResolver(
+                            ebsi: EBSIDIDResolver(client: registryClient)
+                        )
+                    ),
+                    profile: try .oariVcdm2Jwt()
+                )
+                ebsiWallet = LiveWorkspaceEbsiWalletService(
+                    backend: ebsiBackend,
+                    metadata: metadataRepository,
+                    audit: auditRepository
+                )
+            } else {
+                ebsiWallet = nil
+            }
+            return WalletAppDependencies(
+                credentials: metadataRepository,
+                audit: auditRepository,
                 localAuthenticator: SystemLocalAuthenticator(),
                 eudiWallet: nil,
                 eudiAvailability: .configurationRequired(
                     "Install an approved staging or production EUDI trust profile to enable wallet operations."
-                )
+                ),
+                ebsiWallet: ebsiWallet
             )
         }
     }
@@ -59,7 +104,8 @@ struct WalletAppDependencies: Sendable {
             audit: FixtureAuditRepository(events: events),
             localAuthenticator: FixtureLocalAuthenticator(),
             eudiWallet: nil,
-            eudiAvailability: .configurationRequired("Preview mode does not contact credential services.")
+            eudiAvailability: .configurationRequired("Preview mode does not contact credential services."),
+            ebsiWallet: nil
         )
     }
 

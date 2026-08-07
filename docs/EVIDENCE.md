@@ -206,15 +206,38 @@ These are absence-of-implementation failures, not regressions.
   surfaces, plus mobile ES256/ES256K. Generic VCDM2 JWT, EdDSA and RSA remain disabled.
   Independent backend-selection review cycle 1 returned `PASS`; no SDK dependency was
   added pending real counterpart fixtures.
-- Workspace-pinned credential foundation now records OARI VCDM2 `application/vc+jwt`
+- Workspace-pinned credential foundation records OARI VCDM2 `application/vc+jwt`
   shape, EnvelopedVerifiableCredential VP wrapping, ES256/did:key OpenID metadata,
   DIDR v5/TIR v5/TSR v3, FullJsonSchemaValidator2021, BitstringStatusListEntry and
-  IssuanceCertificate requirements. Added isolated `EbsiW3CBackend` with SpruceKit
-  Mobile 0.20.0, exact profile/envelope inspection, profile-bound SDK verification
-  for supported representations, and explicit generic VCDM2 JWT rejection because
-  Spruce `JwtVc` is V1. Development trust warnings apply only to untrusted verdicts;
-  invalid/indeterminate and production untrusted requests reject. Independent review
-  cycle 2 returned `PASS`; focused backend tests pass 5 tests/2 suites.
+  IssuanceCertificate requirements. SpruceKit was subsequently removed and is not a
+  runtime verifier. The retained `EbsiW3CBackend` currently provides neutral profile/
+  envelope inspection and a development trust gate only; native cryptographic
+  verification/workspace interaction remains part of the consolidated milestone and
+  no current verification support is claimed.
+- Iterator execution plan: `docs/ITERATOR-EBSI-W3C-PLAN.md` and `AGENTS.md` now define
+  one consolidated milestone requiring removal of SpruceKit, workspace-backed HTTPS W3C issuance/verification,
+  explicit VCDM/OpenID/DID/key profiles, EUDI PID presentation during W3C issuance,
+  virtual W3C presentation, and valid-but-unregistered development warnings with
+  one-shot Continue/Cancel. “All credentials” is explicitly bounded to matrix-enabled
+  profiles; unknown or invalid data cannot be overridden.
+- Consolidated EBSI/W3C review cycle 1: `FAIL`. SpruceKit removal passes, but the
+  single milestone remains blocked on a concrete injected `OariWorkspaceW3CBackend`,
+  encrypted raw W3C credential/key/transaction storage, native ES256/ES256K/RS256
+  verification, complete workspace fixtures, TIR/TSR/schema/status evaluation,
+  OpenID4VCI/VP and EUDI PID bridge, complete warning content/backend enforcement,
+  ReleaseTesting/UI automation and a final reviewer PASS. Current app warning UI is
+  scaffolding only and must not be committed or claimed as operational until those
+  findings are fixed.
+- Consolidated cycle 2/3 repair evidence: added a concrete opt-in development
+  workspace backend, inline/referenced pre-authorized offers, ASCII tx_code, metadata/
+  token/proof/credential exchange, encrypted raw W3C storage, native ES256 and RS256
+  verification, did:key+did:ebsi composition, holder binding, origin-bound streaming
+  HTTPS, one-shot warning/review UI, metadata catalog/audit integration and default
+  production disablement. Full package tests, complete WalletAppModelTests and
+  WalletKitIOSIntegrationTests pass under ReleaseTesting. Cycle 3 remains `FAIL`
+  because authorization-code/PAR/PKCE/DPoP, batch/deferred, PID presentation_required,
+  W3C VP, real TIR/TSR/schema/status semantics and fixtures, ES256K and deterministic
+  router/catalog lifecycle are incomplete. No consolidated commit is permitted.
 | Wallet Kit | `eudi-lib-ios-wallet-kit` v0.39.1, commit `79005ab4bf0399238c1c9ebff9ee7d8a42c521f9` | Exact package resolved; adapter foundation under Loop A review |
 | OARI LPID | `provisionalOariLPID`, development only | Backend implemented with provisional status index |
 | EBSI onboarding | `ebsiOnboardingCredential`, development only | Backend recipient proof bypass is a security blocker |

@@ -12,7 +12,7 @@
 - Historical key support includes P-256, secp256k1, Ed25519 and RSA, but that is not a
   basis for adding an archived iOS wallet backend.
 
-### SpruceKit Mobile 0.20.0 — selected for development bake-off
+### SpruceKit Mobile 0.20.0 — researched, not selected
 
 - Repository: `https://github.com/spruceid/sprucekit-mobile`
 - Tag: `0.20.0`
@@ -46,10 +46,10 @@
 
 ## Current decision
 
-SpruceKit Mobile 0.20.0 is approved only for a development bake-off behind an isolated
-`EbsiW3CBackend`. It must not replace EUDI Wallet Kit, own EUDI PID documents, or be
-described as production-ready. Integration remains blocked until an actual EBSI
-credential offer/presentation fixture pins each profile in `EBSI_PROFILE_MATRIX.md`.
+SpruceKit Mobile is not used by the app. The selected development architecture is the
+OARI workspace issuer/verifier/DIDR/TIR/TSR over bounded HTTPS plus an isolated native
+Swift W3C backend for local keys, encrypted credential storage, JOSE validation and
+presentation proofs. It must not replace EUDI Wallet Kit or own EUDI PID documents.
 
 Notably, the reviewed `JwtVc` path is VCDM 1. A generic VCDM 2 JWT VC claim must not be
 made. VCDM 2 support can only be enabled through a counterpart-tested representation

@@ -18,6 +18,7 @@ struct EbsiTrustGateTests {
         }
         #expect(warning.reasons == [.issuerNotAccredited])
         #expect(warning.evidenceSources == ["https://ebsi.oari.io"])
+        #expect(warning.nextAction.contains("No credential has been stored"))
     }
 
     @Test("Production and cryptographically invalid requests remain fail closed")

@@ -80,6 +80,37 @@ public enum EbsiCredentialError: Error, Equatable, Sendable {
     case backendUnavailable
 }
 
+public struct StoredEbsiCredential: Codable, Equatable, Identifiable, Sendable {
+    public let id: UUID
+    public let profileID: String
+    public let representation: EbsiCredentialRepresentation
+    public let rawCredential: Data
+    public let holderKeyReference: String
+    public let receivedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        profileID: String,
+        representation: EbsiCredentialRepresentation,
+        rawCredential: Data,
+        holderKeyReference: String,
+        receivedAt: Date = Date()
+    ) {
+        self.id = id
+        self.profileID = profileID
+        self.representation = representation
+        self.rawCredential = rawCredential
+        self.holderKeyReference = holderKeyReference
+        self.receivedAt = receivedAt
+    }
+}
+
+public protocol EbsiCredentialStore: Sendable {
+    func credentials() async throws -> [StoredEbsiCredential]
+    func save(_ credential: StoredEbsiCredential) async throws
+    func delete(id: UUID) async throws
+}
+
 public struct EbsiCredentialInspector: Sendable {
     public init() {}
 
@@ -193,6 +224,7 @@ public enum AnySendableJSON: Codable, Equatable, Sendable {
     }
 
     var string: String? { if case let .string(value) = self { value } else { nil } }
+    var numericValue: Double? { if case let .number(value) = self { value } else { nil } }
     var object: [String: AnySendableJSON]? { if case let .object(value) = self { value } else { nil } }
     func contains(string: String) -> Bool {
         switch self {

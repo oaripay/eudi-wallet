@@ -22,8 +22,8 @@ struct EbsiCredentialModelsTests {
         #expect(credential["issuer"] == .string("did:ebsi:issuer"))
     }
 
-    @Test("Profile rejects wrong context, algorithm and unsupported VCDM2 JWT verifier path")
-    func profileMismatch() async throws {
+    @Test("Profile rejects wrong context and algorithm")
+    func profileMismatch() throws {
         let profile = try EbsiCredentialProfile.oariVcdm2Jwt()
         let wrong = try compactJWT(
             header: ["alg": "RS256"],
@@ -31,12 +31,6 @@ struct EbsiCredentialModelsTests {
         )
         #expect(throws: EbsiCredentialError.algorithmNotAllowed) {
             _ = try EbsiCredentialInspector().inspectCompactJWT(wrong, profile: profile)
-        }
-        await #expect(throws: EbsiCredentialError.unsupportedRepresentation) {
-            try await SpruceCredentialVerifier().verify(
-                credential: Data(wrong.utf8),
-                profile: profile
-            )
         }
     }
 

@@ -1,58 +1,184 @@
-# Agent execution rules
+# Iterator execution contract
 
-Read `docs/IMPLEMENTATION-PLAN.md`, `docs/ARCHITECTURE.md`,
-`docs/WALLET_KIT_REVIEW.md` and `docs/EVIDENCE.md` before changing code.
+Read these before changing code:
 
-## Ordered delivery loops
+- `docs/IMPLEMENTATION-PLAN.md`
+- `docs/EBSI_PROFILE_MATRIX.md`
+- `docs/EBSI_BACKEND_REVIEW.md`
+- `docs/WALLET_KIT_REVIEW.md`
+- `docs/EVIDENCE.md`
 
-### 1. Complete EUDI/eIDAS app
+The goal is a development-capable wallet with two separate backends. “All possible”
+means every explicitly registered profile in the matrix, not permissive parsing of
+unknown credentials or protocol variants.
 
-- Use pinned `EudiWalletKit` as the sole EUDI backend.
-- Do not reimplement OpenID4VCI, OpenID4VP, SD-JWT, mdoc, BLE, Wallet Kit
-  storage, secure-area or holder-proof behavior.
-- Finish the Wallet Kit PID presentation-during-issuance journey before EBSI work:
-  pending issuance → `authorizePresentationUrl` → Wallet Kit OpenID4VP consent →
-  response → pending issuance resume → second credential.
-- Build all lifecycle UI with `OariDesignSystem`. EUDI reference UI is reference-only
-  unless its exact code/assets and license are separately approved.
-- Use real staging configuration for positive interoperability. Embedded issuer or
-  verifier mocks are test-only and are not production evidence.
+## Backend architecture
 
-### 2. Add EBSI W3C support
-
-- Start only after the EUDI loop passes review and is committed.
-- Select a maintained EBSI/W3C backend before implementation; do not turn Wallet Kit
-  or OARI into a general W3C cryptographic engine.
-- Treat VCDM 1.1 and 2.0 as distinct profiles. For each profile pin representation,
-  proof/cryptosuite, DID methods, schema/status rules, OpenID revision and EBSI
-  environment/API version.
-- Do not equate VCDM 2.0 with JSON-LD, `jwt_vc_json`, SD-JWT or successful JSON parsing.
-- Each backend owns its raw credentials and private keys. OARI stores normalized
-  display metadata, consent, lifecycle, trust evidence and redacted audit only.
-- Validate real EBSI DIDR/TIR/TSR, schema, accreditation, status, holder binding,
-  audience/domain/nonce/replay and issuer/verifier interoperability before claiming
-  support.
-
-## Scope controls
-
-- Never mix both delivery loops in one milestone or commit.
-- Do not add a generic credential/protocol abstraction until a second backend has
-  been selected and its exact contract is known.
-- Do not copy signed credentials or keys between backends or transform formats.
-- Unsupported profiles fail explicitly.
-- Never claim eIDAS/EBSI/W3C certification or production readiness from SDK or mock
-  integration alone.
-
-## Verification loop
-
-Use after each coherent code batch:
-
-```sh
-swift test
-git diff --check
+```text
+OARI SwiftUI UI / consent / warnings / audit / metadata
+                  |
+          CredentialBackendRouter
+             /                  \
+    EudiWalletKitBackend       OariWorkspaceW3CBackend
+       EudiWallet              HTTPS to workspace repos
 ```
 
-Run Xcode simulator/ReleaseTesting once per complete milestone with a fixed
-DerivedData directory. Physical iPhone Secure Enclave, biometrics, camera and BLE,
-real staging interoperability, penetration testing, legal review, signing and
-certification remain explicit release gates.
+### EUDI backend
+
+Use the pinned EUDI Wallet Kit as the sole owner of:
+
+- EUDI PID and mdoc documents;
+- SD-JWT VC documents;
+- document-bound private keys and secure storage;
+- OpenID4VCI and OpenID4VP;
+- DPoP, proofs, DCQL, deferred/batch issuance;
+- mdoc QR/BLE and presentation sessions.
+
+Do not copy EUDI credentials/keys into the W3C backend or reimplement these protocols.
+
+### W3C/EBSI development backend
+
+Do **not** use SpruceKit in the app. Remove its package/target/review code before
+integration. Use the OARI workspace repositories as the development issuer/verifier
+and public EBSI service backend:
+
+- `workspace/repos/openid` — OpenID4VCI/VP issuer/verifier;
+- `workspace/repos/identity` — JWT VC, VCDM, DID, EBSI registry and key logic;
+- `workspace/repos/schemas` — schemas and status material;
+- `workspace/repos/wallet` — wallet-side protocol examples.
+
+The iOS adapter calls these services over bounded HTTPS. Raw W3C credentials and
+holder private keys are encrypted on-device; private keys never go to the workspace.
+
+## Explicit credential profile matrix
+
+Implement and test profiles independently. Every profile needs a fixture and a
+positive/negative interoperability test before it is enabled.
+
+### EUDI profiles
+
+- `mso_mdoc` / CBOR through Wallet Kit;
+- SD-JWT VC through Wallet Kit;
+- EUDI OpenID4VCI pre-authorized-code;
+- EUDI OpenID4VCI authorization-code;
+- EUDI batch/deferred issuance;
+- EUDI OpenID4VP/DCQL/direct-post/direct-post-JWT;
+- EUDI PID presentation during issuance;
+- EUDI QR/BLE mdoc presentation.
+
+### W3C/EBSI development profiles
+
+- VCDM 1.1 `jwt_vc_json` with compact JWS;
+- VCDM 1.1 `jwt_vc_json-ld` only where a workspace fixture proves its context/proof;
+- VCDM 1.1/2.0 `ldp_vc` only with an exact Data Integrity cryptosuite fixture;
+- VCDM 2.0 SD-JWT only with an exact workspace fixture;
+- OARI VCDM 2.0 `application/vc+jwt` with the workspace-defined top-level VCDM2
+  context/schema/status/IssuanceCertificate profile;
+- no generic VCDM2 JWT VC claim until the workspace proves it independently.
+
+## OpenID4VCI coverage
+
+The W3C adapter must resolve and test:
+
+1. `openid-credential-offer://` URI with inline `credential_offer`;
+2. `credential_offer_uri` retrieval;
+3. pre-authorized-code grant;
+4. authorization-code grant;
+5. transaction code (`tx_code`) with exact ASCII validation;
+6. issuer metadata and authorization-server metadata;
+7. PAR/PKCE where the issuer advertises them;
+8. DPoP where advertised/required;
+9. credential proof and nonce;
+10. batch issuance;
+11. deferred issuance;
+12. `presentation_required` interactive authorization;
+13. authorization callback and safe cancellation;
+14. malformed, expired, replayed, unsupported and untrusted cases.
+
+For `presentation_required`:
+
+```text
+W3C issuer starts issuance
+  -> issuer requests PID through OpenID4VP
+  -> EUDI Wallet Kit presents PID
+  -> workspace verifies PID VP
+  -> workspace issues W3C VC
+  -> iOS validates/stores W3C VC in its backend
+```
+
+## OpenID4VP coverage
+
+Support only registered request profiles and test:
+
+- signed and unsigned request behavior as the profile permits;
+- `request_uri` and inline request handling;
+- DCQL selection;
+- required/optional claims;
+- nonce, state, audience, response URI and expiry;
+- direct-post and direct-post-JWT;
+- verifier DID and trust evidence;
+- EUDI PID presentation through Wallet Kit;
+- W3C JWT VC/SD-JWT presentation through the W3C backend;
+- malformed, expired, replayed, invalid-signature and untrusted verifier cases.
+
+## DID and key coverage
+
+Implement profile-bound verification, not algorithm-name recognition:
+
+- `did:ebsi` resolution through configured DID Registry v5;
+- `did:key` for development holder/issuer fixtures;
+- P-256/ES256;
+- secp256k1/ES256K;
+- RSA/RS256 verification where workspace fixtures require it;
+- Ed25519/EdDSA only if a pinned workspace fixture requires it;
+- verification relationships: authentication, assertionMethod, capabilityInvocation
+  and keyAgreement as appropriate;
+- controller, key purpose, signature algorithm, expiry, nonce, audience and replay.
+
+Unknown algorithms, unsupported DID methods and ambiguous verification relationships
+fail explicitly.
+
+## Trust behavior
+
+Trust registration and cryptographic validity are separate:
+
+```text
+valid + trusted                  -> continue normally
+valid + not in development list  -> blocking warning -> Continue anyway or Cancel
+invalid signature/proof          -> reject, no override
+expired/replayed/malformed       -> reject, no override
+indeterminate registry evidence  -> reject, no override
+production unregistered          -> reject, no override
+```
+
+The warning must display issuer/verifier, role, trust-chain endpoint, reasons and
+what will happen next. Continue must consume the interaction exactly once before any
+network continuation. Cancel must cancel backend state and record no successful
+issuance/presentation.
+
+## Storage and routing
+
+```swift
+struct CredentialCatalogEntry {
+    let backendID: String
+    let profileID: String
+    let vcdmVersion: String?
+    let representation: String
+    let securingMechanism: String
+    let opaqueBackendDocumentID: String
+}
+```
+
+The catalog contains metadata only. Each backend owns raw credential payloads,
+private keys, nonces, proof state and protocol handles.
+
+## Single consolidated milestone
+
+Execute every step in `docs/ITERATOR-EBSI-W3C-PLAN.md` as one milestone. Internal
+steps may use focused checks but must not be committed or declared complete
+individually. Run one consolidated review loop over the complete implementation, fix
+all BLOCKER/MAJOR findings (maximum four cycles), run the complete verification matrix
+and create one local commit only after PASS.
+
+Never mix EUDI and W3C backend ownership in one raw credential path, never silently
+continue an untrusted request, and never claim support for an untested profile.

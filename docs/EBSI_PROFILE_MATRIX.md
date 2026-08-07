@@ -15,9 +15,8 @@ until every column is pinned from an actual issuer/verifier interoperability fix
 - Implemented locally today: P-256/ES256 and OARI P-256 `did:key`.
 - Present only as a transitive dependency: secp256k1. No reviewed ES256K wallet-key
   provider, DID encoding or verifier integration exists yet.
-- SpruceKit Mobile's reviewed FFI algorithm mapping exposes ES256 and ES256K. Its Rust
-  graph contains Ed25519/RSA capabilities, but they are not enabled for OARI without a
-  reviewed mobile boundary and counterpart evidence.
+- Native Swift support must be proven separately for ES256, ES256K and RS256 using
+  workspace fixtures. Ed25519/RSA-PSS remain disabled without explicit profiles.
 - A JWK `alg` or DID verification method is never accepted merely because its name is
   recognized; proof purpose, controller, relationship, algorithm and signature must
   all match the selected profile.

@@ -57,6 +57,24 @@ struct EudiFlowView: View {
                 await model.acceptIssuance()
             }
 
+        case let .ebsiIssuanceReview(interaction):
+            Label("EBSI development credential", systemImage: "network.badge.shield.half.filled")
+                .font(OariTypography.heading)
+            Text(interaction.displayName ?? interaction.counterpartyIdentifier)
+                .foregroundStyle(OariColor.textSecondary(scheme))
+            ForEach(interaction.configurationIDs, id: \.self) { Text($0).font(.caption) }
+            if interaction.transactionCodeRequired {
+                SecureField("Transaction code", text: $model.ebsiTransactionCode)
+                    .textContentType(.oneTimeCode)
+                    .keyboardType(.numberPad)
+                    .textFieldStyle(.roundedBorder)
+            }
+            primaryButton("Issue and store credential", icon: "plus.circle.fill") {
+                await model.issueReviewedEbsiCredential()
+            }
+            Button("Cancel") { Task { await model.cancelEbsiTrustWarning() } }
+                .frame(maxWidth: .infinity)
+
         case let .presentationConsent(request):
             Label("Share identity information", systemImage: "person.badge.shield.checkmark")
                 .font(OariTypography.heading)

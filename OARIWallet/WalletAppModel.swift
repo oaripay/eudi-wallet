@@ -1,5 +1,6 @@
 import Foundation
 import EudiWalletKitAdapter
+import EbsiW3CBackend
 import ProtocolEngine
 import SwiftUI
 import WalletDomain
@@ -31,8 +32,14 @@ final class WalletAppModel: ObservableObject {
     @Published private(set) var credentialActionState: CredentialActionState = .idle
     @Published var showsOnboarding: Bool
     @Published private(set) var eudiAvailability: EudiWalletAvailability = .configurationRequired("Loading wallet profile…")
+    @Published var ebsiTrustWarning: EbsiTrustWarning?
+    @Published var ebsiTransactionCode = ""
     private let allowedHosts: Set<String>
     private var eudiWallet: (any EudiWalletOperating)?
+    private var ebsiWallet: (any EbsiW3COperating)?
+    private var activeEbsiInteractionID: UUID?
+    private var activeEbsiInteraction: EbsiResolvedInteraction?
+    private var activeEbsiAllowsUntrusted = false
     private var repositories: (credentials: any CredentialMetadataRepository, audit: any AuditRepository)?
     private var activePendingIssuanceID: UUID?
     private var activePendingIssuance: EudiPendingIssuance?
@@ -69,6 +76,7 @@ final class WalletAppModel: ObservableObject {
         case completed(String)
         case failed(String)
         case configurationRequired(String)
+        case ebsiIssuanceReview(EbsiResolvedInteraction)
     }
 
     enum CredentialActionState: Equatable {
@@ -100,6 +108,7 @@ final class WalletAppModel: ObservableObject {
             let dependencies = try dependencies.get()
             eudiWallet = dependencies.eudiWallet
             eudiAvailability = dependencies.eudiAvailability
+            ebsiWallet = dependencies.ebsiWallet
             repositories = (dependencies.credentials, dependencies.audit)
             try await load(credentials: dependencies.credentials, audit: dependencies.audit)
             if isEudiOperational, let eudiWallet {
@@ -168,6 +177,87 @@ final class WalletAppModel: ObservableObject {
             }
         } catch {
             eudiFlow = .failed(Self.safeMessage(error))
+        }
+    }
+
+    var isEbsiDevelopmentAvailable: Bool { ebsiWallet != nil }
+
+    func reviewEbsiScannedRequest() async {
+        guard let ebsiWallet else {
+            eudiFlow = .configurationRequired("No EBSI development backend is configured.")
+            return
+        }
+        eudiFlow = .working("Checking EBSI issuer or verifier trust…")
+        do {
+            let interaction = try await ebsiWallet.resolveInteraction(uri: scanInput)
+            activeEbsiInteractionID = interaction.id
+            activeEbsiInteraction = interaction
+            switch interaction.trustOutcome {
+            case .allow:
+                prepareEbsiInteraction(allowUntrusted: false)
+            case let .requireExplicitWarning(warning):
+                ebsiTrustWarning = warning
+                eudiFlow = .idle
+            case .reject:
+                activeEbsiInteractionID = nil
+                eudiFlow = .failed("The EBSI request failed cryptographic or trust-policy validation.")
+            }
+        } catch {
+            activeEbsiInteractionID = nil
+            eudiFlow = .failed(Self.safeMessage(error))
+        }
+    }
+
+    func continueAfterEbsiTrustWarning() async {
+        guard ebsiTrustWarning != nil,
+              activeEbsiInteractionID != nil else { return }
+        ebsiTrustWarning = nil
+        prepareEbsiInteraction(allowUntrusted: true)
+    }
+
+    func cancelEbsiTrustWarning() async {
+        let id = activeEbsiInteractionID
+        ebsiTrustWarning = nil
+        activeEbsiInteractionID = nil
+        activeEbsiInteraction = nil
+        if let id { await ebsiWallet?.cancelInteraction(id: id) }
+        eudiFlow = .completed("EBSI request cancelled. Nothing was shared or stored.")
+    }
+
+    func issueReviewedEbsiCredential() async {
+        do { try await continueEbsiInteraction() }
+        catch {
+            if let id = activeEbsiInteractionID { await ebsiWallet?.cancelInteraction(id: id) }
+            activeEbsiInteractionID = nil
+            activeEbsiInteraction = nil
+            eudiFlow = .failed(Self.safeMessage(error))
+        }
+    }
+
+    private func prepareEbsiInteraction(allowUntrusted: Bool) {
+        guard let interaction = activeEbsiInteraction else {
+            eudiFlow = .failed("The EBSI transaction expired before consent.")
+            return
+        }
+        activeEbsiAllowsUntrusted = allowUntrusted
+        ebsiTransactionCode = ""
+        eudiFlow = .ebsiIssuanceReview(interaction)
+    }
+
+    private func continueEbsiInteraction() async throws {
+        guard let id = activeEbsiInteractionID, let ebsiWallet else {
+            throw EbsiCredentialError.backendUnavailable
+        }
+        eudiFlow = .working("Continuing EBSI development flow…")
+        let result = try await ebsiWallet.continueInteraction(
+            id: id,
+            allowUntrusted: activeEbsiAllowsUntrusted,
+            transactionCode: ebsiTransactionCode.isEmpty ? nil : ebsiTransactionCode
+        )
+        activeEbsiInteractionID = nil
+        activeEbsiInteraction = nil
+        switch result {
+        case let .completed(message), let .pending(message): eudiFlow = .completed(message)
         }
     }
 

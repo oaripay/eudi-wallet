@@ -72,6 +72,8 @@ public struct CredentialRecord: Codable, Equatable, Identifiable, Sendable {
     public let id: CredentialID
     public let configurationID: String
     public let walletDocumentID: String?
+    public let backendID: String?
+    public let backendDocumentID: String?
     public let displayName: String
     public let format: CredentialFormat
     public let profileID: String
@@ -90,6 +92,8 @@ public struct CredentialRecord: Codable, Equatable, Identifiable, Sendable {
         id: CredentialID = CredentialID(),
         configurationID: String,
         walletDocumentID: String? = nil,
+        backendID: String? = nil,
+        backendDocumentID: String? = nil,
         displayName: String,
         format: CredentialFormat,
         profileID: String,
@@ -107,6 +111,8 @@ public struct CredentialRecord: Codable, Equatable, Identifiable, Sendable {
         self.id = id
         self.configurationID = configurationID
         self.walletDocumentID = walletDocumentID
+        self.backendID = backendID
+        self.backendDocumentID = backendDocumentID
         self.displayName = displayName
         self.format = format
         self.profileID = profileID

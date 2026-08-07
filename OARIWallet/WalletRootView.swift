@@ -41,7 +41,7 @@ struct WalletRootView: View {
         .sheet(isPresented: Binding(
             get: {
                 switch model.eudiFlow {
-                case .issuanceReview, .presentationConsent, .pending, .completed, .failed, .working:
+                case .issuanceReview, .ebsiIssuanceReview, .presentationConsent, .pending, .completed, .failed, .working:
                     true
                 case .idle, .configurationRequired:
                     false
@@ -56,6 +56,18 @@ struct WalletRootView: View {
         .fullScreenCover(isPresented: $model.showsOnboarding) {
             WalletOnboardingView(model: model)
                 .interactiveDismissDisabled()
+        }
+        .alert(item: $model.ebsiTrustWarning) { warning in
+            Alert(
+                title: Text("Untrusted EBSI \(warning.role.rawValue)"),
+                message: Text("\(warning.counterpartyIdentifier) is not in the configured trust chains (\(warning.evidenceSources.joined(separator: ", "))). Continue only for development. Reasons: \(warning.reasons.map(\.rawValue).joined(separator: ", ")). \(warning.nextAction)"),
+                primaryButton: .destructive(Text("Continue anyway")) {
+                    Task { await model.continueAfterEbsiTrustWarning() }
+                },
+                secondaryButton: .cancel {
+                    Task { await model.cancelEbsiTrustWarning() }
+                }
+            )
         }
     }
 }

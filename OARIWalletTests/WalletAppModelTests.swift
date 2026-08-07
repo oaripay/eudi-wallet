@@ -1,5 +1,6 @@
 import Foundation
 import EudiWalletKitAdapter
+import EbsiW3CBackend
 import ProtocolEngine
 import Testing
 import WalletDomain
@@ -76,7 +77,8 @@ struct WalletAppModelTests {
             audit: EmptyAuditRepository(),
             localAuthenticator: FixtureAuthenticator(),
             eudiWallet: service,
-            eudiAvailability: .available
+            eudiAvailability: .available,
+            ebsiWallet: nil
         )
         await model.load(.success(dependencies))
         model.scanInput = "https://issuer.example/credential-offer?credential_offer=fixture"
@@ -186,7 +188,8 @@ struct WalletAppModelTests {
         let dependencies = WalletAppDependencies(
             credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
             localAuthenticator: FixtureAuthenticator(), eudiWallet: nil,
-            eudiAvailability: .configurationRequired("Install approved profile")
+            eudiAvailability: .configurationRequired("Install approved profile"),
+            ebsiWallet: nil
         )
         await model.load(.success(dependencies))
         #expect(model.eudiFlow == .configurationRequired("Install approved profile"))
@@ -202,7 +205,8 @@ struct WalletAppModelTests {
         await inconsistent.load(.success(WalletAppDependencies(
             credentials: FixedMetadataRepository(records: [record]), audit: EmptyAuditRepository(),
             localAuthenticator: FixtureAuthenticator(), eudiWallet: service,
-            eudiAvailability: .configurationRequired("Profile disabled")
+            eudiAvailability: .configurationRequired("Profile disabled"),
+            ebsiWallet: nil
         )))
         #expect(await service.operationCount == 0)
         inconsistent.scanInput = "https://issuer.example/offer?credential_offer=fixture"
@@ -229,7 +233,7 @@ struct WalletAppModelTests {
         await model.load(.success(WalletAppDependencies(
             credentials: FixedMetadataRepository(records: [record]),
             audit: EmptyAuditRepository(), localAuthenticator: FixtureAuthenticator(),
-            eudiWallet: service, eudiAvailability: .available
+            eudiWallet: service, eudiAvailability: .available, ebsiWallet: nil
         )))
         model.selectCredential(record)
         await model.deleteSelectedCredential()
@@ -248,6 +252,66 @@ struct WalletAppModelTests {
         model.completeOnboarding()
         #expect(!model.showsOnboarding)
         #expect(UserDefaults.standard.bool(forKey: key))
+    }
+
+    @Test("Untrusted EBSI flow requires explicit continue or cancel")
+    func ebsiDevelopmentWarning() async {
+        let warning = EbsiTrustWarning(
+            counterpartyIdentifier: "did:ebsi:unregistered-issuer",
+            role: .issuer,
+            reasons: [.issuerNotAccredited],
+            evidenceSources: ["https://ebsi.oari.io"],
+            nextAction: "Continue credential issuance. Nothing is stored yet."
+        )
+        let service = FixtureEbsiWallet(outcome: .requireExplicitWarning(warning))
+        let model = WalletAppModel()
+        await model.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), eudiWallet: nil,
+            eudiAvailability: .configurationRequired("EUDI unavailable"), ebsiWallet: service
+        )))
+        model.scanInput = "openid-credential-offer://?credential_offer=fixture"
+        await model.reviewEbsiScannedRequest()
+        #expect(model.ebsiTrustWarning == warning)
+        #expect(await service.continueCalls == [])
+        await model.continueAfterEbsiTrustWarning()
+        #expect(await service.continueCalls.isEmpty)
+        model.ebsiTransactionCode = "123456"
+        await model.issueReviewedEbsiCredential()
+        #expect(await service.continueCalls == [true])
+        #expect(model.eudiFlow == .completed("EBSI development flow completed."))
+
+        let cancelService = FixtureEbsiWallet(outcome: .requireExplicitWarning(warning))
+        let cancelModel = WalletAppModel()
+        await cancelModel.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), eudiWallet: nil,
+            eudiAvailability: .configurationRequired("EUDI unavailable"), ebsiWallet: cancelService
+        )))
+        cancelModel.scanInput = model.scanInput
+        await cancelModel.reviewEbsiScannedRequest()
+        await cancelModel.cancelEbsiTrustWarning()
+        #expect(await cancelService.cancelCount == 1)
+        #expect(await cancelService.continueCalls.isEmpty)
+
+        let replayService = FixtureEbsiWallet(
+            outcome: .requireExplicitWarning(warning),
+            continuationDelayNanoseconds: 50_000_000
+        )
+        let replayModel = WalletAppModel()
+        await replayModel.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), eudiWallet: nil,
+            eudiAvailability: .configurationRequired("EUDI unavailable"), ebsiWallet: replayService
+        )))
+        replayModel.scanInput = model.scanInput
+        await replayModel.reviewEbsiScannedRequest()
+        async let first: Void = replayModel.continueAfterEbsiTrustWarning()
+        async let second: Void = replayModel.continueAfterEbsiTrustWarning()
+        _ = await (first, second)
+        replayModel.ebsiTransactionCode = "123456"
+        await replayModel.issueReviewedEbsiCredential()
+        #expect(await replayService.continueCalls == [true])
     }
 
     @Test("Deferred credential retry forwards issuer and document and reports outcome")
@@ -269,7 +333,7 @@ struct WalletAppModelTests {
         let model = WalletAppModel()
         await model.load(.success(WalletAppDependencies(
             credentials: FixedMetadataRepository(records: [record]), audit: EmptyAuditRepository(),
-            localAuthenticator: FixtureAuthenticator(), eudiWallet: service, eudiAvailability: .available
+            localAuthenticator: FixtureAuthenticator(), eudiWallet: service, eudiAvailability: .available, ebsiWallet: nil
         )))
         model.selectCredential(record)
         await model.retrySelectedDeferredCredential()
@@ -281,7 +345,7 @@ struct WalletAppModelTests {
         let pendingModel = WalletAppModel()
         await pendingModel.load(.success(WalletAppDependencies(
             credentials: FixedMetadataRepository(records: [record]), audit: EmptyAuditRepository(),
-            localAuthenticator: FixtureAuthenticator(), eudiWallet: pendingService, eudiAvailability: .available
+            localAuthenticator: FixtureAuthenticator(), eudiWallet: pendingService, eudiAvailability: .available, ebsiWallet: nil
         )))
         pendingModel.selectCredential(record)
         await pendingModel.retrySelectedDeferredCredential()
@@ -292,7 +356,7 @@ struct WalletAppModelTests {
     private func testDependencies(_ service: FixtureEudiWallet) -> WalletAppDependencies {
         WalletAppDependencies(
             credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
-            localAuthenticator: FixtureAuthenticator(), eudiWallet: service, eudiAvailability: .available
+            localAuthenticator: FixtureAuthenticator(), eudiWallet: service, eudiAvailability: .available, ebsiWallet: nil
         )
     }
 
@@ -320,6 +384,41 @@ struct WalletAppModelTests {
 }
 
 private enum TestFailure: Error { case unavailable }
+
+private actor FixtureEbsiWallet: EbsiW3COperating {
+    let outcome: EbsiTrustGateOutcome
+    private(set) var continueCalls: [Bool] = []
+    private(set) var cancelCount = 0
+    let continuationDelayNanoseconds: UInt64
+    init(
+        outcome: EbsiTrustGateOutcome,
+        continuationDelayNanoseconds: UInt64 = 0
+    ) {
+        self.outcome = outcome
+        self.continuationDelayNanoseconds = continuationDelayNanoseconds
+    }
+    func resolveInteraction(uri: String) async throws -> EbsiResolvedInteraction {
+        EbsiResolvedInteraction(
+            id: UUID(), kind: .issuance,
+            counterpartyIdentifier: "did:ebsi:unregistered-issuer",
+            displayName: "Development issuer", trustOutcome: outcome,
+            transactionCodeRequired: true,
+            configurationIDs: ["oari-v2"]
+        )
+    }
+    func continueInteraction(
+        id: UUID,
+        allowUntrusted: Bool,
+        transactionCode: String?
+    ) async throws -> EbsiInteractionCompletion {
+        continueCalls.append(allowUntrusted)
+        if continuationDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: continuationDelayNanoseconds)
+        }
+        return .completed("EBSI development flow completed.")
+    }
+    func cancelInteraction(id: UUID) async { cancelCount += 1 }
+}
 
 private actor FixtureEudiWallet: EudiWalletOperating {
     private(set) var issueCount = 0

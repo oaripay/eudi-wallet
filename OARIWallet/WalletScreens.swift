@@ -10,10 +10,6 @@ struct WalletVaultView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: OariSpacing.x5) {
-                    Text("HOLDER WALLET")
-                        .font(OariTypography.label)
-                        .tracking(2)
-                        .foregroundStyle(OariColor.textSecondary(scheme))
                     Text(model.credentialCountDescription)
                         .font(OariTypography.title)
                         .accessibilityIdentifier("wallet.credential-count")
@@ -207,6 +203,13 @@ struct WalletScannerView: View {
                         .buttonStyle(OariPrimaryButtonStyle())
                         .disabled(model.scanInput.isEmpty)
                         .accessibilityIdentifier("scanner.review")
+                        if model.isEbsiDevelopmentAvailable {
+                            Button("Review as EBSI development") {
+                                Task { await model.reviewEbsiScannedRequest() }
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityIdentifier("scanner.ebsiReview")
+                        }
                         Button {
                             isCameraPresented = true
                         } label: {

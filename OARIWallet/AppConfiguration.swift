@@ -12,6 +12,7 @@ struct AppConfiguration: Sendable {
     let fixture: Fixture
     let incomingURL: URL?
     let disablesAnimations: Bool
+    let ebsiDevelopmentEnabled: Bool
 
     static func current(
         arguments: [String] = ProcessInfo.processInfo.arguments
@@ -32,7 +33,9 @@ struct AppConfiguration: Sendable {
             allowedHosts: Set(["wallet.dev.oari.io"]).union(fixtureHosts),
             fixture: fixture,
             incomingURL: incomingURL,
-            disablesAnimations: arguments.contains("--disable-animations")
+            disablesAnimations: arguments.contains("--disable-animations"),
+            ebsiDevelopmentEnabled: arguments.contains("--enable-ebsi-development") ||
+                ProcessInfo.processInfo.environment["OARI_EBSI_DEVELOPMENT"] == "1"
         )
     }
 

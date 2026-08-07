@@ -12,6 +12,7 @@ public struct EbsiTrustWarning: Equatable, Identifiable, Sendable {
     public let role: Role
     public let reasons: [TrustReason]
     public let evidenceSources: [String]
+    public let nextAction: String
 
     public enum Role: String, Codable, Equatable, Sendable {
         case issuer
@@ -23,13 +24,15 @@ public struct EbsiTrustWarning: Equatable, Identifiable, Sendable {
         counterpartyIdentifier: String,
         role: Role,
         reasons: [TrustReason],
-        evidenceSources: [String]
+        evidenceSources: [String],
+        nextAction: String
     ) {
         self.id = id
         self.counterpartyIdentifier = counterpartyIdentifier
         self.role = role
         self.reasons = reasons
         self.evidenceSources = evidenceSources
+        self.nextAction = nextAction
     }
 }
 
@@ -57,7 +60,10 @@ public struct EbsiTrustGate: Sendable {
                 counterpartyIdentifier: counterpartyIdentifier,
                 role: role,
                 reasons: reasons,
-                evidenceSources: evidence.map(\.sourceIdentifier).sorted()
+                evidenceSources: evidence.map(\.sourceIdentifier).sorted(),
+                nextAction: role == .issuer
+                    ? "Continue the credential issuance request. No credential has been stored yet."
+                    : "Continue to claim selection. No information has been shared yet."
             ))
         case let .invalid(reasons, _), let .indeterminate(reasons, _):
             return .reject(reasons)

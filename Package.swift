@@ -41,10 +41,6 @@ let package = Package(
             url: "https://github.com/airsidemobile/JOSESwift.git",
             exact: "3.0.0"
         ),
-        .package(
-            url: "https://github.com/spruceid/sprucekit-mobile.git",
-            exact: "0.20.0"
-        ),
     ],
     targets: [
         .target(
@@ -53,7 +49,7 @@ let package = Package(
         ),
         .target(
             name: "WalletVault",
-            dependencies: ["WalletDomain", "ProtocolEngine"],
+            dependencies: ["WalletDomain", "ProtocolEngine", "EbsiW3CBackend"],
             path: "Packages/Sources/WalletVault"
         ),
         .target(
@@ -111,11 +107,6 @@ let package = Package(
                 "IdentityDomain",
                 "TrustDomain",
                 "WalletDomain",
-                .product(
-                    name: "SpruceIDMobileSdkRs",
-                    package: "sprucekit-mobile",
-                    condition: .when(platforms: [.iOS])
-                ),
             ],
             path: "Packages/Sources/EbsiW3CBackend"
         ),
@@ -162,7 +153,9 @@ let package = Package(
         ),
         .testTarget(
             name: "EbsiW3CBackendTests",
-            dependencies: ["EbsiW3CBackend"],
+            dependencies: [
+                "EbsiW3CBackend",
+            ],
             path: "Packages/Tests/EbsiW3CBackendTests"
         ),
     ],

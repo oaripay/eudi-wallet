@@ -21,8 +21,10 @@ public struct URLSessionBoundedHTTPSClient: BoundedHTTPSClient, Sendable {
 
     public func get(_ url: URL, maximumBytes: Int) async throws -> BoundedHTTPResponse {
         guard maximumBytes > 0,
-              url.scheme == "https", url.host != nil,
-              url.user == nil, url.password == nil else {
+              url.scheme?.lowercased() == "https", let host = url.host?.lowercased(),
+              url.user == nil, url.password == nil,
+              host != "localhost", host != "::1", !host.hasSuffix(".local"),
+              !Self.isPrivateIPv4Literal(host), !Self.isReservedIPv6Literal(host) else {
             throw DIDResolutionError.registryUnavailable
         }
         let delegate = RejectRedirectDelegate()
@@ -45,6 +47,22 @@ public struct URLSessionBoundedHTTPSClient: BoundedHTTPSClient, Sendable {
             data.append(byte)
         }
         return BoundedHTTPResponse(data: data, statusCode: http.statusCode, finalURL: finalURL)
+    }
+
+    private static func isPrivateIPv4Literal(_ host: String) -> Bool {
+        let parts = host.split(separator: ".").compactMap { UInt8($0) }
+        guard parts.count == 4 else { return false }
+        return parts[0] == 10 || parts[0] == 127 ||
+            (parts[0] == 169 && parts[1] == 254) ||
+            (parts[0] == 172 && (16...31).contains(parts[1])) ||
+            (parts[0] == 192 && parts[1] == 168) || parts[0] >= 224
+    }
+
+    private static func isReservedIPv6Literal(_ host: String) -> Bool {
+        guard host.contains(":") else { return false }
+        return host == "::" || host == "::1" || host.hasPrefix("fc") ||
+            host.hasPrefix("fd") || host.hasPrefix("fe8") || host.hasPrefix("fe9") ||
+            host.hasPrefix("fea") || host.hasPrefix("feb") || host.hasPrefix("ff")
     }
 }
 

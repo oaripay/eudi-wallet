@@ -1,0 +1,111 @@
+import EbsiW3CBackend
+import Foundation
+import WalletDomain
+
+enum EbsiInteractionKind: Equatable, Sendable {
+    case issuance
+    case presentation
+}
+
+struct EbsiResolvedInteraction: Equatable, Identifiable, Sendable {
+    let id: UUID
+    let kind: EbsiInteractionKind
+    let counterpartyIdentifier: String
+    let displayName: String?
+    let trustOutcome: EbsiTrustGateOutcome
+    let transactionCodeRequired: Bool
+    let configurationIDs: [String]
+}
+
+enum EbsiInteractionCompletion: Equatable, Sendable {
+    case completed(String)
+    case pending(String)
+}
+
+protocol EbsiW3COperating: Sendable {
+    func resolveInteraction(uri: String) async throws -> EbsiResolvedInteraction
+    func continueInteraction(
+        id: UUID,
+        allowUntrusted: Bool,
+        transactionCode: String?
+    ) async throws -> EbsiInteractionCompletion
+    func cancelInteraction(id: UUID) async
+}
+
+actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
+    private let backend: OariWorkspaceW3CBackend
+    private let metadata: any CredentialMetadataRepository
+    private let audit: any AuditRepository
+    private var issuers: [UUID: String] = [:]
+
+    init(
+        backend: OariWorkspaceW3CBackend,
+        metadata: any CredentialMetadataRepository,
+        audit: any AuditRepository
+    ) {
+        self.backend = backend
+        self.metadata = metadata
+        self.audit = audit
+    }
+
+    func resolveInteraction(uri: String) async throws -> EbsiResolvedInteraction {
+        let offer = try await backend.resolveOffer(uri)
+        issuers[offer.id] = offer.issuer
+        return EbsiResolvedInteraction(
+            id: offer.id,
+            kind: .issuance,
+            counterpartyIdentifier: offer.issuer,
+            displayName: offer.displayName,
+            trustOutcome: offer.trustOutcome,
+            transactionCodeRequired: offer.transactionCodeRequired,
+            configurationIDs: offer.configurationIDs
+        )
+    }
+
+    func continueInteraction(
+        id: UUID,
+        allowUntrusted: Bool,
+        transactionCode: String?
+    ) async throws -> EbsiInteractionCompletion {
+        let credentials = try await backend.issue(
+            id: id,
+            allowUntrusted: allowUntrusted,
+            transactionCode: transactionCode
+        )
+        let issuer = issuers.removeValue(forKey: id) ?? "unknown"
+        var credentialIDs: [CredentialID] = []
+        for credential in credentials {
+            let record = CredentialRecord(
+                configurationID: credential.profileID,
+                backendID: "oari-workspace-w3c",
+                backendDocumentID: credential.id.uuidString,
+                displayName: "EBSI W3C Credential",
+                format: .jwtVC,
+                profileID: credential.profileID,
+                issuerIdentifier: issuer,
+                cryptographicValidity: .valid,
+                issuerTrust: allowUntrusted ? .untrusted : .trusted,
+                status: .notEvaluated,
+                legalClassification: .oariProvisional,
+                createdAt: Date()
+            )
+            try await metadata.saveMetadata(record)
+            credentialIDs.append(record.id)
+        }
+        try await audit.append(AuditEvent(
+            operation: .issuance,
+            outcome: .completed,
+            occurredAt: Date(),
+            counterpartyIdentifierDigest: .sha256(issuer),
+            credentialIDs: credentialIDs,
+            policy: .development,
+            policyVersion: AuditPolicyVersion(rawValue: 1)
+        ))
+        return .completed("Issued and stored \(credentials.count) W3C credential(s).")
+    }
+
+    func cancelInteraction(id: UUID) async {
+        issuers[id] = nil
+        await backend.cancel(id: id)
+    }
+}
