@@ -403,6 +403,17 @@ These are absence-of-implementation failures, not regressions.
 - Independent review cycle 2 returned `PASS`; Debug model tests pass 13 cases with
   warnings-as-errors app compilation. A still-deferred regression assertion was added
   after review to cover the remaining MINOR branch.
+- Commit: `4316525` (`feat: add credential lifecycle ui`).
+
+#### Onboarding and profile visibility milestone
+
+- Added non-dismissible first-run onboarding covering consent, Wallet Kit ownership,
+  device-bound keys and the requirement for approved operational profiles.
+- Added settings/profile status, callback-domain/backend visibility and explicit
+  development/not-certified messaging. Lifecycle controls are disabled with an
+  accessible explanation whenever no approved EUDI service is active.
+- Independent review cycle 2 returned `PASS`; Debug model tests pass 14 cases,
+  including persisted onboarding and inconsistent service/profile fail-closed checks.
 
 #### Presentation-during-issuance adapter milestone
 

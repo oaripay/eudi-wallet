@@ -53,6 +53,10 @@ struct WalletRootView: View {
                 .presentationDetents([.medium, .large])
                 .interactiveDismissDisabled(model.preventsInteractiveFlowDismissal)
         }
+        .fullScreenCover(isPresented: $model.showsOnboarding) {
+            WalletOnboardingView(model: model)
+                .interactiveDismissDisabled()
+        }
     }
 }
 

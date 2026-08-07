@@ -12,7 +12,10 @@ struct OARIWalletApp: App {
         self.configuration = configuration
         dependencies = WalletAppDependencies.make(configuration: configuration)
         _model = StateObject(
-            wrappedValue: WalletAppModel(allowedHosts: configuration.allowedHosts)
+            wrappedValue: WalletAppModel(
+                allowedHosts: configuration.allowedHosts,
+                showsOnboarding: !UserDefaults.standard.bool(forKey: "oari.onboarding.completed")
+            )
         )
     }
 

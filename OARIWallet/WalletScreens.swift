@@ -83,11 +83,17 @@ private struct CredentialDetailView: View {
                             Task { await model.retrySelectedDeferredCredential() }
                         }
                         .buttonStyle(OariPrimaryButtonStyle())
-                        .disabled(model.credentialActionIsWorking)
+                        .disabled(model.credentialActionIsWorking || !model.isEudiOperational)
                     }
                     Button("Remove credential", role: .destructive) { confirmsDeletion = true }
                         .frame(maxWidth: .infinity)
-                        .disabled(model.credentialActionIsWorking)
+                        .disabled(model.credentialActionIsWorking || !model.isEudiOperational)
+                    if !model.isEudiOperational {
+                        Label("Install an approved EUDI profile to manage this credential.", systemImage: "lock.shield")
+                            .font(.caption)
+                            .foregroundStyle(OariColor.textSecondary(scheme))
+                            .accessibilityIdentifier("credential.operationsUnavailable")
+                    }
                     actionStatus
                 }
                 .padding(OariSpacing.x5)
@@ -376,10 +382,68 @@ struct WalletSettingsView: View {
                     Label("Development build, not certified", systemImage: "exclamationmark.triangle")
                         .accessibilityIdentifier("settings.certification")
                 }
+                Section("EUDI profile") {
+                    switch model.eudiAvailability {
+                    case .available:
+                        Label("Approved EUDI profile installed", systemImage: "checkmark.shield.fill")
+                            .foregroundStyle(.green)
+                    case let .configurationRequired(message):
+                        Label("Profile installation required", systemImage: "exclamationmark.shield.fill")
+                            .foregroundStyle(.orange)
+                        Text(message).font(.caption).foregroundStyle(.secondary)
+                    }
+                    LabeledContent("Callback domain", value: "oari.io")
+                    LabeledContent("Wallet backend", value: "EUDI Wallet Kit 0.39.1")
+                }
             }
             .scrollContentBackground(.hidden)
             .background(OariColor.background(scheme))
             .navigationTitle("Settings")
         }
+    }
+}
+
+struct WalletOnboardingView: View {
+    @Environment(\.colorScheme) private var scheme
+    @ObservedObject var model: WalletAppModel
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: OariSpacing.x6) {
+                    Image(systemName: "wallet.pass.fill")
+                        .font(.system(size: 56)).foregroundStyle(OariColor.action)
+                    Text("Your EUDI wallet").font(OariTypography.title)
+                    Text("OARI uses the EUDI Wallet Kit for PID, SD-JWT, mdoc, issuance, presentation and device-bound keys.")
+                        .font(OariTypography.body)
+                    onboardingRow("You approve every disclosure", icon: "checkmark.shield")
+                    onboardingRow("Private keys stay under Wallet Kit secure storage", icon: "key.fill")
+                    onboardingRow("Only approved issuer and verifier profiles can connect", icon: "network.badge.shield.half.filled")
+                    OariCard {
+                        VStack(alignment: .leading, spacing: OariSpacing.x3) {
+                            Label("Environment setup", systemImage: "wrench.and.screwdriver.fill")
+                                .font(OariTypography.heading)
+                            switch model.eudiAvailability {
+                            case .available:
+                                Text("An approved EUDI profile is installed.")
+                            case let .configurationRequired(message):
+                                Text(message)
+                                Text("Credential operations remain disabled until deployment installs trust anchors, issuer/verifier origins and an attestation provider.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    Button("Continue to wallet") { model.completeOnboarding() }
+                        .buttonStyle(OariPrimaryButtonStyle())
+                        .accessibilityIdentifier("onboarding.continue")
+                }
+                .padding(OariSpacing.x6)
+            }
+            .background(OariColor.background(scheme).ignoresSafeArea())
+        }
+    }
+
+    private func onboardingRow(_ text: String, icon: String) -> some View {
+        Label(text, systemImage: icon).font(OariTypography.body)
     }
 }

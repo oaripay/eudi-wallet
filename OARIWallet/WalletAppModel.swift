@@ -29,14 +29,20 @@ final class WalletAppModel: ObservableObject {
     @Published var selectedCredential: CredentialRecord?
     @Published private(set) var walletDocumentSummaries: [String: EudiWalletDocumentSummary] = [:]
     @Published private(set) var credentialActionState: CredentialActionState = .idle
+    @Published var showsOnboarding: Bool
+    @Published private(set) var eudiAvailability: EudiWalletAvailability = .configurationRequired("Loading wallet profile…")
     private let allowedHosts: Set<String>
     private var eudiWallet: (any EudiWalletOperating)?
     private var repositories: (credentials: any CredentialMetadataRepository, audit: any AuditRepository)?
     private var activePendingIssuanceID: UUID?
     private var activePendingIssuance: EudiPendingIssuance?
 
-    init(allowedHosts: Set<String> = ["wallet.dev.oari.io"]) {
+    init(
+        allowedHosts: Set<String> = ["wallet.dev.oari.io"],
+        showsOnboarding: Bool = false
+    ) {
         self.allowedHosts = allowedHosts
+        self.showsOnboarding = showsOnboarding
     }
 
     enum LoadingState: Equatable {
@@ -93,6 +99,7 @@ final class WalletAppModel: ObservableObject {
         do {
             let dependencies = try dependencies.get()
             eudiWallet = dependencies.eudiWallet
+            eudiAvailability = dependencies.eudiAvailability
             repositories = (dependencies.credentials, dependencies.audit)
             try await load(credentials: dependencies.credentials, audit: dependencies.audit)
             if let eudiWallet {
@@ -245,6 +252,9 @@ final class WalletAppModel: ObservableObject {
     }
 
     var hasRecoverablePendingIssuance: Bool { activePendingIssuance != nil }
+    var isEudiOperational: Bool {
+        eudiWallet != nil && eudiAvailability == .available
+    }
     var preventsInteractiveFlowDismissal: Bool {
         switch eudiFlow {
         case .working, .presentationConsent: true
@@ -262,7 +272,7 @@ final class WalletAppModel: ObservableObject {
     }
 
     func deleteSelectedCredential() async {
-        guard !credentialActionIsWorking,
+        guard isEudiOperational, !credentialActionIsWorking,
               let credential = selectedCredential,
               let documentID = credential.walletDocumentID,
               let eudiWallet else { return }
@@ -280,7 +290,7 @@ final class WalletAppModel: ObservableObject {
     }
 
     func retrySelectedDeferredCredential() async {
-        guard !credentialActionIsWorking,
+        guard isEudiOperational, !credentialActionIsWorking,
               let credential = selectedCredential,
               let documentID = credential.walletDocumentID,
               let eudiWallet else { return }
@@ -315,6 +325,11 @@ final class WalletAppModel: ObservableObject {
 
     func documentStatus(for credential: CredentialRecord) -> String? {
         credential.walletDocumentID.flatMap { walletDocumentSummaries[$0]?.status }
+    }
+
+    func completeOnboarding() {
+        UserDefaults.standard.set(true, forKey: "oari.onboarding.completed")
+        showsOnboarding = false
     }
 
     private func refreshWalletState() async throws {

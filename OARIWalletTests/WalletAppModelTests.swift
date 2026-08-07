@@ -190,6 +190,23 @@ struct WalletAppModelTests {
         )
         await model.load(.success(dependencies))
         #expect(model.eudiFlow == .configurationRequired("Install approved profile"))
+        #expect(!model.isEudiOperational)
+
+        let service = FixtureEudiWallet()
+        let inconsistent = WalletAppModel()
+        let record = CredentialRecord(
+            configurationID: "pid", walletDocumentID: "wallet-pid", displayName: "PID",
+            format: .sdJWTVC, profileID: "profile", issuerIdentifier: "https://issuer.example",
+            createdAt: Date()
+        )
+        await inconsistent.load(.success(WalletAppDependencies(
+            credentials: FixedMetadataRepository(records: [record]), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), eudiWallet: service,
+            eudiAvailability: .configurationRequired("Profile disabled")
+        )))
+        inconsistent.selectCredential(record)
+        await inconsistent.deleteSelectedCredential()
+        #expect(await service.lastDeleted == nil)
     }
 
     @Test("Credential lifecycle delegates deletion with Wallet Kit document status")
@@ -214,6 +231,18 @@ struct WalletAppModelTests {
         #expect(model.selectedCredential == record)
         #expect(model.credentialActionState == .completed("Credential removed."))
         #expect(await service.lastDeleted == "wallet-pid:issued")
+    }
+
+    @Test("Onboarding completion is explicit and persisted")
+    func onboardingCompletion() {
+        let key = "oari.onboarding.completed"
+        UserDefaults.standard.removeObject(forKey: key)
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        let model = WalletAppModel(showsOnboarding: true)
+        #expect(model.showsOnboarding)
+        model.completeOnboarding()
+        #expect(!model.showsOnboarding)
+        #expect(UserDefaults.standard.bool(forKey: key))
     }
 
     @Test("Deferred credential retry forwards issuer and document and reports outcome")
