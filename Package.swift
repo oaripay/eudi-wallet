@@ -13,6 +13,8 @@ let package = Package(
         .library(name: "WalletVault", targets: ["WalletVault"]),
         .library(name: "ProfileDomain", targets: ["ProfileDomain"]),
         .library(name: "TrustDomain", targets: ["TrustDomain"]),
+        .library(name: "PresentationDomain", targets: ["PresentationDomain"]),
+        .library(name: "ProtocolEngine", targets: ["ProtocolEngine"]),
     ],
     targets: [
         .target(
@@ -34,6 +36,16 @@ let package = Package(
             dependencies: ["ProfileDomain"],
             path: "Packages/Sources/TrustDomain"
         ),
+        .target(
+            name: "PresentationDomain",
+            dependencies: ["ProfileDomain", "TrustDomain", "WalletDomain"],
+            path: "Packages/Sources/PresentationDomain"
+        ),
+        .target(
+            name: "ProtocolEngine",
+            dependencies: ["PresentationDomain", "ProfileDomain", "TrustDomain", "WalletDomain"],
+            path: "Packages/Sources/ProtocolEngine"
+        ),
         .testTarget(
             name: "WalletDomainTests",
             dependencies: ["WalletDomain"],
@@ -53,6 +65,16 @@ let package = Package(
             name: "TrustDomainTests",
             dependencies: ["ProfileDomain", "TrustDomain"],
             path: "Packages/Tests/TrustDomainTests"
+        ),
+        .testTarget(
+            name: "PresentationDomainTests",
+            dependencies: ["PresentationDomain", "ProfileDomain", "TrustDomain"],
+            path: "Packages/Tests/PresentationDomainTests"
+        ),
+        .testTarget(
+            name: "ProtocolEngineTests",
+            dependencies: ["ProtocolEngine", "PresentationDomain", "ProfileDomain", "TrustDomain", "WalletDomain"],
+            path: "Packages/Tests/ProtocolEngineTests"
         ),
     ],
     swiftLanguageModes: [.v6]

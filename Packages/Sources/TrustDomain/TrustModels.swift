@@ -65,9 +65,22 @@ public struct TrustDecision: Equatable, Sendable {
     public let effectiveVerdict: TrustVerdict
     public let action: TrustAction
 
-    public init(effectiveVerdict: TrustVerdict, action: TrustAction) {
+    package init(effectiveVerdict: TrustVerdict, action: TrustAction) {
         self.effectiveVerdict = effectiveVerdict
         self.action = action
+    }
+
+    public var isConsistent: Bool {
+        switch (effectiveVerdict, action) {
+        case (.trusted, .allow),
+             (.untrusted, .requireOneTimeConsent),
+             (.untrusted, .reject),
+             (.invalid, .reject),
+             (.indeterminate, .reject):
+            true
+        default:
+            false
+        }
     }
 }
 

@@ -46,6 +46,31 @@ git diff --cached --check
 Milestones add focused commands here before they are committed. CI is authoritative
 for clean-environment checks after it exists.
 
+## Compact milestone map
+
+The original architecture build loop and the initial delivery list are consolidated
+into M0-M8. M0-M5 are completed implementation slices. M6 merges build-loop phases
+3 and 4 (protocol engine); M7 maps to phase 5 (product UI); M8 maps to phases 6 and
+7 (interoperability and release readiness). M6 is internally developed as 6a VP, 6b
+VCI and 6c execution wiring, with one independent review and one final commit.
+
+### M6: Protocol engine
+
+- 6a OpenID4VP: untrusted input routing, request parsing, DCQL, replay and binding.
+- 6b OpenID4VCI: offers, metadata, PKCE, proofs, validation, deferred issuance and
+  notifications.
+- 6c Execution: local-auth port, vault/key integration, delivery, audit and WUA.
+
+### M7: Product UI
+
+- OARI semantic design system, vault/scanner/review/warning/history/settings screens,
+  app dependency wiring, themes and accessibility evidence.
+
+### M8: Interoperability and release readiness
+
+- DID/EBSI trust and status clients, reviewed Wallet Kit pin, iGrant fixtures, SBOM,
+  SAST/privacy evidence, physical-device and certification matrix.
+
 ## Baseline failures
 
 Recorded before implementation on 2026-08-07:
@@ -86,7 +111,7 @@ These are absence-of-implementation failures, not regressions.
 
 ### Milestone 0: baseline
 
-- Review cycle: 2
+- Review cycle: 4
 - Changed paths: `.github/workflows/verify.yml`, `.gitignore`, `README.md`,
   `project.yml`, `OARIWallet.xcodeproj/**`, `OARIWallet/**`, `OARIWalletTests/**`,
   `Scripts/check_tracked_secrets.py`, `docs/EVIDENCE.md`, `docs/THREAT_MODEL.md`,
@@ -204,6 +229,75 @@ These are absence-of-implementation failures, not regressions.
   maximum age and validity; invalid/not-found/unavailable conflicts and malformed or
   stale timestamps fail closed with negative tests. Cycle 2 returned PASS with a
   non-gating stale evidence-ledger count, corrected above.
+- Commit: this milestone commit; exact SHA is recorded in the session ledger after creation.
+
+### Milestone 5: presentation authorization state machine
+
+- Acceptance:
+  1. Presentation follows received, parsed, transport-validated, requester-evaluated,
+     candidate-evaluated, review, optional warning consent, authenticated, signed,
+     delivered and recorded ordering.
+  2. Signing is impossible before transaction review and local authentication.
+  3. Warning continuation requires explicit one-time consent and preserves the
+     existing untrusted trust decision.
+  4. Rejected requesters and empty credential selection terminate fail closed.
+  5. Terminal sessions cannot be resumed through normal transitions.
+- Review cycle: 2
+- Changed paths: `Package.swift`, `Packages/Sources/PresentationDomain/**`,
+  `Packages/Tests/PresentationDomainTests/**`, `docs/EVIDENCE.md`.
+- Checks:
+  - `swift test` after trust-decision invariant fixes: pass, 29 tests in 8 suites.
+  - Remaining milestone checks: pending.
+- Review findings: cycle 1 found that a caller could pair an untrusted, invalid or
+  indeterminate verdict with an allow action. Trust-decision construction is now
+  package-scoped, its verdict/action invariant is explicit, and the presentation
+  boundary defensively rejects inconsistent decisions. Negative and terminal-state
+  tests were added. Cycle 2 returned PASS; this previously uncommitted slice is
+  included in the compact M6 commit.
+- Commit: included in M6.
+
+### Milestone 6: compact protocol engine
+
+- Acceptance:
+  1. Bounded untrusted URL input routes only supported VP/VCI schemes and configured
+     HTTPS hosts; malformed, oversized and unsupported input fails before I/O.
+  2. VP requests require HTTPS response binding, nonce, requester identity and an
+     explicit DCQL or presentation-definition query; nonce replay is rejected.
+  3. VCI offers support authorization-code and pre-authorized-code grants; issuer and
+     configuration metadata must match; PKCE uses RFC 7636 S256.
+  4. Authentication precedes signing, signing precedes HTTPS delivery, and successful
+     delivery precedes redacted audit recording through the M5 state machine.
+  5. Issued credentials are validated before repository storage; empty or malformed
+     responses fail closed and deferred issuance is explicit.
+- Internal slices: 6a VP, 6b VCI, 6c execution wiring.
+- Review cycle: 2
+- Changed paths: `Package.swift`, `README.md`, `Packages/Sources/PresentationDomain/**`,
+  `Packages/Sources/ProtocolEngine/**`, `Packages/Sources/TrustDomain/TrustModels.swift`,
+  `Packages/Tests/PresentationDomainTests/**`, `Packages/Tests/ProtocolEngineTests/**`,
+  `docs/EVIDENCE.md`.
+- Checks:
+  - M6a focused tests: pass, three tests.
+  - M6a-M6b full `swift test`: pass, 36 tests in 10 suites.
+  - M6a-M6c full `swift test`: pass, 39 tests in 11 suites.
+  - After cycle-1 security fixes: pass, 42 tests in 11 suites.
+  - After cycle-2 expiry and canonical-URL fixes: pass, 44 tests in 11 suites.
+  - Final post-review `swift test`: pass, 44 tests in 11 suites.
+  - Simulator `xcodebuild ... test`: pass, two app tests.
+  - `git diff --check`: pass.
+  - `python3 Scripts/check_tracked_secrets.py`: pass, 56 repository files inspected.
+- Review findings: cycle 1 found permissive HTTPS routing, optional partial origin
+  binding and disconnected replay, missing pre-authorized code/PKCE flow binding,
+  and request/session substitution. HTTPS now requires a configured allowlist and
+  canonical host; intake requires full registered origin and claims nonce; VCI keeps
+  the sensitive pre-authorized code and binds S256/state at exchange; execution
+  checks the exact reviewed request before authentication. Cycle 2 found that expiry
+  was not rebound/rechecked and VCI accepted hostless HTTPS URLs. Expiry is now part
+  of the reviewed session and checked before authentication; all offer and metadata
+  endpoints require canonical absolute HTTPS URLs. Cycle 3 found execution expiry
+  still depended on a caller-supplied timestamp. The coordinator now owns an injected
+  trusted clock; no caller timestamp can influence authorization, and the expiry test
+  proves authentication is not invoked. Cycle 4 returned PASS with a non-gating
+  timing nit; expiry is now rechecked before signing and delivery as well.
 - Commit: this milestone commit; exact SHA is recorded in the session ledger after creation.
 
 ### Milestone 1: domain contracts
