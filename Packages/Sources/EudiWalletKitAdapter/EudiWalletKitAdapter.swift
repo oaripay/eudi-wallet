@@ -455,6 +455,13 @@ public struct EudiIssuanceOfferDocument: Equatable, Sendable {
     public let documentType: String
     public let displayName: String
     public let supportedAlgorithms: [String]
+
+    public init(configurationID: String, documentType: String, displayName: String, supportedAlgorithms: [String]) {
+        self.configurationID = configurationID
+        self.documentType = documentType
+        self.displayName = displayName
+        self.supportedAlgorithms = supportedAlgorithms
+    }
 }
 
 public struct EudiTransactionCodeRequirement: Equatable, Sendable {
@@ -485,6 +492,20 @@ public struct EudiIssuanceOffer: Equatable, Sendable {
     public let issuerLogoURL: String?
     public let documents: [EudiIssuanceOfferDocument]
     public let transactionCode: EudiTransactionCodeRequirement?
+
+    public init(
+        id: UUID,
+        issuerName: String,
+        issuerLogoURL: String?,
+        documents: [EudiIssuanceOfferDocument],
+        transactionCode: EudiTransactionCodeRequirement?
+    ) {
+        self.id = id
+        self.issuerName = issuerName
+        self.issuerLogoURL = issuerLogoURL
+        self.documents = documents
+        self.transactionCode = transactionCode
+    }
 }
 
 public struct EudiIssuanceResult: Equatable, Sendable {
@@ -492,11 +513,28 @@ public struct EudiIssuanceResult: Equatable, Sendable {
     public let metadata: [CredentialRecord]
     public let warningCount: Int
     public let pendingIssuances: [EudiPendingIssuance]
+
+    public init(
+        documents: [EudiWalletDocumentSummary],
+        metadata: [CredentialRecord],
+        warningCount: Int,
+        pendingIssuances: [EudiPendingIssuance]
+    ) {
+        self.documents = documents
+        self.metadata = metadata
+        self.warningCount = warningCount
+        self.pendingIssuances = pendingIssuances
+    }
 }
 
 public struct EudiPendingIssuance: Equatable, Identifiable, Sendable {
     public let id: UUID
     public let document: EudiWalletDocumentSummary
+
+    public init(id: UUID, document: EudiWalletDocumentSummary) {
+        self.id = id
+        self.document = document
+    }
 }
 
 public struct EudiRequestedClaim: Equatable, Sendable {
@@ -508,6 +546,26 @@ public struct EudiRequestedClaim: Equatable, Sendable {
     public let displayValue: String?
     public let required: Bool
     public let intentToRetain: Bool
+
+    public init(
+        id: String,
+        documentID: String,
+        documentType: String,
+        displayName: String?,
+        claimPath: [String],
+        displayValue: String?,
+        required: Bool,
+        intentToRetain: Bool
+    ) {
+        self.id = id
+        self.documentID = documentID
+        self.documentType = documentType
+        self.displayName = displayName
+        self.claimPath = claimPath
+        self.displayValue = displayValue
+        self.required = required
+        self.intentToRetain = intentToRetain
+    }
 }
 
 public struct EudiPresentationRequest: Equatable, Sendable {
@@ -517,6 +575,22 @@ public struct EudiPresentationRequest: Equatable, Sendable {
     public let verifierCertificateValid: Bool?
     public let claims: [EudiRequestedClaim]
     public let warningCount: Int
+
+    public init(
+        id: UUID,
+        verifierName: String?,
+        verifierLegalName: String?,
+        verifierCertificateValid: Bool?,
+        claims: [EudiRequestedClaim],
+        warningCount: Int
+    ) {
+        self.id = id
+        self.verifierName = verifierName
+        self.verifierLegalName = verifierLegalName
+        self.verifierCertificateValid = verifierCertificateValid
+        self.claims = claims
+        self.warningCount = warningCount
+    }
 }
 
 public struct EudiBLEEngagement: Equatable, Sendable {

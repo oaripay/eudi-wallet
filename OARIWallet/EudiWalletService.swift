@@ -1,0 +1,86 @@
+import EudiWalletKitAdapter
+import Foundation
+
+protocol EudiWalletOperating: Sendable {
+    func resolveIssuanceOffer(uri: String) async throws -> EudiIssuanceOffer
+    func issueResolvedOffer(
+        id: UUID,
+        profileID: String,
+        selectedConfigurationIDs: Set<String>,
+        transactionCode: String?,
+        promptMessage: String
+    ) async throws -> EudiIssuanceResult
+    func beginOpenID4VPPresentation(requestURI: String) async throws -> EudiPresentationRequest
+    func beginPendingIssuancePresentation(id: UUID) async throws -> EudiPresentationRequest
+    func completePresentation(
+        id: UUID,
+        pendingIssuanceID: UUID?,
+        selectedClaimIDs: Set<String>,
+        userAccepted: Bool
+    ) async throws -> EudiPresentationCompletion
+    func loadPendingIssuances() async throws -> [EudiPendingIssuance]
+    func reconcilePendingOperations() async throws
+}
+
+enum EudiPresentationCompletion: Equatable, Sendable {
+    case presentation
+    case pendingDeclined
+    case issuance(EudiIssuanceResult)
+}
+
+actor LiveEudiWalletService: EudiWalletOperating {
+    private let adapter: EudiWalletKitAdapter
+    init(adapter: EudiWalletKitAdapter) { self.adapter = adapter }
+
+    func resolveIssuanceOffer(uri: String) async throws -> EudiIssuanceOffer {
+        try await adapter.resolveIssuanceOffer(uri: uri)
+    }
+    func issueResolvedOffer(
+        id: UUID,
+        profileID: String,
+        selectedConfigurationIDs: Set<String>,
+        transactionCode: String?,
+        promptMessage: String
+    ) async throws -> EudiIssuanceResult {
+        try await adapter.issueResolvedOffer(
+            id: id,
+            profileID: profileID,
+            selectedConfigurationIDs: selectedConfigurationIDs,
+            transactionCode: transactionCode,
+            promptMessage: promptMessage
+        )
+    }
+    func beginOpenID4VPPresentation(requestURI: String) async throws -> EudiPresentationRequest {
+        try await adapter.beginOpenID4VPPresentation(requestURI: requestURI)
+    }
+    func beginPendingIssuancePresentation(id: UUID) async throws -> EudiPresentationRequest {
+        try await adapter.beginPendingIssuancePresentation(id: id)
+    }
+    func completePresentation(
+        id: UUID,
+        pendingIssuanceID: UUID?,
+        selectedClaimIDs: Set<String>,
+        userAccepted: Bool
+    ) async throws -> EudiPresentationCompletion {
+        let result = try await adapter.submitPresentation(
+            id: id,
+            selectedClaimIDs: selectedClaimIDs,
+            userAccepted: userAccepted
+        )
+        guard let pendingIssuanceID else { return .presentation }
+        guard userAccepted else { return .pendingDeclined }
+        return .issuance(try await adapter.resumePendingIssuance(
+            id: pendingIssuanceID,
+            presentationResult: result
+        ))
+    }
+    func loadPendingIssuances() async throws -> [EudiPendingIssuance] {
+        try await adapter.loadPendingIssuances()
+    }
+    func reconcilePendingOperations() async throws { try await adapter.reconcilePendingOperations() }
+}
+
+enum EudiWalletAvailability: Equatable, Sendable {
+    case available
+    case configurationRequired(String)
+}

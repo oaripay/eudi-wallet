@@ -1,4 +1,5 @@
 import Foundation
+import EudiWalletKitAdapter
 import ProtocolEngine
 import SwiftUI
 import WalletDomain
@@ -21,7 +22,14 @@ final class WalletAppModel: ObservableObject {
     @Published private(set) var loadingState: LoadingState = .idle
     @Published private(set) var isPrivacyCoverVisible = false
     @Published var selectedTab: Tab = .wallet
+    @Published private(set) var eudiFlow: EudiFlow = .idle
+    @Published var selectedIssuanceConfigurationIDs: Set<String> = []
+    @Published var selectedClaimIDs: Set<String> = []
+    @Published var transactionCode = ""
     private let allowedHosts: Set<String>
+    private var eudiWallet: (any EudiWalletOperating)?
+    private var activePendingIssuanceID: UUID?
+    private var activePendingIssuance: EudiPendingIssuance?
 
     init(allowedHosts: Set<String> = ["wallet.dev.oari.io"]) {
         self.allowedHosts = allowedHosts
@@ -40,6 +48,17 @@ final class WalletAppModel: ObservableObject {
         case issuance
         case unsupported
         case rejected(String)
+    }
+
+    enum EudiFlow: Equatable {
+        case idle
+        case working(String)
+        case issuanceReview(EudiIssuanceOffer)
+        case presentationConsent(EudiPresentationRequest)
+        case pending(EudiPendingIssuance)
+        case completed(String)
+        case failed(String)
+        case configurationRequired(String)
     }
 
     var credentialCountDescription: String {
@@ -62,7 +81,18 @@ final class WalletAppModel: ObservableObject {
         loadingState = .loading
         do {
             let dependencies = try dependencies.get()
+            eudiWallet = dependencies.eudiWallet
             try await load(credentials: dependencies.credentials, audit: dependencies.audit)
+            if let eudiWallet {
+                try await eudiWallet.reconcilePendingOperations()
+                if let pending = try await eudiWallet.loadPendingIssuances().first {
+                    activePendingIssuanceID = pending.id
+                    activePendingIssuance = pending
+                    eudiFlow = .pending(pending)
+                }
+            } else if case let .configurationRequired(message) = dependencies.eudiAvailability {
+                eudiFlow = .configurationRequired(message)
+            }
             loadingState = .loaded
         } catch {
             loadingState = .failed("Protected wallet storage is unavailable. No credential data was displayed.")
@@ -89,6 +119,140 @@ final class WalletAppModel: ObservableObject {
         scanInput = code
         classifyScan()
         selectedTab = .scan
+    }
+
+    func reviewScannedRequest() async {
+        classifyScan()
+        guard let eudiWallet else {
+            if case .idle = eudiFlow {
+                eudiFlow = .configurationRequired("EUDI wallet services are not configured for this environment.")
+            }
+            return
+        }
+        do {
+            switch scanResult {
+            case .issuance:
+                eudiFlow = .working("Checking the issuer and credential offer…")
+                let offer = try await eudiWallet.resolveIssuanceOffer(uri: scanInput)
+                selectedIssuanceConfigurationIDs = Set(offer.documents.map(\.configurationID))
+                transactionCode = ""
+                eudiFlow = .issuanceReview(offer)
+            case .presentation:
+                eudiFlow = .working("Checking the verifier and requested claims…")
+                activePendingIssuanceID = nil
+                let request = try await eudiWallet.beginOpenID4VPPresentation(requestURI: scanInput)
+                selectedClaimIDs = Set(request.claims.filter(\.required).map(\.id))
+                eudiFlow = .presentationConsent(request)
+            case .idle, .unsupported, .rejected:
+                break
+            }
+        } catch {
+            eudiFlow = .failed(Self.safeMessage(error))
+        }
+    }
+
+    func acceptIssuance() async {
+        guard case let .issuanceReview(offer) = eudiFlow, let eudiWallet else { return }
+        eudiFlow = .working("Adding the credential securely…")
+        do {
+            let result = try await eudiWallet.issueResolvedOffer(
+                id: offer.id,
+                profileID: "eudi-final-1",
+                selectedConfigurationIDs: selectedIssuanceConfigurationIDs,
+                transactionCode: transactionCode.isEmpty ? nil : transactionCode,
+                promptMessage: "Authenticate to add this credential to OARI Wallet"
+            )
+            if let pending = result.pendingIssuances.first {
+                activePendingIssuanceID = pending.id
+                activePendingIssuance = pending
+                eudiFlow = .pending(pending)
+            } else {
+                eudiFlow = .completed("Credential added to your wallet.")
+            }
+        } catch {
+            eudiFlow = .failed(Self.safeMessage(error))
+        }
+    }
+
+    func continuePendingIssuance() async {
+        guard case let .pending(pending) = eudiFlow, let eudiWallet else { return }
+        eudiFlow = .working("Preparing PID verification…")
+        do {
+            activePendingIssuanceID = pending.id
+            activePendingIssuance = pending
+            let request = try await eudiWallet.beginPendingIssuancePresentation(id: pending.id)
+            selectedClaimIDs = Set(request.claims.filter(\.required).map(\.id))
+            eudiFlow = .presentationConsent(request)
+        } catch {
+            eudiFlow = .failed(Self.safeMessage(error))
+        }
+    }
+
+    func submitPresentation(accepted: Bool) async {
+        guard case let .presentationConsent(request) = eudiFlow, let eudiWallet else { return }
+        eudiFlow = .working(accepted ? "Sharing approved claims…" : "Declining the request…")
+        do {
+            let completion = try await eudiWallet.completePresentation(
+                id: request.id,
+                pendingIssuanceID: activePendingIssuanceID,
+                selectedClaimIDs: accepted ? selectedClaimIDs : [],
+                userAccepted: accepted
+            )
+            switch completion {
+            case let .issuance(result):
+                if let pending = result.pendingIssuances.first {
+                    activePendingIssuanceID = pending.id
+                    activePendingIssuance = pending
+                    eudiFlow = .pending(pending)
+                } else {
+                    activePendingIssuanceID = nil
+                    activePendingIssuance = nil
+                    eudiFlow = .completed("Identity verified and credential added.")
+                }
+            case .pendingDeclined:
+                if let activePendingIssuance {
+                    eudiFlow = .pending(activePendingIssuance)
+                } else {
+                    eudiFlow = .failed("The pending credential could not be restored safely.")
+                }
+            case .presentation:
+                activePendingIssuanceID = nil
+                activePendingIssuance = nil
+                eudiFlow = .completed(accepted ? "Approved claims were shared." : "Request declined. Nothing was shared.")
+            }
+        } catch {
+            eudiFlow = .failed(Self.safeMessage(error))
+        }
+    }
+
+    func dismissEudiFlow() {
+        eudiFlow = .idle
+    }
+
+    var hasRecoverablePendingIssuance: Bool { activePendingIssuance != nil }
+    var preventsInteractiveFlowDismissal: Bool {
+        switch eudiFlow {
+        case .working, .presentationConsent: true
+        default: false
+        }
+    }
+
+    func returnToPendingIssuance() {
+        if let activePendingIssuance { eudiFlow = .pending(activePendingIssuance) }
+    }
+
+    private static func safeMessage(_ error: Error) -> String {
+        guard let error = error as? EudiWalletKitAdapterError else {
+            return "The wallet stopped this request because it could not be verified safely."
+        }
+        return switch error {
+        case .unapprovedIssuer: "This issuer is not approved for the active wallet profile."
+        case .unapprovedVerifier: "This verifier is not approved for the active wallet profile."
+        case .invalidTransactionCode: "Check the transaction code and try again."
+        case .requiredClaimMissing: "Required claims must remain selected."
+        case .recoveryRequired: "Wallet recovery must finish before this action can continue."
+        default: "The wallet stopped this request because it could not be verified safely."
+        }
     }
 
     func setPrivacyCoverVisible(_ visible: Bool) {

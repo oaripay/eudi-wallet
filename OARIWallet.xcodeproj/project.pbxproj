@@ -18,6 +18,7 @@
 		50E4B63A02FCE912491E9274 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 051EC40A072443D8A1AD6F8F /* Preview Assets.xcassets */; };
 		594A62A9AAF49B474F8E5919 /* ProtocolEngine in Frameworks */ = {isa = PBXBuildFile; productRef = 8BC9D27B41DE902451FCAF84 /* ProtocolEngine */; };
 		651500D1A26EC05312D654D2 /* WalletAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06FBC4FAFD9C0062CC6BDDBF /* WalletAppModel.swift */; };
+		6AF6FC66EC22DF0D8193E571 /* EudiFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8CC54E8F1C533A5AE59F3A8 /* EudiFlowView.swift */; };
 		859822E8E1B9F5710C7CB11D /* OARIWalletApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1246C8F696C46B04A1F8C118 /* OARIWalletApp.swift */; };
 		878B6EB09C741E008DD33CB7 /* WalletRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93B86C1FF880C3DDA014A666 /* WalletRootView.swift */; };
 		9B9646549CF1CFA834FDDD22 /* EudiWalletKitAdapter in Frameworks */ = {isa = PBXBuildFile; productRef = F6FF869902F653519E2D04AC /* EudiWalletKitAdapter */; };
@@ -26,6 +27,7 @@
 		CE2111B0BC3DF529200E9EDD /* WalletScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1280C71BCEB9EEB97805CEAB /* WalletScreens.swift */; };
 		CFF9D5AA0DA0A72C9EB2712F /* WalletKitRuntimeProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = E23FAAE97782FC8801662DB7 /* WalletKitRuntimeProbe.swift */; };
 		DA9C95C3A1EBB113099E759B /* WalletDomain in Frameworks */ = {isa = PBXBuildFile; productRef = C8E03DE70A77820E952DA657 /* WalletDomain */; };
+		EE8228163B0C5EF39B5E53E0 /* EudiWalletService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5C0302D6E6519B8008541E9 /* EudiWalletService.swift */; };
 		F983126C9895DEA25170F26E /* WalletKitIOSIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1819007F478B7BF117F868C5 /* WalletKitIOSIntegrationTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -63,11 +65,13 @@
 		AE13F939F92953AFB41FC1B0 /* eudi-wallet */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "eudi-wallet"; path = .; sourceTree = SOURCE_ROOT; };
 		BEA31C9F65F5B50D6F48CEC6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		BF90239235A8198B0AEFDAB8 /* OARIWallet.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = OARIWallet.entitlements; sourceTree = "<group>"; };
+		C5C0302D6E6519B8008541E9 /* EudiWalletService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EudiWalletService.swift; sourceTree = "<group>"; };
 		DED46F5E7BC94486EFD7CC64 /* TestTrustAnchor.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = TestTrustAnchor.bin; sourceTree = "<group>"; };
 		E23FAAE97782FC8801662DB7 /* WalletKitRuntimeProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletKitRuntimeProbe.swift; sourceTree = "<group>"; };
 		E5CF2849E79084493655BF0B /* AppConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfiguration.swift; sourceTree = "<group>"; };
 		E6EB7F18DFECA15C3F21B5B9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		FCCFFBE7BDE16FED06107EF7 /* OARIWallet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OARIWallet.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E8CC54E8F1C533A5AE59F3A8 /* EudiFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EudiFlowView.swift; sourceTree = "<group>"; };
+		FCCFFBE7BDE16FED06107EF7 /* OARIWallet.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = OARIWallet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -120,6 +124,8 @@
 				31949355B1B8D2E8A779762C /* AppIcon.icon */,
 				E6EB7F18DFECA15C3F21B5B9 /* Assets.xcassets */,
 				4A220056806DA8DE0EFDBC06 /* CameraQRScannerView.swift */,
+				E8CC54E8F1C533A5AE59F3A8 /* EudiFlowView.swift */,
+				C5C0302D6E6519B8008541E9 /* EudiWalletService.swift */,
 				BEA31C9F65F5B50D6F48CEC6 /* Info.plist */,
 				BF90239235A8198B0AEFDAB8 /* OARIWallet.entitlements */,
 				1246C8F696C46B04A1F8C118 /* OARIWalletApp.swift */,
@@ -302,6 +308,8 @@
 			files = (
 				353091C3A41439ABD24FDAC7 /* AppConfiguration.swift in Sources */,
 				A0754F016378502A9272573A /* CameraQRScannerView.swift in Sources */,
+				6AF6FC66EC22DF0D8193E571 /* EudiFlowView.swift in Sources */,
+				EE8228163B0C5EF39B5E53E0 /* EudiWalletService.swift in Sources */,
 				859822E8E1B9F5710C7CB11D /* OARIWalletApp.swift in Sources */,
 				170183FED99317C32B581BE0 /* WalletAppDependencies.swift in Sources */,
 				651500D1A26EC05312D654D2 /* WalletAppModel.swift in Sources */,
@@ -470,7 +478,6 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_ASSET_PATHS = "\"OARIWallet/Preview Content\"";
-				DEVELOPMENT_TEAM = 5JT6DK4C4M;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OARIWallet/Info.plist;
@@ -589,7 +596,6 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_ASSET_PATHS = "\"OARIWallet/Preview Content\"";
-				DEVELOPMENT_TEAM = 5JT6DK4C4M;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = OARIWallet/Info.plist;
@@ -691,7 +697,6 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_ASSET_PATHS = "\"OARIWallet/Preview Content\"";
-				DEVELOPMENT_TEAM = 5JT6DK4C4M;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = NO;

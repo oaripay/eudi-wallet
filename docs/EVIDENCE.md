@@ -372,6 +372,24 @@ These are absence-of-implementation failures, not regressions.
 
 ### Loop B — complete EUDI/eIDAS application
 
+#### EUDI issuance and presentation UI milestone
+
+- Added an app-specific `EudiWalletOperating` service boundary and live adapter
+  implementation; Wallet Kit presentation results and redirect URLs remain inside the
+  service while the model receives bounded completion states.
+- Added explicit scanner resolution, issuance review/selection/transaction-code,
+  ordinary VP claim consent, pending PID presentation, resumed issuance, working,
+  configuration-required, success, redacted failure and recovery states using
+  `OariDesignSystem` and native SwiftUI controls.
+- Pending PID decline and transient failure preserve the pending credential. Consent
+  sheets require explicit approve/decline, and a persistent scanner card restores a
+  dismissed pending credential.
+- Independent review cycle 3 returned `PASS` with no BLOCKER/MAJOR findings.
+- Verification: full package tests pass 71 tests in 18 suites; Debug
+  `WalletAppModelTests` pass 11 tests with warnings-as-errors app compilation. One
+  transient simulator `No such process` launch was recorded separately; a subsequent
+  complete test run passed.
+
 #### Presentation-during-issuance adapter milestone
 
 - Acceptance: expose Wallet Kit pending issuance only through neutral handles; bind

@@ -110,7 +110,7 @@ struct WalletScannerView: View {
                             .accessibilityLabel("Wallet code")
                             .accessibilityIdentifier("scanner.input")
                         Button("Review code") {
-                            model.classifyScan()
+                            Task { await model.reviewScannedRequest() }
                         }
                         .buttonStyle(OariPrimaryButtonStyle())
                         .disabled(model.scanInput.isEmpty)
@@ -123,6 +123,34 @@ struct WalletScannerView: View {
                         }
                         .accessibilityIdentifier("scanner.camera")
                     }
+                }
+                if case let .configurationRequired(message) = model.eudiFlow {
+                    OariCard {
+                        VStack(alignment: .leading, spacing: OariSpacing.x3) {
+                            Label("Wallet setup required", systemImage: "wrench.and.screwdriver.fill")
+                                .font(OariTypography.heading)
+                            Text(message).foregroundStyle(OariColor.textSecondary(scheme))
+                            Text("Credential operations remain disabled until an approved trust and attestation profile is installed.")
+                                .font(.caption)
+                                .foregroundStyle(OariColor.textSecondary(scheme))
+                        }
+                    }
+                    .accessibilityIdentifier("scanner.configurationRequired")
+                }
+                if model.hasRecoverablePendingIssuance {
+                    OariCard {
+                        VStack(alignment: .leading, spacing: OariSpacing.x3) {
+                            Label("Pending credential", systemImage: "hourglass.circle.fill")
+                                .font(OariTypography.heading)
+                            Text("Identity verification is still required before the issuer can finish this credential.")
+                                .foregroundStyle(OariColor.textSecondary(scheme))
+                            Button("Continue pending credential") {
+                                model.returnToPendingIssuance()
+                            }
+                            .buttonStyle(OariPrimaryButtonStyle())
+                        }
+                    }
+                    .accessibilityIdentifier("scanner.pendingCredential")
                 }
                 ScanResultView(result: model.scanResult, input: model.scanInput)
                 Spacer()

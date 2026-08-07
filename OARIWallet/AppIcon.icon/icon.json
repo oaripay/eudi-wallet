@@ -16,7 +16,19 @@
             "solid" : "extended-srgb:0.00000,0.53333,1.00000,1.00000"
           },
           "image-name" : "oari.svg",
-          "name" : "oari"
+          "name" : "oari",
+          "position-specializations" : [
+            {
+              "idiom" : "square",
+              "value" : {
+                "scale" : 1.3,
+                "translation-in-points" : [
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
         }
       ],
       "shadow" : {

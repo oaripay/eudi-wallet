@@ -38,6 +38,21 @@ struct WalletRootView: View {
                     .accessibilityIdentifier("privacy.cover")
             }
         }
+        .sheet(isPresented: Binding(
+            get: {
+                switch model.eudiFlow {
+                case .issuanceReview, .presentationConsent, .pending, .completed, .failed, .working:
+                    true
+                case .idle, .configurationRequired:
+                    false
+                }
+            },
+            set: { if !$0 { model.dismissEudiFlow() } }
+        )) {
+            EudiFlowView(model: model)
+                .presentationDetents([.medium, .large])
+                .interactiveDismissDisabled(model.preventsInteractiveFlowDismissal)
+        }
     }
 }
 

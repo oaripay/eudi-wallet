@@ -7,6 +7,8 @@ struct WalletAppDependencies: Sendable {
     let credentials: any CredentialMetadataRepository
     let audit: any AuditRepository
     let localAuthenticator: any LocalAuthenticator
+    let eudiWallet: (any EudiWalletOperating)?
+    let eudiAvailability: EudiWalletAvailability
 
     static func make(configuration: AppConfiguration = .current()) -> Result<WalletAppDependencies, Error> {
 #if DEBUG
@@ -38,7 +40,11 @@ struct WalletAppDependencies: Sendable {
                     directory: root.appendingPathComponent("audit", isDirectory: true),
                     keyStore: keyStore
                 ),
-                localAuthenticator: SystemLocalAuthenticator()
+                localAuthenticator: SystemLocalAuthenticator(),
+                eudiWallet: nil,
+                eudiAvailability: .configurationRequired(
+                    "Install an approved staging or production EUDI trust profile to enable wallet operations."
+                )
             )
         }
     }
@@ -51,7 +57,9 @@ struct WalletAppDependencies: Sendable {
         WalletAppDependencies(
             credentials: FixtureCredentialRepository(credentials: credentials),
             audit: FixtureAuditRepository(events: events),
-            localAuthenticator: FixtureLocalAuthenticator()
+            localAuthenticator: FixtureLocalAuthenticator(),
+            eudiWallet: nil,
+            eudiAvailability: .configurationRequired("Preview mode does not contact credential services.")
         )
     }
 
