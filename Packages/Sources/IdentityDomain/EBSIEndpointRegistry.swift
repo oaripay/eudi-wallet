@@ -51,6 +51,16 @@ public struct EBSIChainEndpoint: Codable, Equatable, Identifiable, Sendable {
         }
         return url
     }
+
+    public static func oariDevelopment() throws -> EBSIChainEndpoint {
+        try EBSIChainEndpoint(
+            id: "oari-development",
+            displayName: "OARI EBSI Development",
+            didRegistryURL: URL(string: "https://ebsi.oari.io/did-registry/v5/identifiers")!,
+            trustedIssuersRegistryURL: URL(string: "https://ebsi.oari.io/trusted-issuers-registry/v5/issuers")!,
+            trustedSchemasRegistryURL: URL(string: "https://ebsi.oari.io/trusted-schemas-registry/v3/schemas")!
+        )
+    }
 }
 
 public enum EBSIEndpointError: Error, Equatable, Sendable {

@@ -11,6 +11,10 @@ struct EBSIEndpointRegistryTests {
             try endpoint(id: "official-candidate", host: "hub.example"),
         ])
         #expect(registry.endpoints.map(\.id) == ["oari", "official-candidate"])
+        let oari = try EBSIChainEndpoint.oariDevelopment()
+        #expect(oari.didRegistryURL.absoluteString == "https://ebsi.oari.io/did-registry/v5/identifiers")
+        #expect(oari.trustedIssuersRegistryURL.path == "/trusted-issuers-registry/v5/issuers")
+        #expect(oari.trustedSchemasRegistryURL.path == "/trusted-schemas-registry/v3/schemas")
     }
 
     @Test("Production registry requires explicitly approved endpoint IDs")

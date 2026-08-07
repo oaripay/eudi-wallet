@@ -206,6 +206,15 @@ These are absence-of-implementation failures, not regressions.
   surfaces, plus mobile ES256/ES256K. Generic VCDM2 JWT, EdDSA and RSA remain disabled.
   Independent backend-selection review cycle 1 returned `PASS`; no SDK dependency was
   added pending real counterpart fixtures.
+- Workspace-pinned credential foundation now records OARI VCDM2 `application/vc+jwt`
+  shape, EnvelopedVerifiableCredential VP wrapping, ES256/did:key OpenID metadata,
+  DIDR v5/TIR v5/TSR v3, FullJsonSchemaValidator2021, BitstringStatusListEntry and
+  IssuanceCertificate requirements. Added isolated `EbsiW3CBackend` with SpruceKit
+  Mobile 0.20.0, exact profile/envelope inspection, profile-bound SDK verification
+  for supported representations, and explicit generic VCDM2 JWT rejection because
+  Spruce `JwtVc` is V1. Development trust warnings apply only to untrusted verdicts;
+  invalid/indeterminate and production untrusted requests reject. Independent review
+  cycle 2 returned `PASS`; focused backend tests pass 5 tests/2 suites.
 | Wallet Kit | `eudi-lib-ios-wallet-kit` v0.39.1, commit `79005ab4bf0399238c1c9ebff9ee7d8a42c521f9` | Exact package resolved; adapter foundation under Loop A review |
 | OARI LPID | `provisionalOariLPID`, development only | Backend implemented with provisional status index |
 | EBSI onboarding | `ebsiOnboardingCredential`, development only | Backend recipient proof bypass is a security blocker |

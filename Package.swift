@@ -18,6 +18,7 @@ let package = Package(
         .library(name: "OariDesignSystem", targets: ["OariDesignSystem"]),
         .library(name: "IdentityDomain", targets: ["IdentityDomain"]),
         .library(name: "EudiWalletKitAdapter", targets: ["EudiWalletKitAdapter"]),
+        .library(name: "EbsiW3CBackend", targets: ["EbsiW3CBackend"]),
     ],
     dependencies: [
         .package(
@@ -39,6 +40,10 @@ let package = Package(
         .package(
             url: "https://github.com/airsidemobile/JOSESwift.git",
             exact: "3.0.0"
+        ),
+        .package(
+            url: "https://github.com/spruceid/sprucekit-mobile.git",
+            exact: "0.20.0"
         ),
     ],
     targets: [
@@ -100,6 +105,20 @@ let package = Package(
             ],
             path: "Packages/Sources/EudiWalletKitAdapter"
         ),
+        .target(
+            name: "EbsiW3CBackend",
+            dependencies: [
+                "IdentityDomain",
+                "TrustDomain",
+                "WalletDomain",
+                .product(
+                    name: "SpruceIDMobileSdkRs",
+                    package: "sprucekit-mobile",
+                    condition: .when(platforms: [.iOS])
+                ),
+            ],
+            path: "Packages/Sources/EbsiW3CBackend"
+        ),
         .testTarget(
             name: "WalletDomainTests",
             dependencies: ["WalletDomain"],
@@ -140,6 +159,11 @@ let package = Package(
             name: "EudiWalletKitAdapterTests",
             dependencies: ["EudiWalletKitAdapter"],
             path: "Packages/Tests/EudiWalletKitAdapterTests"
+        ),
+        .testTarget(
+            name: "EbsiW3CBackendTests",
+            dependencies: ["EbsiW3CBackend"],
+            path: "Packages/Tests/EbsiW3CBackendTests"
         ),
     ],
     swiftLanguageModes: [.v6]

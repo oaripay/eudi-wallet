@@ -1,0 +1,204 @@
+import Foundation
+
+public enum W3CDataModelVersion: String, Codable, Equatable, Sendable {
+    case v1_1 = "1.1"
+    case v2_0 = "2.0"
+}
+
+public enum EbsiCredentialRepresentation: String, Codable, Equatable, Sendable {
+    case jwtVcJson = "jwt_vc_json"
+    case jwtVcJsonLd = "jwt_vc_json-ld"
+    case dataIntegrity = "ldp_vc"
+    case vcdm2SdJwt = "vcdm2_sd_jwt"
+    case dcSdJwt = "dc+sd-jwt"
+    case vcdm2Jwt = "application/vc+jwt"
+}
+
+public enum EbsiKeyAlgorithm: String, Codable, Equatable, Sendable {
+    case es256 = "ES256"
+    case es256K = "ES256K"
+    case rs256 = "RS256"
+}
+
+public struct EbsiCredentialProfile: Codable, Equatable, Identifiable, Sendable {
+    public let id: String
+    public let dataModel: W3CDataModelVersion
+    public let representation: EbsiCredentialRepresentation
+    public let allowedAlgorithms: Set<EbsiKeyAlgorithm>
+    public let allowedCryptosuites: Set<String>
+    public let context: String
+    public let schemaType: String?
+    public let statusType: String?
+    public let termsOfUseType: String?
+
+    public init(
+        id: String,
+        dataModel: W3CDataModelVersion,
+        representation: EbsiCredentialRepresentation,
+        allowedAlgorithms: Set<EbsiKeyAlgorithm>,
+        allowedCryptosuites: Set<String> = [],
+        context: String,
+        schemaType: String? = nil,
+        statusType: String? = nil,
+        termsOfUseType: String? = nil
+    ) throws {
+        guard !id.isEmpty, !allowedAlgorithms.isEmpty || !allowedCryptosuites.isEmpty else {
+            throw EbsiCredentialError.invalidProfile
+        }
+        self.id = id
+        self.dataModel = dataModel
+        self.representation = representation
+        self.allowedAlgorithms = allowedAlgorithms
+        self.allowedCryptosuites = allowedCryptosuites
+        self.context = context
+        self.schemaType = schemaType
+        self.statusType = statusType
+        self.termsOfUseType = termsOfUseType
+    }
+
+    public static func oariVcdm2Jwt() throws -> EbsiCredentialProfile {
+        try EbsiCredentialProfile(
+            id: "oari-ebsi-vcdm2-vc-jwt",
+            dataModel: .v2_0,
+            representation: .vcdm2Jwt,
+            allowedAlgorithms: [.es256],
+            context: "https://www.w3.org/ns/credentials/v2",
+            schemaType: "FullJsonSchemaValidator2021",
+            statusType: "BitstringStatusListEntry",
+            termsOfUseType: "IssuanceCertificate"
+        )
+    }
+}
+
+public enum EbsiCredentialError: Error, Equatable, Sendable {
+    case invalidProfile
+    case malformedCredential
+    case profileMismatch
+    case algorithmNotAllowed
+    case unsupportedRepresentation
+    case verificationFailed
+    case backendUnavailable
+}
+
+public struct EbsiCredentialInspector: Sendable {
+    public init() {}
+
+    public func inspectCompactJWT(
+        _ compactJWT: String,
+        profile: EbsiCredentialProfile
+    ) throws -> [String: AnySendableJSON] {
+        let parts = compactJWT.split(separator: ".")
+        guard parts.count == 3,
+              let header = try Self.decodeJSON(String(parts[0])),
+              let payload = try Self.decodeJSON(String(parts[1])) else {
+            throw EbsiCredentialError.malformedCredential
+        }
+        guard let algorithm = header["alg"]?.string.flatMap(EbsiKeyAlgorithm.init(rawValue:)),
+              profile.allowedAlgorithms.contains(algorithm) else {
+            throw EbsiCredentialError.algorithmNotAllowed
+        }
+        guard profile.representation == .jwtVcJson ||
+                profile.representation == .jwtVcJsonLd ||
+                profile.representation == .vcdm2Jwt else {
+            throw EbsiCredentialError.unsupportedRepresentation
+        }
+        if profile.representation == .vcdm2Jwt, payload["vc"] != nil {
+            throw EbsiCredentialError.profileMismatch
+        }
+        let credential = payload["vc"]?.object ?? payload
+        guard credential["@context"]?.contains(string: profile.context) == true,
+              credential["type"]?.contains(string: "VerifiableCredential") == true else {
+            throw EbsiCredentialError.profileMismatch
+        }
+        if let schemaType = profile.schemaType,
+           credential["credentialSchema"]?.object?["type"]?.string != schemaType {
+            throw EbsiCredentialError.profileMismatch
+        }
+        if let statusType = profile.statusType,
+           credential["credentialStatus"]?.object?["type"]?.string != statusType {
+            throw EbsiCredentialError.profileMismatch
+        }
+        if let termsOfUseType = profile.termsOfUseType,
+           credential["termsOfUse"]?.object?["type"]?.string != termsOfUseType {
+            throw EbsiCredentialError.profileMismatch
+        }
+        return credential
+    }
+
+    public func validateEnvelope(_ credential: Data, profile: EbsiCredentialProfile) throws {
+        switch profile.representation {
+        case .jwtVcJson, .jwtVcJsonLd, .vcdm2Jwt:
+            let compact = String(decoding: credential, as: UTF8.self)
+            _ = try inspectCompactJWT(compact, profile: profile)
+        case .vcdm2SdJwt, .dcSdJwt:
+            guard let issuerJWT = String(decoding: credential, as: UTF8.self).split(separator: "~").first,
+                  let algorithm = try Self.algorithm(in: String(issuerJWT)),
+                  profile.allowedAlgorithms.contains(algorithm) else {
+                throw EbsiCredentialError.algorithmNotAllowed
+            }
+        case .dataIntegrity:
+            let object = try JSONDecoder().decode([String: AnySendableJSON].self, from: credential)
+            guard let cryptosuite = object["proof"]?.object?["cryptosuite"]?.string,
+                  profile.allowedCryptosuites.contains(cryptosuite) else {
+                throw EbsiCredentialError.algorithmNotAllowed
+            }
+        }
+    }
+
+    private static func decodeJSON(_ value: String) throws -> [String: AnySendableJSON]? {
+        var base64 = value.replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+        guard let data = Data(base64Encoded: base64) else { return nil }
+        return try JSONDecoder().decode([String: AnySendableJSON].self, from: data)
+    }
+
+    private static func algorithm(in compactJWT: String) throws -> EbsiKeyAlgorithm? {
+        let parts = compactJWT.split(separator: ".")
+        guard let encoded = parts.first,
+              let header = try decodeJSON(String(encoded)) else { return nil }
+        return header["alg"]?.string.flatMap(EbsiKeyAlgorithm.init(rawValue:))
+    }
+}
+
+public enum AnySendableJSON: Codable, Equatable, Sendable {
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case object([String: AnySendableJSON])
+    case array([AnySendableJSON])
+    case null
+
+    public init(from decoder: any Decoder) throws {
+        let value = try decoder.singleValueContainer()
+        if value.decodeNil() { self = .null }
+        else if let object = try? value.decode([String: AnySendableJSON].self) { self = .object(object) }
+        else if let array = try? value.decode([AnySendableJSON].self) { self = .array(array) }
+        else if let string = try? value.decode(String.self) { self = .string(string) }
+        else if let bool = try? value.decode(Bool.self) { self = .bool(bool) }
+        else if let number = try? value.decode(Double.self) { self = .number(number) }
+        else { throw EbsiCredentialError.malformedCredential }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var value = encoder.singleValueContainer()
+        switch self {
+        case let .string(v): try value.encode(v)
+        case let .number(v): try value.encode(v)
+        case let .bool(v): try value.encode(v)
+        case let .object(v): try value.encode(v)
+        case let .array(v): try value.encode(v)
+        case .null: try value.encodeNil()
+        }
+    }
+
+    var string: String? { if case let .string(value) = self { value } else { nil } }
+    var object: [String: AnySendableJSON]? { if case let .object(value) = self { value } else { nil } }
+    func contains(string: String) -> Bool {
+        switch self {
+        case let .string(value): value == string
+        case let .array(values): values.contains { $0.string == string }
+        default: false
+        }
+    }
+}
