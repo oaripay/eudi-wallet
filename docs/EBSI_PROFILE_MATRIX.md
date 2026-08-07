@@ -5,15 +5,19 @@ until every column is pinned from an actual issuer/verifier interoperability fix
 
 | Profile | VCDM | Representation | Securing mechanism | DID/key | Schema | Status | OpenID revision | State |
 |---|---|---|---|---|---|---|---|---|
-| EBSI 1.1 JWT VC | 1.1 | To be supplied | To be supplied | P-256/ES256 and secp256k1/ES256K candidates | To be supplied | To be supplied | To be supplied | Blocked |
-| EBSI 2.0 JOSE VC | 2.0 | To be supplied | To be supplied | P-256/ES256 and secp256k1/ES256K candidates | To be supplied | To be supplied | To be supplied | Blocked |
+| EBSI 1.1 JWT VC | 1.1 | `jwt_vc_json` or `jwt_vc_json-ld` candidate | Compact JWS candidate | P-256/ES256 or secp256k1/ES256K candidate | To be supplied | To be supplied | To be supplied | Blocked |
+| EBSI 1.1/2.0 Data Integrity VC | Exact version per fixture | `ldp_vc` JSON candidate | Exact cryptosuite to be supplied | Exact verification method to be supplied | To be supplied | To be supplied | To be supplied | Blocked |
+| EBSI 2.0 SD-JWT | 2.0 | SDK-specific VCDM2 SD-JWT candidate | SD-JWT/JWS candidate | P-256/ES256 or secp256k1/ES256K candidate | To be supplied | To be supplied | To be supplied | Blocked |
+| EBSI 2.0 JWT VC | 2.0 | To be supplied | To be supplied | To be supplied | To be supplied | To be supplied | To be supplied | Unsupported by selected SDK until demonstrated |
 
 ## Key inventory
 
 - Implemented locally today: P-256/ES256 and OARI P-256 `did:key`.
 - Present only as a transitive dependency: secp256k1. No reviewed ES256K wallet-key
   provider, DID encoding or verifier integration exists yet.
-- Not enabled without counterpart evidence: Ed25519/EdDSA, RSA/PS256, or other curves.
+- SpruceKit Mobile's reviewed FFI algorithm mapping exposes ES256 and ES256K. Its Rust
+  graph contains Ed25519/RSA capabilities, but they are not enabled for OARI without a
+  reviewed mobile boundary and counterpart evidence.
 - A JWK `alg` or DID verification method is never accepted merely because its name is
   recognized; proof purpose, controller, relationship, algorithm and signature must
   all match the selected profile.

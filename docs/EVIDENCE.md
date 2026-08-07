@@ -200,6 +200,12 @@ These are absence-of-implementation failures, not regressions.
 - Key inventory records P-256/ES256 as implemented, secp256k1/ES256K as present only
   transitively/unintegrated, and EdDSA/RSA as disabled pending evidence.
 - Independent review cycle 2 returned `PASS`; focused endpoint tests pass 4 cases.
+- Backend bake-off: archived DIDKit was rejected at commit `57a3b451`; SpruceKit
+  Mobile `0.20.0` (`96efdc9f`) was selected only for a development bake-off. Review
+  confirms VCDM1 JWT VC, version-agnostic v1/v2 Data Integrity JSON and VCDM2 SD-JWT
+  surfaces, plus mobile ES256/ES256K. Generic VCDM2 JWT, EdDSA and RSA remain disabled.
+  Independent backend-selection review cycle 1 returned `PASS`; no SDK dependency was
+  added pending real counterpart fixtures.
 | Wallet Kit | `eudi-lib-ios-wallet-kit` v0.39.1, commit `79005ab4bf0399238c1c9ebff9ee7d8a42c521f9` | Exact package resolved; adapter foundation under Loop A review |
 | OARI LPID | `provisionalOariLPID`, development only | Backend implemented with provisional status index |
 | EBSI onboarding | `ebsiOnboardingCredential`, development only | Backend recipient proof bypass is a security blocker |
