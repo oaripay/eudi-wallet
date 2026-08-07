@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Reviewed public did:key interoperability vectors are not secrets"
+regexTarget = "secret"
+regexes = [
+  '''^zDnaepsL7AXenJkVYdkh5KuKsSU7Ykh7kyXaLLU7auN9FWSiZ$''',
+  '''^zyexDvRXWGAnB73MayYtJcmdPVdYzx9L5XCXz5Ei7XU2PLGt2h$'''
+]

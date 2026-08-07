@@ -1,0 +1,15 @@
+{
+  "credential_issuer": "https://issuer.example",
+  "credentials": [
+    {
+      "format": "jwt_vc_json",
+      "types": ["VerifiableCredential", "ProvisionalOariLPID"]
+    }
+  ],
+  "grants": {
+    "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+      "pre-authorized_code": "fixture-code",
+      "tx_code": {"input_mode": "numeric"}
+    }
+  }
+}

@@ -3,11 +3,11 @@ import ProfileDomain
 
 public struct PresentationIntakeCoordinator: Sendable {
     private let parser: PresentationRequestParser
-    private let replay: ReplayProtectionStore
+    private let replay: any ReplayProtection
 
     public init(
         parser: PresentationRequestParser = PresentationRequestParser(),
-        replay: ReplayProtectionStore
+        replay: any ReplayProtection
     ) {
         self.parser = parser
         self.replay = replay

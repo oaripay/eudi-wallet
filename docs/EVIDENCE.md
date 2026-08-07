@@ -95,12 +95,63 @@ VCI and 6c execution wiring, with one independent review and one final commit.
   state, links classified input to a non-executing Not verified review screen, and
   uses a semantic action-foreground token. Cycle 2 returned PASS with a non-gating
   stale simulator-test count, corrected above.
-- Commit: this milestone commit; exact SHA is recorded in the session ledger after creation.
+- Commit: `005f46f8689c4eed384616de85ea96ae8c5c70ca`.
 
 ### M8: Interoperability and release readiness
 
 - DID/EBSI trust and status clients, reviewed Wallet Kit pin, iGrant fixtures, SBOM,
   SAST/privacy evidence, physical-device and certification matrix.
+
+#### M8 acceptance
+
+1. P-256 `did:key` is compatible with OARI multicodec behavior and fails closed for
+   malformed/unsupported methods.
+2. Replay claims persist encrypted across restart without storing plaintext nonces.
+3. EBSI DID and credential-status clients enforce HTTPS/host/size/status boundaries
+   and return evidence for trust policy evaluation; status tokens require a verifier.
+4. iGrant Draft 13/18 behavior is isolated from final OpenID parsers and exercised by
+   committed fixtures.
+5. Secret scan, local SAST and SPDX SBOM commands run with recorded versions/results.
+6. Wallet Kit, physical-device, Member-State, certification, production trust,
+   privacy/legal and penetration-test gaps remain explicit blockers, never inferred
+   as passed.
+
+- Review cycle: 2
+- Checks:
+  - First `swift test` after persistent replay and `did:key`: pass, 47 tests in 13 suites.
+  - `swift test` after EBSI/status and iGrant fixtures: pass, 51 tests in 15 suites.
+  - `gitleaks 8.30.1`: pass, seven commits and approximately 220 KB scanned, no leaks.
+  - First Semgrep run failed on an unquoted YAML pattern; fixed. `semgrep 1.172.0`
+    then passed two local Swift rules over 40 source targets with zero findings.
+  - First Syft run rejected an invalid exclusion pattern; fixed. `syft 1.50.0`
+    generated `sbom.spdx.json` in SPDX 2.3 format.
+  - Repository private-material scan: pass, 78 files at this checkpoint.
+  - Direct execution of the TypeScript backend vector generator was unavailable
+    because workspace `tsx` dependencies are not installed. A fixed P-256 generator
+    vector independently confirms OARI `p256-pub` multicodec bytes and Base58BTC.
+  - Final `swift test`: pass, 52 tests in 15 suites before the fixed-vector addition.
+  - Simulator `xcodebuild ... test`: pass, three app-model tests.
+  - `gitleaks dir`: pass, approximately 29.27 MB scanned, no leaks.
+  - Final Semgrep: pass, two Swift rules and zero findings.
+  - First final working-tree Gitleaks scan flagged two public `did:key` vectors. A
+    narrow exact-vector allowlist was added; rerun passed with no leaks.
+  - Final `swift test`: pass, 55 tests in 15 suites.
+  - Final simulator `xcodebuild ... test`: pass, three app-model tests.
+  - Final Gitleaks history and working-tree scans: pass, working tree approximately
+    29.64 MB, no leaks.
+  - Final Semgrep: pass, 41 Swift targets, two rules, zero findings.
+  - Final repository private-material scan: pass, 81 files.
+  - Syft 1.50.0 regenerated the committed SPDX 2.3 SBOM after final changes.
+- Review findings: cycle 1 found off-curve/non-canonical `did:key` acceptance and
+  redirect-following, post-buffer network limits. Derivation now validates the P-256
+  point and canonical varint; negative tests cover both. EBSI/status clients now use
+  a redirect-rejecting HTTPS transport that streams bytes and aborts at the cap,
+  validates final origin, rejects userinfo, and invokes status verification only
+  after a bounded successful response. CI pins scanner versions. Cycle 2 returned
+  PASS with minor direct-transport test debt. Public `did:key` input is additionally
+  length-bounded after review.
+- Commit: this milestone commit; exact SHA is recorded in the session ledger after creation.
+- Commit: pending.
 
 ## Baseline failures
 

@@ -16,6 +16,7 @@ let package = Package(
         .library(name: "PresentationDomain", targets: ["PresentationDomain"]),
         .library(name: "ProtocolEngine", targets: ["ProtocolEngine"]),
         .library(name: "OariDesignSystem", targets: ["OariDesignSystem"]),
+        .library(name: "IdentityDomain", targets: ["IdentityDomain"]),
     ],
     targets: [
         .target(
@@ -24,7 +25,7 @@ let package = Package(
         ),
         .target(
             name: "WalletVault",
-            dependencies: ["WalletDomain"],
+            dependencies: ["WalletDomain", "ProtocolEngine"],
             path: "Packages/Sources/WalletVault"
         ),
         .target(
@@ -51,6 +52,11 @@ let package = Package(
             name: "OariDesignSystem",
             path: "Packages/Sources/OariDesignSystem"
         ),
+        .target(
+            name: "IdentityDomain",
+            dependencies: ["TrustDomain"],
+            path: "Packages/Sources/IdentityDomain"
+        ),
         .testTarget(
             name: "WalletDomainTests",
             dependencies: ["WalletDomain"],
@@ -72,6 +78,11 @@ let package = Package(
             path: "Packages/Tests/TrustDomainTests"
         ),
         .testTarget(
+            name: "IdentityDomainTests",
+            dependencies: ["IdentityDomain"],
+            path: "Packages/Tests/IdentityDomainTests"
+        ),
+        .testTarget(
             name: "PresentationDomainTests",
             dependencies: ["PresentationDomain", "ProfileDomain", "TrustDomain"],
             path: "Packages/Tests/PresentationDomainTests"
@@ -79,7 +90,8 @@ let package = Package(
         .testTarget(
             name: "ProtocolEngineTests",
             dependencies: ["ProtocolEngine", "PresentationDomain", "ProfileDomain", "TrustDomain", "WalletDomain"],
-            path: "Packages/Tests/ProtocolEngineTests"
+            path: "Packages/Tests/ProtocolEngineTests",
+            resources: [.process("Fixtures")]
         ),
     ],
     swiftLanguageModes: [.v6]

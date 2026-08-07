@@ -1,0 +1,12 @@
+{
+  "id": "igrant-draft18-request",
+  "client_id": "https://verifier.example",
+  "response_uri": "https://verifier.example/callback",
+  "nonce": "1234567890123456",
+  "exp": 2000000000,
+  "state": "fixture-state",
+  "presentation_definition": {
+    "id": "igrant-presentation-definition",
+    "input_descriptors": []
+  }
+}
