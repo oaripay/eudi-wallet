@@ -144,6 +144,7 @@ public struct EudiOperationalConfiguration: Sendable {
     public let allowedIssuerOrigins: Set<String>
     public let allowedVerifierOrigins: Set<String>
     public let networkTransport: (any EudiNetworkTransport)?
+    public let allowUnregisteredDevelopmentCounterparties: Bool
 
     public init(
         clientID: String,
@@ -158,7 +159,8 @@ public struct EudiOperationalConfiguration: Sendable {
         allowedIssuerOrigins: Set<String>,
         allowedVerifierOrigins: Set<String>,
         allowedApplicationRedirectOrigins: Set<String>,
-        networkTransport: (any EudiNetworkTransport)? = nil
+        networkTransport: (any EudiNetworkTransport)? = nil,
+        allowUnregisteredDevelopmentCounterparties: Bool = false
     ) throws {
         let clientID = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
         let allowedIssuerOrigins = try Self.validatedOrigins(allowedIssuerOrigins)
@@ -193,6 +195,7 @@ public struct EudiOperationalConfiguration: Sendable {
         self.allowedIssuerOrigins = allowedIssuerOrigins
         self.allowedVerifierOrigins = allowedVerifierOrigins
         self.networkTransport = networkTransport
+        self.allowUnregisteredDevelopmentCounterparties = allowUnregisteredDevelopmentCounterparties
     }
 
     private static func validatedOrigins(_ origins: Set<String>) throws -> Set<String> {
@@ -204,11 +207,17 @@ public struct EudiOperationalConfiguration: Sendable {
     }
 
     public func validateIssuanceOfferURI(_ value: String) throws -> String {
-        try EudiWalletKitAdapter.validatedOfferURI(value, allowedOrigins: allowedIssuerOrigins)
+        if allowUnregisteredDevelopmentCounterparties {
+            return try EudiWalletKitAdapter.validatedOfferURI(value, allowedOrigins: ["*"])
+        }
+        return try EudiWalletKitAdapter.validatedOfferURI(value, allowedOrigins: allowedIssuerOrigins)
     }
 
     public func validatePresentationRequestURI(_ value: String) throws -> String {
-        try EudiWalletKitAdapter.validatedPresentationURI(value, allowedOrigins: allowedVerifierOrigins)
+        if allowUnregisteredDevelopmentCounterparties {
+            return try EudiWalletKitAdapter.validatedPresentationURI(value, allowedOrigins: ["*"])
+        }
+        return try EudiWalletKitAdapter.validatedPresentationURI(value, allowedOrigins: allowedVerifierOrigins)
     }
 
     public func validatePendingIssuancePresentationURI(_ value: String) throws -> String {
@@ -217,17 +226,15 @@ public struct EudiOperationalConfiguration: Sendable {
         }
         if scheme == "https" {
             _ = try EudiWalletKitAdapter.canonicalHTTPSOrigin(value, requireOriginOnly: false)
-            guard allowedIssuerOrigins.contains(try EudiWalletKitAdapter.canonicalHTTPSOrigin(
-                value,
-                requireOriginOnly: false
-            )) else {
+            let origin = try EudiWalletKitAdapter.canonicalHTTPSOrigin(value, requireOriginOnly: false)
+            guard allowUnregisteredDevelopmentCounterparties || allowedIssuerOrigins.contains(origin) else {
                 throw EudiWalletKitAdapterError.unapprovedIssuer
             }
             return value
         }
         return try EudiWalletKitAdapter.validatedPresentationURI(
             value,
-            allowedOrigins: allowedVerifierOrigins
+            allowedOrigins: allowUnregisteredDevelopmentCounterparties ? ["*"] : allowedVerifierOrigins
         )
     }
 }
@@ -269,8 +276,8 @@ private struct EudiNetworkingBridge: NetworkingProtocol {
 
     init(_ configuration: EudiOperationalConfiguration) {
         transport = configuration.networkTransport
-        issuerOrigins = configuration.allowedIssuerOrigins
-        verifierOrigins = configuration.allowedVerifierOrigins
+        issuerOrigins = configuration.allowUnregisteredDevelopmentCounterparties ? ["*"] : configuration.allowedIssuerOrigins
+        verifierOrigins = configuration.allowUnregisteredDevelopmentCounterparties ? ["*"] : configuration.allowedVerifierOrigins
     }
 
     func data(from url: URL) async throws -> (Data, URLResponse) {
@@ -289,7 +296,7 @@ private struct EudiNetworkingBridge: NetworkingProtocol {
         case .presentationDuringIssuance: permittedOrigins = issuerOrigins.union(verifierOrigins)
         case nil: throw EudiWalletKitAdapterError.missingNetworkFlowContext
         }
-        guard permittedOrigins.contains(origin) else {
+        guard permittedOrigins.contains("*") || permittedOrigins.contains(origin) else {
             throw EudiWalletKitAdapterError.unapprovedNetworkDestination
         }
         let result: EudiHTTPResponse
@@ -1982,7 +1989,7 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
         } else {
             origin = nil
         }
-        guard let origin, allowedOrigins.contains(origin) else {
+        guard let origin, allowedOrigins.contains("*") || allowedOrigins.contains(origin) else {
             throw EudiWalletKitAdapterError.unapprovedIssuer
         }
         return value
@@ -2000,13 +2007,13 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
         }
         if scheme == "https" {
             guard let origin = try? canonicalHTTPSOrigin(value, requireOriginOnly: false),
-                  allowedOrigins.contains(origin) else {
+                   allowedOrigins.contains("*") || allowedOrigins.contains(origin) else {
                 throw EudiWalletKitAdapterError.unapprovedVerifier
             }
         } else if scheme == "openid4vp" {
             if let requestURI = components.queryItems?.first(where: { $0.name == "request_uri" })?.value {
                 guard let origin = try? canonicalHTTPSOrigin(requestURI, requireOriginOnly: false),
-                      allowedOrigins.contains(origin) else {
+                       allowedOrigins.contains("*") || allowedOrigins.contains(origin) else {
                     throw EudiWalletKitAdapterError.unapprovedVerifier
                 }
             } else if components.queryItems?.contains(where: {

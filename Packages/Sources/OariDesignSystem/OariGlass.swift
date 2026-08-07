@@ -3,7 +3,7 @@ import SwiftUI
 public extension View {
     @ViewBuilder
     func oariGlassAction(lightForeground: Bool = false) -> some View {
-        if #available(iOS 26.0, *) {
+        if #available(iOS 26.0, macOS 26.0, *) {
             self
                 .foregroundStyle(lightForeground ? .white : OariColor.textOnAction)
                 .background(OariColor.action, in: .circle)
