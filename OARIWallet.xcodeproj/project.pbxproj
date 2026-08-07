@@ -20,6 +20,7 @@
 		859822E8E1B9F5710C7CB11D /* OARIWalletApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1246C8F696C46B04A1F8C118 /* OARIWalletApp.swift */; };
 		878B6EB09C741E008DD33CB7 /* WalletRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93B86C1FF880C3DDA014A666 /* WalletRootView.swift */; };
 		A0754F016378502A9272573A /* CameraQRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A220056806DA8DE0EFDBC06 /* CameraQRScannerView.swift */; };
+		A50788E0814BC001EA524F1B /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 31949355B1B8D2E8A779762C /* AppIcon.icon */; };
 		CE2111B0BC3DF529200E9EDD /* WalletScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1280C71BCEB9EEB97805CEAB /* WalletScreens.swift */; };
 		DA9C95C3A1EBB113099E759B /* WalletDomain in Frameworks */ = {isa = PBXBuildFile; productRef = C8E03DE70A77820E952DA657 /* WalletDomain */; };
 /* End PBXBuildFile section */
@@ -49,6 +50,7 @@
 		1280C71BCEB9EEB97805CEAB /* WalletScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletScreens.swift; sourceTree = "<group>"; };
 		15A75726AA317DE2F4F20348 /* OARIWalletUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OARIWalletUITests.swift; sourceTree = "<group>"; };
 		205A5D22672818911526768C /* WalletAppModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletAppModelTests.swift; sourceTree = "<group>"; };
+		31949355B1B8D2E8A779762C /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		3D48C70F5B38EA38FB85E5DD /* OARIWalletTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = OARIWalletTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4A220056806DA8DE0EFDBC06 /* CameraQRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraQRScannerView.swift; sourceTree = "<group>"; };
 		93B86C1FF880C3DDA014A666 /* WalletRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletRootView.swift; sourceTree = "<group>"; };
@@ -106,6 +108,7 @@
 			children = (
 				24E2ACB32E5587CB3D6BE7B0 /* Preview Content */,
 				E5CF2849E79084493655BF0B /* AppConfiguration.swift */,
+				31949355B1B8D2E8A779762C /* AppIcon.icon */,
 				E6EB7F18DFECA15C3F21B5B9 /* Assets.xcassets */,
 				4A220056806DA8DE0EFDBC06 /* CameraQRScannerView.swift */,
 				BEA31C9F65F5B50D6F48CEC6 /* Info.plist */,
@@ -253,6 +256,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A50788E0814BC001EA524F1B /* AppIcon.icon in Resources */,
 				1CE0565CAA32AE6AF15804D3 /* Assets.xcassets in Resources */,
 				50E4B63A02FCE912491E9274 /* Preview Assets.xcassets in Resources */,
 			);
