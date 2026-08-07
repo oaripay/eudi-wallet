@@ -186,6 +186,20 @@ These are absence-of-implementation failures, not regressions.
 | OpenID4VP | Final 1.0 plus isolated iGrant Draft 18 | Planned |
 | EBSI VCDM 1.1 | Exact representation/proof/DID/schema/status profile not yet frozen | Blocked pending real EBSI profile matrix and backend selection |
 | EBSI VCDM 2.0 | Separate named profiles only; must not be inferred from `jwt_vc_json` or JSON parsing | Blocked pending demonstrated issuer/verifier support |
+
+### Loop C — EBSI/W3C endpoint and profile foundation
+
+- Added development multi-chain endpoint registry with ordered DID fallback and
+  explicit DIDR/TIR/TSR URLs. Codable input reuses HTTPS/no-credentials/query/fragment
+  validation; duplicate IDs/chains fail.
+- Production configuration requires exact equality against a reviewed ID-to-full-
+  endpoint mapping; an approved ID cannot be reassigned to another host or path.
+- Added `docs/EBSI_PROFILE_MATRIX.md`. VCDM 1.1/2.0 rows remain blocked until exact
+  representation, proof, DID/key, schema/status, OpenID revision and counterpart
+  fixtures are supplied. No official EBSI host or unsupported crypto was guessed.
+- Key inventory records P-256/ES256 as implemented, secp256k1/ES256K as present only
+  transitively/unintegrated, and EdDSA/RSA as disabled pending evidence.
+- Independent review cycle 2 returned `PASS`; focused endpoint tests pass 4 cases.
 | Wallet Kit | `eudi-lib-ios-wallet-kit` v0.39.1, commit `79005ab4bf0399238c1c9ebff9ee7d8a42c521f9` | Exact package resolved; adapter foundation under Loop A review |
 | OARI LPID | `provisionalOariLPID`, development only | Backend implemented with provisional status index |
 | EBSI onboarding | `ebsiOnboardingCredential`, development only | Backend recipient proof bypass is a security blocker |
