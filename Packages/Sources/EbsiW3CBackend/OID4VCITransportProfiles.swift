@@ -3,6 +3,7 @@ import Foundation
 public enum OID4VCITransportProfile: String, Codable, Equatable, Sendable {
     case final
     case draft13
+    case draft17
     case draft18
 }
 
@@ -34,7 +35,11 @@ public struct OID4VCITransportProfileRegistry: Sendable, Equatable {
 
     public static let finalOnly = OID4VCITransportProfileRegistry(terminalPathComponents: [:])
     public static let developmentDraftCompatibility = OID4VCITransportProfileRegistry(
-        terminalPathComponents: ["draft-13": .draft13, "draft-18": .draft18]
+        terminalPathComponents: [
+            "draft-13": .draft13,
+            "draft-17": .draft17,
+            "draft-18": .draft18,
+        ]
     )
 
     public init(terminalPathComponents: [String: OID4VCITransportProfile]) {
@@ -94,12 +99,29 @@ public struct OID4VCITransportContract: Equatable, Sendable {
         supportsBatchIssuance: true
     )
 
+    public static let draft17 = OID4VCITransportContract(
+        profile: .draft17,
+        proofShape: .finalProofsJWT,
+        credentialIdentifierField: .credentialIdentifier,
+        responseEnvelopes: [.encryptedJWT, .jsonCredential, .jsonCredentials, .deferredTransaction],
+        requiresDPoP: true,
+        tokenEndpointAuthentication: .unsupported,
+        requiresCredentialResponseEncryption: true,
+        supportsDeferredIssuance: true,
+        supportsBatchIssuance: true
+    )
+
     public static func resolve(
         selectedProfile: OID4VCITransportProfile,
         authorizationMetadata: OID4VCIAuthorizationMetadata
     ) -> OID4VCITransportContract {
-        if selectedProfile == .draft13 || selectedProfile == .draft18 {
-            let base = selectedProfile == .draft13 ? OID4VCITransportContract.draft13 : .draft18
+        if selectedProfile != .final {
+            let base: OID4VCITransportContract = switch selectedProfile {
+            case .draft13: .draft13
+            case .draft17: .draft17
+            case .draft18: .draft18
+            case .final: .final
+            }
             let authentication: OID4VCITokenEndpointAuthentication
             if authorizationMetadata.tokenEndpointAuthenticationMethods == nil {
                 authentication = .anonymous
@@ -111,13 +133,15 @@ public struct OID4VCITransportContract: Equatable, Sendable {
             } else {
                 authentication = .unsupported
             }
+            let hasCompatibleDPoP = authorizationMetadata.dpopSigningAlgorithms == nil ||
+                authorizationMetadata.dpopSigningAlgorithms?.contains("ES256") == true
             return OID4VCITransportContract(
                 profile: base.profile,
                 proofShape: base.proofShape,
                 credentialIdentifierField: base.credentialIdentifierField,
                 responseEnvelopes: base.responseEnvelopes,
-                requiresDPoP: authorizationMetadata.dpopSigningAlgorithms?.contains("ES256") == true,
-                tokenEndpointAuthentication: authentication,
+                requiresDPoP: base.requiresDPoP,
+                tokenEndpointAuthentication: hasCompatibleDPoP ? authentication : .unsupported,
                 requiresCredentialResponseEncryption: true,
                 supportsDeferredIssuance: true,
                 supportsBatchIssuance: true

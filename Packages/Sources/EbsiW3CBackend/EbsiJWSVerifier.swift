@@ -85,26 +85,51 @@ public struct EbsiJWSVerifier: Sendable {
               let payload = try? JSONDecoder().decode([String: AnySendableJSON].self, from: payloadData),
               let algorithmName = header["alg"]?.string,
               let algorithm = EbsiKeyAlgorithm(rawValue: algorithmName),
-              requirements.allowedAlgorithms.contains(algorithm),
-              let kid = header["kid"]?.string,
-              let method = methods.first(where: { $0.id == kid }),
-              method.relationships.contains(requirements.requiredRelationship) else {
+              requirements.allowedAlgorithms.contains(algorithm) else {
             throw EbsiCredentialError.verificationFailed
         }
-        if let expected = requirements.expectedController, method.controller != expected {
+        let kid = header["kid"]?.string
+        let hasEmbeddedKeyReference = Self.hasEmbeddedKeyReference(header)
+        if kid == "None", !hasEmbeddedKeyReference {
             throw EbsiCredentialError.verificationFailed
         }
+        let candidates: [EbsiVerificationMethod]
+        if let kid, kid != "None" {
+            let exact = methods.filter { $0.id == kid }
+            candidates = exact.isEmpty && hasEmbeddedKeyReference ? methods : exact
+        } else {
+            candidates = methods
+        }
+        let eligible = candidates.filter { method in
+            method.relationships.contains(requirements.requiredRelationship) &&
+                (requirements.expectedController == nil || method.controller == requirements.expectedController)
+        }
+        guard !eligible.isEmpty else { throw EbsiCredentialError.verificationFailed }
         try Self.validateClaims(payload, requirements: requirements)
         let signingInput = Data("\(parts[0]).\(parts[1])".utf8)
-        guard try Self.verifySignature(
-            algorithm: algorithm,
-            key: method.key,
-            signature: signature,
-            message: signingInput
-        ) else {
+        let verified = eligible.filter { method in
+            (try? Self.verifySignature(
+                algorithm: algorithm,
+                key: method.key,
+                signature: signature,
+                message: signingInput
+            )) == true
+        }
+        guard verified.count == 1, let method = verified.first else {
             throw EbsiCredentialError.verificationFailed
         }
         return VerifiedEbsiJWS(header: header, payload: payload, methodID: method.id)
+    }
+
+    private static func hasEmbeddedKeyReference(
+        _ header: [String: AnySendableJSON]
+    ) -> Bool {
+        if header["jwk"]?.object != nil { return true }
+        if case let .array(values) = header["x5c"], !values.isEmpty,
+           values.allSatisfy({ $0.string != nil }) {
+            return true
+        }
+        return false
     }
 
     private static func validateClaims(

@@ -261,6 +261,23 @@ struct EudiWalletKitAdapterTests {
                 "openid4vp://authorize?request=unverified-inline-jar"
             )
         }
+        func base64URL(_ data: Data) -> String {
+            data.base64EncodedString().replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        }
+        let header = base64URL(Data(#"{"alg":"ES256","typ":"oauth-authz-req+jwt"}"#.utf8))
+        let payload = base64URL(Data(#"{"client_id":"redirect_uri:https://verifier.example/callback","response_uri":"https://verifier.example/response","response_type":"vp_token","response_mode":"direct_post","nonce":"nonce"}"#.utf8))
+        let signedRequest = "\(header).\(payload).signature"
+        var signedComponents = URLComponents(string: "openid4vp://authorize")!
+        signedComponents.queryItems = [URLQueryItem(name: "request", value: signedRequest)]
+        #expect(try configuration.validatePresentationRequestURI(
+            signedComponents.url!.absoluteString
+        ).hasPrefix("openid4vp:"))
+        let evilPayload = base64URL(Data(#"{"client_id":"redirect_uri:https://evil.example/callback","response_uri":"https://evil.example/response","response_type":"vp_token","response_mode":"direct_post","nonce":"nonce"}"#.utf8))
+        signedComponents.queryItems = [URLQueryItem(name: "request", value: "\(header).\(evilPayload).signature")]
+        #expect(throws: EudiWalletKitAdapterError.unapprovedVerifier) {
+            try configuration.validatePresentationRequestURI(signedComponents.url!.absoluteString)
+        }
         #expect(try configuration.validatePendingIssuancePresentationURI(
             "https://issuer.example/presentation-authorization"
         ) == "https://issuer.example/presentation-authorization")

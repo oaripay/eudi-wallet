@@ -88,7 +88,9 @@ struct WalletAppModelTests {
             return
         }
         await model.acceptIssuance()
-        #expect(model.eudiFlow == .completed("Credential added to your wallet."))
+        #expect(model.eudiFlow == .idle)
+        #expect(model.scanInput.isEmpty)
+        #expect(model.selectedTab == .wallet)
         #expect(await service.issueCount == 1)
     }
 
@@ -148,7 +150,7 @@ struct WalletAppModelTests {
         await model.continuePendingIssuance()
         #expect(model.eudiFlow == .presentationConsent(request))
         await model.submitPresentation(accepted: true)
-        #expect(model.eudiFlow == .completed("Identity verified and credential added."))
+        #expect(model.eudiFlow == .idle)
     }
 
     @Test("Declined or failed PID presentation preserves recoverable pending issuance")
@@ -279,7 +281,9 @@ struct WalletAppModelTests {
         model.ebsiTransactionCode = "123456"
         await model.issueReviewedEbsiCredential()
         #expect(await service.continueCalls == [true])
-        #expect(model.eudiFlow == .completed("EBSI development flow completed."))
+        #expect(model.eudiFlow == .idle)
+        #expect(model.scanInput.isEmpty)
+        #expect(model.selectedTab == .wallet)
 
         let cancelService = FixtureEbsiWallet(outcome: .requireExplicitWarning(warning))
         let cancelModel = WalletAppModel()
@@ -312,6 +316,104 @@ struct WalletAppModelTests {
         replayModel.ebsiTransactionCode = "123456"
         await replayModel.issueReviewedEbsiCredential()
         #expect(await replayService.continueCalls == [true])
+    }
+
+    @Test("Signed workspace PID challenge reaches consent and retains authorization transaction")
+    func ebsiPIDPresentationBridge() async {
+        let request = fixturePresentationRequest()
+        let challenge = WorkspacePresentationChallenge(
+            id: UUID(),
+            authorizationEndpoint: URL(string: "https://wallet.dev.oari.io/openid/authorize")!,
+            authSession: "auth-session",
+            interactionType: "openid4vp_presentation",
+            responseMode: "direct_post",
+            responseURI: URL(string: "https://wallet.dev.oari.io/openid/authorize")!,
+            nonce: "nonce",
+            state: "auth-session",
+            dcqlQuery: ["credentials": .array([.object([
+                "id": .string("pid"),
+                "format": .string("dc+sd-jwt"),
+                "meta": .object([
+                    "vct_values": .array([.string("urn:eu.europa.ec.eudi:pid:1")]),
+                ]),
+            ])])],
+            signedRequest: "header.payload.signature"
+        )
+        let ebsi = FixtureEbsiWallet(
+            outcome: .allow,
+            continuation: .presentationRequired(challenge)
+        )
+        let eudi = FixtureEudiWallet(
+            presentationRequest: request,
+            completion: .externalAuthorization("authorization-code"),
+            summaries: [EudiWalletDocumentSummary(
+                id: "pid-document",
+                documentType: "urn:eu.europa.ec.eudi:pid:1",
+                displayName: "PID",
+                format: "sdjwt",
+                status: "issued"
+            )]
+        )
+        let model = WalletAppModel()
+        await model.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), eudiWallet: eudi,
+            eudiAvailability: .available, ebsiWallet: ebsi
+        )))
+        model.scanInput = "openid-credential-offer://?credential_offer=fixture"
+        await model.reviewEbsiScannedRequest()
+        await model.issueReviewedEbsiCredential()
+        guard case let .ebsiPresentationRequired(received) = model.eudiFlow else {
+            Issue.record("Expected PID presentation challenge")
+            return
+        }
+        await model.startEudiPresentationForEbsi(received)
+        #expect(model.eudiFlow == .presentationConsent(request))
+        #expect((await eudi.lastPresentationRequestURI)?.contains("request=header.payload.signature") == true)
+        await model.submitPresentation(accepted: true)
+        #expect(await ebsi.completedAuthorizationCodes == ["authorization-code"])
+        #expect(model.eudiFlow == .idle)
+    }
+
+    @Test("Workspace PID challenge presents a credential from the W3C backend")
+    func ebsiW3CPIDPresentation() async {
+        let challenge = WorkspacePresentationChallenge(
+            id: UUID(),
+            authorizationEndpoint: URL(string: "https://wallet.dev.oari.io/openid/authorize")!,
+            authSession: "auth-session",
+            interactionType: "openid4vp_presentation",
+            responseMode: "direct_post",
+            responseURI: URL(string: "https://wallet.dev.oari.io/openid/authorize")!,
+            nonce: "nonce",
+            state: "auth-session",
+            dcqlQuery: ["credentials": .array([.object([
+                "id": .string("pid"),
+                "format": .string("dc+sd-jwt"),
+                "meta": .object(["vct_values": .array([.string("urn:eu.europa.ec.eudi:pid:1")])]),
+            ])])],
+            signedRequest: "header.payload.signature"
+        )
+        let consent = fixturePresentationRequest()
+        let ebsi = FixtureEbsiWallet(
+            outcome: .allow,
+            continuation: .presentationRequired(challenge),
+            pidPresentationRequest: consent
+        )
+        let eudi = FixtureEudiWallet()
+        let model = WalletAppModel()
+        await model.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), eudiWallet: eudi,
+            eudiAvailability: .available, ebsiWallet: ebsi
+        )))
+        model.scanInput = "openid-credential-offer://?credential_offer=fixture"
+        await model.reviewEbsiScannedRequest()
+        await model.issueReviewedEbsiCredential()
+        await model.startEudiPresentationForEbsi(challenge)
+        #expect(model.eudiFlow == .presentationConsent(consent))
+        await model.submitPresentation(accepted: true)
+        #expect(await ebsi.completedPIDClaimIDs == [Set(["required-pid"])])
+        #expect(model.eudiFlow == .idle)
     }
 
     @Test("Deferred credential retry forwards issuer and document and reports outcome")
@@ -390,12 +492,20 @@ private actor FixtureEbsiWallet: EbsiW3COperating {
     private(set) var continueCalls: [Bool] = []
     private(set) var cancelCount = 0
     let continuationDelayNanoseconds: UInt64
+    let continuation: EbsiInteractionCompletion
+    private(set) var completedAuthorizationCodes: [String] = []
+    private(set) var completedPIDClaimIDs: [Set<String>] = []
+    let pidPresentationRequest: EudiPresentationRequest?
     init(
         outcome: EbsiTrustGateOutcome,
-        continuationDelayNanoseconds: UInt64 = 0
+        continuationDelayNanoseconds: UInt64 = 0,
+        continuation: EbsiInteractionCompletion = .completed("EBSI development flow completed."),
+        pidPresentationRequest: EudiPresentationRequest? = nil
     ) {
         self.outcome = outcome
         self.continuationDelayNanoseconds = continuationDelayNanoseconds
+        self.continuation = continuation
+        self.pidPresentationRequest = pidPresentationRequest
     }
     func resolveInteraction(uri: String) async throws -> EbsiResolvedInteraction {
         EbsiResolvedInteraction(
@@ -418,14 +528,27 @@ private actor FixtureEbsiWallet: EbsiW3COperating {
         if continuationDelayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: continuationDelayNanoseconds)
         }
-        return .completed("EBSI development flow completed.")
+        return continuation
     }
     func cancelInteraction(id: UUID) async { cancelCount += 1 }
+    func preparePIDPresentation(id: UUID) async throws -> EudiPresentationRequest {
+        guard let pidPresentationRequest else { throw TestFailure.unavailable }
+        return pidPresentationRequest
+    }
+    func completePIDPresentation(
+        id: UUID,
+        selectedClaimIDs: Set<String>,
+        userAccepted: Bool
+    ) async throws -> EbsiInteractionCompletion {
+        completedPIDClaimIDs.append(selectedClaimIDs)
+        return .completed(userAccepted ? "W3C PID submitted" : "PID request declined")
+    }
     func submitPIDPresentation(id: UUID, vpToken: String) async throws -> EbsiInteractionCompletion {
         .completed("PID submitted")
     }
     func completeAuthorization(id: UUID, code: String) async throws -> EbsiInteractionCompletion {
-        .completed("Authorization completed")
+        completedAuthorizationCodes.append(code)
+        return .completed("Authorization completed")
     }
 }
 
@@ -441,6 +564,7 @@ private actor FixtureEudiWallet: EudiWalletOperating {
     private let retryResult: EudiWalletDocumentSummary?
     private(set) var lastDeleted: String?
     private(set) var lastRetried: String?
+    private(set) var lastPresentationRequestURI: String?
 
     init(
         pendingAtLoad: [EudiPendingIssuance] = [],
@@ -485,6 +609,7 @@ private actor FixtureEudiWallet: EudiWalletOperating {
     }
     func beginOpenID4VPPresentation(requestURI: String) async throws -> EudiPresentationRequest {
         operationCount += 1
+        lastPresentationRequestURI = requestURI
         guard let presentationRequest else { throw TestFailure.unavailable }
         return presentationRequest
     }

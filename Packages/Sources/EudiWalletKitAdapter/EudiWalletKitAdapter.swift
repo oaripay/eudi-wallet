@@ -81,7 +81,11 @@ public struct EudiWalletKitBaseline: Equatable, Sendable {
                         authFlowRedirectionURI: operationalConfiguration.authorizationRedirectURI,
                         parUsage: .required(authorizationCodeDPoPBinding: true),
                         requireDpop: true,
-                        issuerMetadataPolicy: trustConfiguration.issuerMetadataPolicy,
+                        issuerMetadataPolicy: developmentTrustWarning
+                            ? .preferSigned(issuerTrust: .byCertificateChain(
+                                certificateChainTrust: DevelopmentIssuerMetadataChainTrust()
+                            ))
+                            : trustConfiguration.issuerMetadataPolicy,
                          validateRegistrationCertificate: !developmentTrustWarning,
                         userAuthenticationRequired: true
                     ),
@@ -104,6 +108,24 @@ public struct EudiWalletKitBaseline: Equatable, Sendable {
         } catch {
             throw EudiWalletKitAdapterError.initializationFailed
         }
+    }
+}
+
+struct DevelopmentIssuerMetadataChainTrust: CertificateChainTrust {
+    func isValid(chain: [String]) async -> Bool {
+        guard (1...5).contains(chain.count) else { return false }
+        var totalBytes = 0
+        for encoded in chain {
+            guard encoded.utf8.count <= 24_576,
+                  let data = Data(base64Encoded: encoded),
+                  !data.isEmpty,
+                  SecCertificateCreateWithData(nil, data as CFData) != nil else {
+                return false
+            }
+            totalBytes += data.count
+            guard totalBytes <= 65_536 else { return false }
+        }
+        return true
     }
 }
 
@@ -1734,6 +1756,11 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
         guard let requests = await EudiNetworkScope.$current.withValue(flow, operation: {
             await session.receiveRequest()
         }) else {
+            if let error = session.uiError {
+                throw EudiWalletKitAdapterError.presentationRequestFailedWithReason(
+                    "\(error.code.rawValue): \(error.description)"
+                )
+            }
             throw EudiWalletKitAdapterError.presentationRequestFailed
         }
         let requester = requests.compactMap(\.requestName).first
@@ -2167,12 +2194,14 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
                        allowedOrigins.contains("*") || allowedOrigins.contains(origin) else {
                     throw EudiWalletKitAdapterError.unapprovedVerifier
                 }
-            } else if components.queryItems?.contains(where: {
-                $0.name == "request" && !($0.value ?? "").isEmpty
-            }) == true {
-                // Inline JARs cannot be origin-authorized before cryptographic
-                // verification. Require an allowlisted request_uri boundary.
-                throw EudiWalletKitAdapterError.unapprovedVerifier
+            } else if let request = components.queryItems?.first(where: { $0.name == "request" })?.value,
+                      !request.isEmpty {
+                // Wallet Kit verifies the JAR signature before presentation. This
+                // preflight only constrains its declared callback to an approved origin.
+                guard let origin = signedPresentationRequestOrigin(request),
+                      allowedOrigins.contains("*") || allowedOrigins.contains(origin) else {
+                    throw EudiWalletKitAdapterError.unapprovedVerifier
+                }
             } else {
                 throw EudiWalletKitAdapterError.invalidPresentationURI
             }
@@ -2180,6 +2209,28 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
             throw EudiWalletKitAdapterError.invalidPresentationURI
         }
         return value
+    }
+
+    private static func signedPresentationRequestOrigin(_ compactJWT: String) -> String? {
+        let parts = compactJWT.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return nil }
+        var base64 = String(parts[1]).replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+        guard let data = Data(base64Encoded: base64),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let responseURI = payload["response_uri"] as? String,
+              let responseOrigin = try? canonicalHTTPSOrigin(responseURI, requireOriginOnly: false),
+              let clientID = payload["client_id"] as? String,
+              clientID.hasPrefix("redirect_uri:") else {
+            return nil
+        }
+        let clientURI = String(clientID.dropFirst("redirect_uri:".count))
+        guard let clientOrigin = try? canonicalHTTPSOrigin(clientURI, requireOriginOnly: false),
+              clientOrigin == responseOrigin else {
+            return nil
+        }
+        return responseOrigin
     }
 
     private static func embeddedOrigin(
@@ -2374,6 +2425,7 @@ public enum EudiWalletKitAdapterError: Error, Equatable, Sendable {
     case invalidPrompt
     case invalidPresentationURI
     case presentationRequestFailed
+    case presentationRequestFailedWithReason(String)
     case bleEngagementFailed
     case unknownPresentation
     case rejectedPresentationHasClaims

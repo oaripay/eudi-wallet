@@ -83,6 +83,46 @@ struct EbsiJWSVerifierTests {
         }
     }
 
+    @Test("iGrant x5c sentinel selects the one issuer-published key that verifies")
+    func igrantX5CSentinel() throws {
+        let signingKey = P256.Signing.PrivateKey()
+        let otherKey = P256.Signing.PrivateKey()
+        let methods = [
+            method(id: "issuer-key-1", key: otherKey.publicKey),
+            method(id: "issuer-key-2", key: signingKey.publicKey),
+        ]
+        let token = try compactJWS(
+            algorithm: "ES256",
+            kid: "None",
+            headerAdditions: ["x5c": ["certificate-placeholder"]],
+            issuer: "did:key:p256"
+        ) { input in
+            try signingKey.signature(for: input).rawRepresentation
+        }
+
+        let verified = try EbsiJWSVerifier().verify(
+            compactJWS: token,
+            methods: methods,
+            requirements: requirements(algorithm: .es256, controller: "did:key:p256")
+        )
+        #expect(verified.methodID == "issuer-key-2")
+
+        let unbound = try compactJWS(
+            algorithm: "ES256",
+            kid: "None",
+            issuer: "did:key:p256"
+        ) { input in
+            try signingKey.signature(for: input).rawRepresentation
+        }
+        #expect(throws: EbsiCredentialError.verificationFailed) {
+            _ = try EbsiJWSVerifier().verify(
+                compactJWS: unbound,
+                methods: methods,
+                requirements: requirements(algorithm: .es256, controller: "did:key:p256")
+            )
+        }
+    }
+
     private func requirements(
         algorithm: EbsiKeyAlgorithm,
         controller: String
@@ -98,14 +138,28 @@ struct EbsiJWSVerifierTests {
         )
     }
 
+    private func method(id: String, key: P256.Signing.PublicKey) -> EbsiVerificationMethod {
+        let bytes = key.x963Representation
+        return EbsiVerificationMethod(
+            id: id,
+            controller: "did:key:p256",
+            key: .p256(x: bytes.subdata(in: 1..<33), y: bytes.subdata(in: 33..<65)),
+            relationships: [.assertionMethod]
+        )
+    }
+
     private func compactJWS(
         algorithm: String,
         kid: String,
+        headerAdditions: [String: Any] = [:],
+        issuer: String? = nil,
         signer: (Data) throws -> Data
     ) throws -> String {
-        let header = try encode(["alg": algorithm, "kid": kid, "typ": "JWT"])
+        var headerValue: [String: Any] = ["alg": algorithm, "kid": kid, "typ": "JWT"]
+        headerValue.merge(headerAdditions) { _, new in new }
+        let header = try encode(headerValue)
         let payload = try encode([
-            "iss": kid.components(separatedBy: "#")[0],
+            "iss": issuer ?? kid.components(separatedBy: "#")[0],
             "aud": "https://verifier.example",
             "nonce": "nonce-1",
             "iat": Int(now.timeIntervalSince1970),

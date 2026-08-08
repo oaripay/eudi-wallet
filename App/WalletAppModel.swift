@@ -44,6 +44,7 @@ final class WalletAppModel: ObservableObject {
     private var repositories: (credentials: any CredentialMetadataRepository, audit: any AuditRepository)?
     private var activePendingIssuanceID: UUID?
     private var activePendingIssuance: EudiPendingIssuance?
+    private var activeWorkspacePresentation = false
 
     init(
         allowedHosts: Set<String> = ["wallet.dev.oari.io"],
@@ -284,32 +285,45 @@ final class WalletAppModel: ObservableObject {
     }
 
     func startEudiPresentationForEbsi(_ challenge: WorkspacePresentationChallenge) async {
+        let requestedVCTs = Self.requestedVCTs(in: challenge.dcqlQuery)
+        let requestedFormats = Self.requestedFormats(in: challenge.dcqlQuery)
+        let hasMatchingEudiPID = requestedVCTs.isEmpty || walletDocumentSummaries.values.contains { document in
+            document.status == "issued" && requestedVCTs.contains(document.documentType)
+        }
+        if requestedFormats.contains("jwt_vc_json") || !hasMatchingEudiPID {
+            guard let id = activeEbsiInteractionID, let ebsiWallet else {
+                eudiFlow = .failed("The issuer authorization transaction expired before PID selection.")
+                return
+            }
+            do {
+                eudiFlow = .working("Preparing W3C PID presentation…")
+                let request = try await ebsiWallet.preparePIDPresentation(id: id)
+                activeWorkspacePresentation = true
+                selectedClaimIDs = Set(request.claims.filter(\.required).map(\.id))
+                eudiFlow = .presentationConsent(request)
+            } catch {
+                eudiFlow = .failed(Self.safeMessage(error))
+            }
+            return
+        }
         guard let eudiWallet else {
             eudiFlow = .configurationRequired("EUDI Wallet Kit is not configured for PID presentation.")
             return
         }
+        activeWorkspacePresentation = false
         activeEbsiChallenge = challenge
-        let requestObject: String
-        if let signedRequest = challenge.signedRequest {
-            requestObject = signedRequest
-        } else {
-            var object: [String: Any] = [
-                "response_type": "vp_token",
-                "response_mode": "direct_post",
-                "response_uri": challenge.authorizationEndpoint.absoluteString,
-                "nonce": challenge.nonce,
-                "dcql_query": challenge.dcqlQuery,
-            ]
-            if let state = challenge.authSession ?? challenge.state { object["state"] = state }
-            guard let data = try? JSONSerialization.data(withJSONObject: object),
-                  let encoded = String(data: data, encoding: .utf8),
-                  let escaped = encoded.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
-                eudiFlow = .failed("The issuer returned an invalid PID presentation request.")
-                return
-            }
-            requestObject = escaped
+        guard let signedRequest = challenge.signedRequest else {
+            eudiFlow = .failed("The issuer did not provide the signed PID presentation request required by Wallet Kit.")
+            return
         }
-        let requestURI = "openid4vp://authorize?request=\(requestObject)"
+        var components = URLComponents()
+        components.scheme = "openid4vp"
+        components.host = "authorize"
+        components.queryItems = [URLQueryItem(name: "request", value: signedRequest)]
+        guard let requestURI = components.url?.absoluteString else {
+            eudiFlow = .failed("The issuer returned an invalid PID presentation request.")
+            return
+        }
         do {
             eudiFlow = .working("Preparing PID presentation…")
             let request = try await eudiWallet.beginOpenID4VPPresentation(requestURI: requestURI)
@@ -340,11 +354,15 @@ final class WalletAppModel: ObservableObject {
             allowUntrusted: activeEbsiAllowsUntrusted,
             transactionCode: ebsiTransactionCode.isEmpty ? nil : ebsiTransactionCode
         )
-        activeEbsiInteractionID = nil
-        activeEbsiInteraction = nil
         switch result {
-        case let .completed(message), let .pending(message): eudiFlow = .completed(message)
-        case let .presentationRequired(challenge): eudiFlow = .ebsiPresentationRequired(challenge)
+        case .completed:
+            activeEbsiInteractionID = nil
+            activeEbsiInteraction = nil
+            finishCredentialRedemption()
+        case let .pending(message):
+            eudiFlow = .completed(message)
+        case let .presentationRequired(challenge):
+            eudiFlow = .ebsiPresentationRequired(challenge)
         }
     }
 
@@ -368,7 +386,7 @@ final class WalletAppModel: ObservableObject {
                 activePendingIssuance = pending
                 eudiFlow = .pending(pending)
             } else {
-                eudiFlow = .completed("Credential added to your wallet.")
+                finishCredentialRedemption()
             }
         } catch {
             eudiFlow = .failed(Self.safeMessage(error))
@@ -393,12 +411,37 @@ final class WalletAppModel: ObservableObject {
     }
 
     func submitPresentation(accepted: Bool) async {
-        guard isEudiOperational, case let .presentationConsent(request) = eudiFlow, let eudiWallet else {
+        guard case let .presentationConsent(request) = eudiFlow else {
             eudiFlow = .configurationRequired(eudiConfigurationMessage)
             return
         }
         eudiFlow = .working(accepted ? "Sharing approved claims…" : "Declining the request…")
         do {
+            if activeWorkspacePresentation {
+                guard let id = activeEbsiInteractionID, let ebsiWallet else {
+                    throw EbsiCredentialError.backendUnavailable
+                }
+                let result = try await ebsiWallet.completePIDPresentation(
+                    id: id,
+                    selectedClaimIDs: accepted ? selectedClaimIDs : [],
+                    userAccepted: accepted
+                )
+                activeWorkspacePresentation = false
+                activeEbsiInteractionID = nil
+                activeEbsiInteraction = nil
+                activeEbsiChallenge = nil
+                if accepted { try await refreshWalletState() }
+                switch result {
+                case .completed: finishCredentialRedemption()
+                case let .pending(message): eudiFlow = .completed(message)
+                case .presentationRequired: eudiFlow = .failed("The issuer requested another unsupported presentation step.")
+                }
+                return
+            }
+            guard isEudiOperational, let eudiWallet else {
+                eudiFlow = .configurationRequired(eudiConfigurationMessage)
+                return
+            }
             let completion = try await eudiWallet.completePresentation(
                 id: request.id,
                 pendingIssuanceID: activePendingIssuanceID,
@@ -415,7 +458,7 @@ final class WalletAppModel: ObservableObject {
                 } else {
                     activePendingIssuanceID = nil
                     activePendingIssuance = nil
-                    eudiFlow = .completed("Identity verified and credential added.")
+                    finishCredentialRedemption()
                 }
             case .pendingDeclined:
                 if let activePendingIssuance {
@@ -438,7 +481,8 @@ final class WalletAppModel: ObservableObject {
                 activeEbsiInteraction = nil
                 activeEbsiChallenge = nil
                 switch result {
-                case let .completed(message), let .pending(message): eudiFlow = .completed(message)
+                case .completed: finishCredentialRedemption()
+                case let .pending(message): eudiFlow = .completed(message)
                 case .presentationRequired: eudiFlow = .failed("The issuer requested another unsupported presentation step.")
                 }
             }
@@ -448,6 +492,23 @@ final class WalletAppModel: ObservableObject {
     }
 
     func dismissEudiFlow() {
+        eudiFlow = .idle
+    }
+
+    private func finishCredentialRedemption() {
+        scanInput = ""
+        scanResult = .idle
+        selectedTab = .wallet
+        selectedIssuanceConfigurationIDs = []
+        selectedClaimIDs = []
+        transactionCode = ""
+        ebsiTransactionCode = ""
+        activeEbsiInteractionID = nil
+        activeEbsiInteraction = nil
+        activeEbsiChallenge = nil
+        activePendingIssuanceID = nil
+        activePendingIssuance = nil
+        activeWorkspacePresentation = false
         eudiFlow = .idle
     }
 
@@ -547,6 +608,34 @@ final class WalletAppModel: ObservableObject {
         }
     }
 
+    private static func requestedVCTs(
+        in dcqlQuery: [String: AnySendableJSON]
+    ) -> Set<String> {
+        guard case let .array(credentials)? = dcqlQuery["credentials"] else { return [] }
+        return Set(credentials.flatMap { credential -> [String] in
+            guard case let .object(query) = credential,
+                  case let .object(meta)? = query["meta"],
+                  case let .array(values)? = meta["vct_values"] else {
+                return []
+            }
+            return values.compactMap {
+                if case let .string(value) = $0 { return value }
+                return nil
+            }
+        })
+    }
+
+    private static func requestedFormats(
+        in dcqlQuery: [String: AnySendableJSON]
+    ) -> Set<String> {
+        guard case let .array(credentials)? = dcqlQuery["credentials"] else { return [] }
+        return Set(credentials.compactMap { credential in
+            guard case let .object(query) = credential,
+                  case let .string(format)? = query["format"] else { return nil }
+            return format
+        })
+    }
+
     private static func safeMessage(_ error: Error) -> String {
         if let error = error as? WorkspaceBackendError {
             switch error {
@@ -567,7 +656,11 @@ final class WalletAppModel: ObservableObject {
             case .unknownTransaction: return "The issuer transaction expired or was already used."
             case .presentationRequired: return "The issuer requires PID presentation before issuing this credential."
             case .invalidPresentationResponse: return "The issuer rejected the PID presentation response."
+            case .presentationCredentialUnavailable:
+                return "No stored W3C credential satisfies the verifier's requested format, type, and claims."
             case .authorizationFailed: return "The issuer authorization exchange failed."
+            case let .decodingFailed(stage, path, reason):
+                return "The issuer returned an invalid \(stage) at \(path): \(reason)."
             case let .remoteOAuthError(code, detail):
                 if code == "invalid_grant" {
                     return "This credential offer has expired or was already redeemed. Scan a new offer from the issuer."
@@ -587,12 +680,19 @@ final class WalletAppModel: ObservableObject {
             case .profileMismatch: return "The credential does not match its advertised W3C profile."
             case .algorithmNotAllowed: return "The credential uses an unsupported signing algorithm."
             case .unsupportedRepresentation: return "The credential representation is not supported by this wallet."
-            case .verificationFailed: return "The credential signature, issuer DID, or holder binding could not be verified."
-            case .issuerDIDUnresolved: return "The issuer DID could not be resolved. Development trust override is required."
+            case .verificationFailed: return "The credential's protected claims could not be verified. This cannot be overridden."
+            case .issuerMismatch: return "The issued credential does not belong to the issuer in the reviewed offer."
+            case .issuerDIDUnresolved:
+                return "The issuer DID document could not be resolved, so the credential signature cannot be verified."
+            case .issuerSigningKeysUnresolved:
+                return "The issuer signing keys could not be resolved, so the credential signature cannot be verified."
             case .invalidSignature: return "The credential signature is invalid. This cannot be overridden."
             case .invalidHolderBinding: return "The credential is not bound to this wallet. This cannot be overridden."
             case .backendUnavailable: return "The W3C credential backend is unavailable."
             }
+        }
+        if let error = error as? DecodingError {
+            return "A response could not be decoded at \(Self.decodingPath(error)): \(Self.decodingReason(error))."
         }
         guard let error = error as? EudiWalletKitAdapterError else {
             return "Development wallet error: \(String(describing: error))"
@@ -603,12 +703,17 @@ final class WalletAppModel: ObservableObject {
         case .invalidTransactionCode: "Check the transaction code and try again."
         case .requiredClaimMissing: "Required claims must remain selected."
         case .recoveryRequired: "Wallet recovery must finish before this action can continue."
+        case let .presentationRequestFailedWithReason(reason):
+            "Wallet Kit could not resolve the PID presentation request: \(reason)"
         default: "Development EUDI Wallet Kit error: \(String(describing: error))"
         }
     }
 
 
     private static func developmentErrorMessage(_ error: Error) -> String {
+        if let error = error as? DecodingError {
+            return "decoding failed at \(decodingPath(error)): \(decodingReason(error))"
+        }
         if let error = error as? EudiWalletKitAdapterError {
             return "EUDI Wallet Kit \(String(describing: error))"
         }
@@ -616,6 +721,27 @@ final class WalletAppModel: ObservableObject {
             return "EBSI backend \(String(describing: error))"
         }
         return String(describing: error)
+    }
+
+    private static func decodingPath(_ error: DecodingError) -> String {
+        let path: [any CodingKey] = switch error {
+        case let .dataCorrupted(context), let .typeMismatch(_, context),
+             let .valueNotFound(_, context), let .keyNotFound(_, context): context.codingPath
+        @unknown default: []
+        }
+        return path.reduce("$") { partial, key in
+            key.intValue.map { "\(partial)[\($0)]" } ?? "\(partial).\(key.stringValue)"
+        }
+    }
+
+    private static func decodingReason(_ error: DecodingError) -> String {
+        switch error {
+        case .dataCorrupted: "invalid value"
+        case let .typeMismatch(type, _): "expected \(String(describing: type))"
+        case let .valueNotFound(type, _): "missing \(String(describing: type))"
+        case let .keyNotFound(key, _): "missing key \(key.stringValue)"
+        @unknown default: "unknown decoding failure"
+        }
     }
 
     func setPrivacyCoverVisible(_ visible: Bool) {

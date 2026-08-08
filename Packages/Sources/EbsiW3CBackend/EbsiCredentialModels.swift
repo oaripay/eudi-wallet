@@ -115,7 +115,9 @@ public enum EbsiCredentialError: Error, Equatable, Sendable {
     case algorithmNotAllowed
     case unsupportedRepresentation
     case verificationFailed
+    case issuerMismatch
     case issuerDIDUnresolved
+    case issuerSigningKeysUnresolved
     case invalidSignature
     case invalidHolderBinding
     case backendUnavailable

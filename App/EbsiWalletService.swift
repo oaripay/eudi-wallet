@@ -1,4 +1,5 @@
 import EbsiW3CBackend
+import EudiWalletKitAdapter
 import Foundation
 import WalletDomain
 
@@ -36,6 +37,12 @@ protocol EbsiW3COperating: Sendable {
         transactionCode: String?
     ) async throws -> EbsiInteractionCompletion
     func cancelInteraction(id: UUID) async
+    func preparePIDPresentation(id: UUID) async throws -> EudiPresentationRequest
+    func completePIDPresentation(
+        id: UUID,
+        selectedClaimIDs: Set<String>,
+        userAccepted: Bool
+    ) async throws -> EbsiInteractionCompletion
     func submitPIDPresentation(id: UUID, vpToken: String) async throws -> EbsiInteractionCompletion
     func completeAuthorization(id: UUID, code: String) async throws -> EbsiInteractionCompletion
 }
@@ -85,7 +92,8 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
         if authorizationRequired.contains(id) {
             return .presentationRequired(try await backend.beginPresentationRequired(
                 id: id,
-                allowUntrusted: allowUntrusted
+                allowUntrusted: allowUntrusted,
+                interactionTypes: ["openid4vp_presentation"]
             ))
         }
         let credentials = try await backend.issue(
@@ -106,7 +114,7 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
                     ? .sdJWTVC
                     : .jwtVC,
                  profileID: credential.profileID,
-                 issuerIdentifier: issuer,
+                 issuerIdentifier: credential.issuerIdentifier,
                  cryptographicValidity: .valid,
                 issuerTrust: allowUntrusted ? .untrusted : .trusted,
                 status: .notEvaluated,
@@ -136,12 +144,60 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
         await backend.cancel(id: id)
     }
 
+    func preparePIDPresentation(id: UUID) async throws -> EudiPresentationRequest {
+        // W3C-owned credentials use the workspace final interaction profile.
+        // The initial signed draft challenge remains available for Wallet Kit-owned PID.
+        _ = try await backend.beginPresentationRequired(
+            id: id,
+            allowUntrusted: false,
+            interactionTypes: ["urn:openid:dcp:ia:openid4vp_presentation"]
+        )
+        let request = try await backend.prepareStoredPIDPresentation(id: id)
+        return EudiPresentationRequest(
+            id: request.id,
+            verifierName: request.verifierName,
+            verifierLegalName: nil,
+            verifierCertificateValid: nil,
+            claims: request.claims.map { claim in
+                EudiRequestedClaim(
+                    id: claim.id,
+                    documentID: request.id.uuidString,
+                    documentType: "W3C credential",
+                    displayName: "PID",
+                    claimPath: claim.path,
+                    displayValue: claim.value,
+                    required: claim.required,
+                    intentToRetain: false
+                )
+            },
+            warningCount: 0
+        )
+    }
+
+    func completePIDPresentation(
+        id: UUID,
+        selectedClaimIDs: Set<String>,
+        userAccepted: Bool
+    ) async throws -> EbsiInteractionCompletion {
+        guard userAccepted else {
+            await cancelInteraction(id: id)
+            return .completed("PID request declined. Nothing was shared.")
+        }
+        let token = try await backend.storedPIDPresentationToken(
+            id: id,
+            selectedClaimIDs: selectedClaimIDs
+        )
+        return try await submitPIDPresentation(id: id, vpToken: token)
+    }
+
     func submitPIDPresentation(id: UUID, vpToken: String) async throws -> EbsiInteractionCompletion {
         _ = try await backend.submitPresentation(id: id, vpToken: vpToken)
+        authorizationRequired.remove(id)
         return try await continueInteraction(id: id, allowUntrusted: true, transactionCode: nil)
     }
     func completeAuthorization(id: UUID, code: String) async throws -> EbsiInteractionCompletion {
         try await backend.acceptAuthorizationCode(id: id, code: code)
+        authorizationRequired.remove(id)
         return try await continueInteraction(id: id, allowUntrusted: true, transactionCode: nil)
     }
 }

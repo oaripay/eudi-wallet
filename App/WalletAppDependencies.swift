@@ -122,7 +122,8 @@ struct WalletAppDependencies: Sendable {
                         resolver: CompositeDIDResolver(
                             ebsi: EBSIDIDResolver(client: registryClient)
                         ),
-                        transport: workspaceTransport
+                        transport: workspaceTransport,
+                        allowsDIDIssuerDelegation: true
                     ),
                     profile: try .oariVcdm2Jwt(),
                     additionalProfiles: [try .vcdm11Jwt(), try .dcSdJWTVC(), try .vcdm2SdJWT()],

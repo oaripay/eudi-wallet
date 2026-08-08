@@ -7,9 +7,42 @@ import TrustDomain
 import WalletDomain
 
 struct OariWorkspaceW3CBackendTests {
+    @Test("Draft 17 QESAC uses token identifier, proofs, DPoP and response encryption")
+    func draft17QESACRequest() async throws {
+        let transport = Draft13WorkspaceTransport()
+        let security = RecordingOID4VCIClientSecurity()
+        let backend = OariWorkspaceW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(),
+            credentialStore: FixtureCredentialStore(),
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .dcSdJWTVC(),
+            clientSecurity: security,
+            transportProfileRegistry: .developmentDraftCompatibility
+        )
+        let json = #"{"credential_issuer":"https://issuer.example/service/draft-17","credential_configuration_ids":["pid-config"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":"pre-code"}}}"#
+        let encoded = try #require(json.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed))
+        let offer = try await backend.resolveOffer("openid-credential-offer://?credential_offer=\(encoded)")
+        _ = try await backend.issue(id: offer.id, allowUntrusted: false, transactionCode: nil)
+
+        let requests = await transport.requests
+        let credential = try #require(requests.first { $0.url.path.hasSuffix("/credential") })
+        let body = try #require(JSONSerialization.jsonObject(with: credential.body ?? Data()) as? [String: Any])
+        #expect(body["credential_identifier"] as? String == "authorized-pid")
+        #expect(body["credential_configuration_id"] == nil)
+        #expect(body["format"] == nil)
+        #expect(body["proof"] == nil)
+        #expect((body["proofs"] as? [String: Any])?["jwt"] != nil)
+        #expect(body["credential_response_encryption"] != nil)
+        #expect(credential.headers["Authorization"] == "DPoP access-token")
+        #expect(credential.headers["DPoP"] != nil)
+    }
+
     @Test("Draft issuance uses DPoP, identifier-only request and encrypted response", arguments: ["draft-13", "draft-18"])
     func draftIssuance(revision: String) async throws {
-        let transport = Draft13WorkspaceTransport()
+        let usesLegacyDiscovery = revision == "draft-18"
+        let transport = Draft13WorkspaceTransport(legacyWellKnownOnly: usesLegacyDiscovery)
         let security = RecordingOID4VCIClientSecurity()
         let store = FixtureCredentialStore()
         let backend = OariWorkspaceW3CBackend(
@@ -31,6 +64,7 @@ struct OariWorkspaceW3CBackendTests {
         let issued = try await backend.issue(id: offer.id, allowUntrusted: false, transactionCode: "1234")
 
         #expect(issued.count == 1)
+        #expect(issued.first?.profileID == "ietf-dc-sd-jwt-vc")
         #expect(try await store.credentials().count == 1)
         let requests = await transport.requests
         let token = try #require(requests.first { $0.url.path.hasSuffix("/token") })
@@ -55,7 +89,15 @@ struct OariWorkspaceW3CBackendTests {
         #expect(proofPayload["nonce"] as? String == "credential-nonce")
         #expect(body["credential_response_encryption"] != nil)
         #expect(await security.dpopAccessTokens == [nil, "access-token"])
-        #expect(await security.decryptionCalls == 1)
+        #expect(await security.decryptionCalls == 0)
+        let issuerMetadataPath = usesLegacyDiscovery
+            ? "/service/\(revision)/.well-known/openid-credential-issuer"
+            : "/.well-known/openid-credential-issuer/service/\(revision)"
+        let authorizationMetadataPath = usesLegacyDiscovery
+            ? "/service/draft-13/.well-known/oauth-authorization-server"
+            : "/.well-known/oauth-authorization-server/service/draft-13"
+        #expect(requests.contains { $0.url.path == issuerMetadataPath })
+        #expect(requests.contains { $0.url.path == authorizationMetadataPath })
         #expect(requests.contains { $0.url.path.hasSuffix("/notification") && $0.method == "POST" })
     }
 
@@ -65,10 +107,26 @@ struct OariWorkspaceW3CBackendTests {
         try await assertRejectedDraftToken(response, expected: .missingCredentialNonce)
     }
 
+    @Test("Draft issuance reports the stage and coding path for malformed token JSON")
+    func draftMalformedTokenValue() async throws {
+        let response = #"{"access_token":"access-token","c_nonce":123}"#
+        try await assertRejectedDraftToken(
+            response,
+            expected: .decodingFailed(
+                stage: "token response",
+                path: "$.c_nonce",
+                reason: "expected String"
+            )
+        )
+    }
+
     @Test("Draft issuance accepts one token-authorized identifier despite configuration mismatch")
     func draftMismatchedAuthorization() async throws {
         let response = #"{"access_token":"access-token","c_nonce":"credential-nonce","authorization_details":[{"credential_configuration_id":"other-config","credential_identifiers":["unauthorized-pid"]}]}"#
-        let transport = Draft13WorkspaceTransport(tokenResponse: response)
+        let transport = Draft13WorkspaceTransport(
+            tokenResponse: response,
+            rejectedCredentialIdentifier: "unauthorized-pid"
+        )
         let backend = OariWorkspaceW3CBackend(
             transport: transport,
             trustEvaluator: TrustedIssuerEvaluator(),
@@ -81,10 +139,12 @@ struct OariWorkspaceW3CBackendTests {
         )
         let offer = try await backend.resolveOffer(try Self.draftOffer())
         _ = try await backend.issue(id: offer.id, allowUntrusted: false, transactionCode: "1234")
-        let request = try #require((await transport.requests).first { $0.url.path.hasSuffix("/credential") })
+        let credentialRequests = (await transport.requests).filter { $0.url.path.hasSuffix("/credential") }
+        let request = try #require(credentialRequests.last)
         let data = try #require(request.body)
         let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        #expect(body["credential_identifier"] as? String == "unauthorized-pid")
+        #expect(body["credential_identifier"] as? String == "pid-config")
+        #expect(credentialRequests.count == 2)
     }
 
     @Test("Draft issuance accepts one metadata-proven configuration alias")
@@ -238,6 +298,36 @@ struct OariWorkspaceW3CBackendTests {
         #expect(!(await transport.requests).contains { $0.url.path.hasSuffix("/token") })
     }
 
+    @Test("VCDM2 credential context overrides a legacy jwt_vc_json metadata label")
+    func vcdm2ContextSelection() async throws {
+        let credential = try Self.compactJWT(payload: [
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential", "LegalPersonIdentificationData"],
+            "issuer": "did:key:issuer",
+            "credentialSubject": ["id": "did:key:holder"],
+        ])
+        let backend = OariWorkspaceW3CBackend(
+            transport: FixtureWorkspaceTransport(
+                credentialFormat: "jwt_vc_json",
+                credentialResponse: credential
+            ),
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(),
+            credentialStore: FixtureCredentialStore(),
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .oariVcdm2Jwt(),
+            additionalProfiles: [try .vcdm11Jwt()]
+        )
+        let offer = try await backend.resolveOffer("https://issuer.example/offer")
+        let issued = try await backend.issue(
+            id: offer.id,
+            allowUntrusted: false,
+            transactionCode: "123456"
+        )
+        #expect(issued.first?.profileID == "oari-ebsi-vcdm2-vc-jwt")
+        #expect(issued.first?.representation == .vcdm2Jwt)
+    }
+
     @Test("Pre-authorized offer requires warning, signs proof, validates and stores credential")
     func preauthorizedIssuance() async throws {
         let transport = FixtureWorkspaceTransport()
@@ -312,8 +402,9 @@ struct OariWorkspaceW3CBackendTests {
 
     @Test("Authorization-code offer completes final PID presentation challenge")
     func authorizationPresentation() async throws {
+        let transport = FixtureWorkspaceTransport()
         let backend = OariWorkspaceW3CBackend(
-            transport: FixtureWorkspaceTransport(),
+            transport: transport,
             trustEvaluator: TrustedIssuerEvaluator(),
             keyProvider: FixtureKeyProvider(),
             credentialStore: FixtureCredentialStore(),
@@ -330,8 +421,214 @@ struct OariWorkspaceW3CBackendTests {
         )
         #expect(challenge.responseMode == "ia_post")
         #expect(challenge.dcqlQuery["credentials"] != nil)
-        #expect(try await backend.submitPresentation(id: offer.id, vpToken: "valid.pid.vp") == "auth-code")
+        #expect(try await backend.submitPresentation(
+            id: offer.id,
+            vpToken: #"{"pid":["valid.pid.vp"]}"#
+        ) == "auth-code")
+        let post = try #require((await transport.requests).last { request in
+            request.url.path == "/authorize-challenge" &&
+                String(decoding: request.body ?? Data(), as: UTF8.self).contains("openid4vp_response=")
+        })
+        let formBody = String(decoding: try #require(post.body), as: UTF8.self)
+        let fields = Dictionary(uniqueKeysWithValues: try #require(
+            URLComponents(string: "?\(formBody)")?.queryItems
+        ).compactMap { item in item.value.map { (item.name, $0) } })
+        let wrapped = try #require(fields["openid4vp_response"])
+        let response = try #require(JSONSerialization.jsonObject(with: Data(wrapped.utf8)) as? [String: Any])
+        let vpToken = try #require(response["vp_token"] as? [String: [String]])
+        #expect(vpToken == ["pid": ["valid.pid.vp"]])
         #expect(try await backend.issue(id: offer.id, allowUntrusted: false, transactionCode: nil).count == 1)
+    }
+
+    @Test("Authorization-code offer resolves signed draft PID presentation challenge")
+    func authorizationDraftPresentation() async throws {
+        let transport = FixtureWorkspaceTransport()
+        let backend = OariWorkspaceW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(),
+            credentialStore: FixtureCredentialStore(),
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .oariVcdm2Jwt()
+        )
+        let json = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["oari-v2"],"grants":{"authorization_code":{"issuer_state":"issuer-state"}}}"#
+        let encoded = json.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
+        let offer = try await backend.resolveOffer("openid-credential-offer://?credential_offer=\(encoded)")
+        let challenge = try await backend.beginPresentationRequired(
+            id: offer.id,
+            allowUntrusted: false,
+            interactionTypes: ["openid4vp_presentation"]
+        )
+        #expect(challenge.responseMode == "direct_post")
+        #expect(challenge.responseURI == URL(string: "https://issuer.example/authorize"))
+        #expect(challenge.signedRequest != nil)
+        #expect(challenge.dcqlQuery["credentials"] != nil)
+        _ = try await backend.submitPresentation(
+            id: offer.id,
+            vpToken: #"{"pid":["presentation"]}"#
+        )
+        let post = try #require((await transport.requests).last { request in
+            request.url.path == "/authorize" &&
+                String(decoding: request.body ?? Data(), as: UTF8.self).contains("vp_token=")
+        })
+        let body = String(decoding: try #require(post.body), as: UTF8.self)
+        #expect(body.contains("vp_token="))
+        #expect(!body.contains("openid4vp_response="))
+        #expect(!body.contains("auth_session="))
+        let fields = Dictionary(uniqueKeysWithValues: try #require(
+            URLComponents(string: "?\(body)")?.queryItems
+        ).compactMap { item in item.value.map { (item.name, $0) } })
+        #expect(fields == [
+            "state": "auth-session",
+            "vp_token": #"{"pid":["presentation"]}"#,
+        ])
+    }
+
+    @Test("Stored W3C SD-JWT PID creates a selective DCQL key-bound presentation")
+    func storedSDJWTPresentation() async throws {
+        let transport = FixtureWorkspaceTransport()
+        let keys = FixtureKeyProvider()
+        let key = try await keys.createKey(
+            purpose: .credentialBinding,
+            algorithm: .es256,
+            requiresUserPresence: false,
+            protection: .keychainSoftware
+        )
+        let disclosures = try [
+            Self.disclosure(name: "given_name", value: "Ada"),
+            Self.disclosure(name: "family_name", value: "Lovelace"),
+            Self.disclosure(name: "email", value: "ada@example.test"),
+        ]
+        let issuer = try Self.compactJWT(payload: [
+            "iss": "did:key:issuer",
+            "vct": "urn:eu.europa.ec.eudi:pid:1",
+            "cnf": ["jwk": ["kty": "EC"]],
+            "_sd": disclosures.map {
+                Data(SHA256.hash(data: Data($0.utf8))).base64EncodedString()
+                    .replacingOccurrences(of: "+", with: "-")
+                    .replacingOccurrences(of: "/", with: "_")
+                    .replacingOccurrences(of: "=", with: "")
+            },
+        ])
+        let stored = StoredEbsiCredential(
+            profileID: "ietf-dc-sd-jwt-vc",
+            representation: .dcSdJwt,
+            rawCredential: Data((issuer + "~" + disclosures.joined(separator: "~") + "~").utf8),
+            holderKeyReference: key.id.rawValue.uuidString
+        )
+        let backend = OariWorkspaceW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: keys,
+            credentialStore: FixtureCredentialStore(values: [stored]),
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .dcSdJWTVC()
+        )
+        let offer = try await Self.authorizationOffer(backend)
+        _ = try await backend.beginPresentationRequired(
+            id: offer.id,
+            allowUntrusted: false,
+            interactionTypes: ["openid4vp_presentation"]
+        )
+        _ = try await backend.beginPresentationRequired(
+            id: offer.id,
+            allowUntrusted: false,
+            interactionTypes: ["urn:openid:dcp:ia:openid4vp_presentation"]
+        )
+        let request = try await backend.prepareStoredPIDPresentation(id: offer.id)
+        #expect(request.claims.count == 3)
+        let token = try await backend.storedPIDPresentationToken(
+            id: offer.id,
+            selectedClaimIDs: Set(request.claims.map(\.id))
+        )
+        let object = try #require(JSONSerialization.jsonObject(with: Data(token.utf8)) as? [String: [String]])
+        let presentation = try #require(object["pid"]?.first)
+        let components = presentation.split(separator: "~", omittingEmptySubsequences: false)
+        #expect(components.count == 5)
+        let keyBinding = String(components[4])
+        let keyBindingPayload = try Self.jwtPayload(keyBinding)
+        #expect(keyBindingPayload["nonce"] as? String == "vp-nonce")
+        #expect(keyBindingPayload["aud"] as? String == "https://issuer.example/authorize-challenge")
+        let withoutKeyBinding = components.dropLast().joined(separator: "~") + "~"
+        let expectedHash = Data(SHA256.hash(data: Data(withoutKeyBinding.utf8))).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        #expect(keyBindingPayload["sd_hash"] as? String == expectedHash)
+        _ = try await backend.submitPresentation(id: offer.id, vpToken: token)
+        let post = try #require((await transport.requests).last { request in
+            String(decoding: request.body ?? Data(), as: UTF8.self).contains("openid4vp_response=")
+        })
+        let form = String(decoding: try #require(post.body), as: UTF8.self)
+        let fields = Dictionary(uniqueKeysWithValues: try #require(
+            URLComponents(string: "?\(form)")?.queryItems
+        ).compactMap { item in item.value.map { (item.name, $0) } })
+        let wrapped = try #require(fields["openid4vp_response"])
+        let response = try #require(JSONSerialization.jsonObject(with: Data(wrapped.utf8)) as? [String: Any])
+        let vpToken = try #require(response["vp_token"] as? [String: [String]])
+        #expect(vpToken["pid"]?.first == presentation)
+    }
+
+    @Test("Stored jwt_vc_json credential creates a holder-signed JWT VP")
+    func storedJWTVCPresentation() async throws {
+        let keys = FixtureKeyProvider()
+        let key = try await keys.createKey(
+            purpose: .credentialBinding,
+            algorithm: .es256,
+            requiresUserPresence: false,
+            protection: .keychainSoftware
+        )
+        let holder = try KeyDIDResolver().derive(
+            publicKeyX963: try await keys.publicKey(id: key.id).x963Representation
+        )
+        let credential = try Self.compactJWT(payload: [
+            "iss": "did:key:issuer",
+            "sub": holder,
+            "vc": [
+                "@context": ["https://www.w3.org/2018/credentials/v1"],
+                "type": ["VerifiableCredential", "PersonIdentificationData"],
+                "issuer": "did:key:issuer",
+                "credentialSubject": [
+                    "id": holder,
+                    "given_name": "Ada",
+                    "family_name": "Lovelace",
+                ],
+            ],
+        ])
+        let stored = StoredEbsiCredential(
+            profileID: "ebsi-vcdm11-jwt-vc",
+            representation: .jwtVcJson,
+            rawCredential: Data(credential.utf8),
+            holderKeyReference: key.id.rawValue.uuidString
+        )
+        let backend = OariWorkspaceW3CBackend(
+            transport: FixtureWorkspaceTransport(presentationFormat: "jwt_vc_json"),
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: keys,
+            credentialStore: FixtureCredentialStore(values: [stored]),
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .vcdm11Jwt()
+        )
+        let offer = try await Self.authorizationOffer(backend)
+        _ = try await backend.beginPresentationRequired(
+            id: offer.id,
+            allowUntrusted: false,
+            interactionTypes: ["openid4vp_presentation"]
+        )
+        let request = try await backend.prepareStoredPIDPresentation(id: offer.id)
+        let token = try await backend.storedPIDPresentationToken(
+            id: offer.id,
+            selectedClaimIDs: Set(request.claims.map(\.id))
+        )
+        let object = try #require(JSONSerialization.jsonObject(with: Data(token.utf8)) as? [String: [String]])
+        let vpJWT = try #require(object["pid"]?.first)
+        let payload = try Self.jwtPayload(vpJWT)
+        #expect(payload["nonce"] as? String == "vp-nonce")
+        let vp = try #require(payload["vp"] as? [String: Any])
+        #expect(vp["@context"] as? [String] == ["https://www.w3.org/ns/credentials/v2"])
+        let presentedCredentials = try #require(vp["verifiableCredential"] as? [[String: Any]])
+        #expect(presentedCredentials.first?["type"] as? String == "EnvelopedVerifiableCredential")
+        #expect(presentedCredentials.first?["id"] as? String == "data:application/vc+jwt,\(credential)")
     }
 
     private static func jwtPayload(_ compact: String) throws -> [String: Any] {
@@ -342,6 +639,29 @@ struct OariWorkspaceW3CBackendTests {
         base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
         let data = try #require(Data(base64Encoded: base64))
         return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private static func authorizationOffer(
+        _ backend: OariWorkspaceW3CBackend
+    ) async throws -> WorkspaceResolvedOffer {
+        let json = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["oari-v2"],"grants":{"authorization_code":{"issuer_state":"issuer-state"}}}"#
+        let encoded = try #require(json.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed))
+        return try await backend.resolveOffer("openid-credential-offer://?credential_offer=\(encoded)")
+    }
+
+    private static func compactJWT(payload: [String: Any]) throws -> String {
+        func encode(_ object: Any) throws -> String {
+            try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+                .base64EncodedString().replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        }
+        return try "\(encode(["alg": "ES256"])).\(encode(payload)).signature"
+    }
+
+    private static func disclosure(name: String, value: String) throws -> String {
+        try JSONSerialization.data(withJSONObject: [UUID().uuidString, name, value])
+            .base64EncodedString().replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
     }
 
     private func assertRejectedDraftToken(
@@ -371,6 +691,97 @@ struct OariWorkspaceW3CBackendTests {
         let encoded = try #require(json.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed))
         return "openid-credential-offer://?credential_offer=\(encoded)"
     }
+
+    @Test("Manual live QESAC redemption emits only redacted interoperability diagnostics")
+    func manualLiveQESACRedemption() async throws {
+        guard let offerURI = ProcessInfo.processInfo.environment["OARI_LIVE_QESAC_OFFER"] else {
+            return
+        }
+        let transport = URLSessionWorkspaceTransport()
+        let keyProvider = FixtureKeyProvider()
+        let store = FixtureCredentialStore()
+        let validator = LiveDiagnosticCredentialValidator(
+            validator: NativeWorkspaceCredentialValidator(
+                resolver: LiveRejectingDIDResolver(),
+                transport: transport
+            )
+        )
+        let backend = OariWorkspaceW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: keyProvider,
+            credentialStore: store,
+            credentialValidator: validator,
+            profile: try .oariVcdm2Jwt(),
+            additionalProfiles: [try .vcdm11Jwt(), try .dcSdJWTVC(), try .vcdm2SdJWT()],
+            clientSecurity: DefaultOID4VCIClientSecurity(keyProvider: keyProvider),
+            transportProfileRegistry: .developmentDraftCompatibility
+        )
+
+        let offer = try await backend.resolveOffer(offerURI)
+        let issued = try await backend.issue(
+            id: offer.id,
+            allowUntrusted: false,
+            transactionCode: nil
+        )
+        #expect(issued.count == 1)
+        #expect(try await store.credentials().count == 1)
+        print("LIVE_QESAC stored=true format=dc+sd-jwt configuration_count=\(offer.configurationIDs.count)")
+    }
+}
+
+private struct LiveRejectingDIDResolver: DIDResolver {
+    func resolve(_ did: String) async throws -> DIDDocument {
+        throw DIDResolutionError.unsupportedMethod
+    }
+}
+
+private struct LiveDiagnosticCredentialValidator: WorkspaceCredentialValidating {
+    let validator: NativeWorkspaceCredentialValidator
+
+    func validate(
+        rawCredential: Data,
+        profile: EbsiCredentialProfile,
+        expectedIssuer: String,
+        expectedHolderDID: String,
+        at date: Date
+    ) async throws -> String {
+        let compact = String(decoding: rawCredential, as: UTF8.self)
+        let issuerJWS = compact.split(separator: "~", maxSplits: 1).first.map(String.init) ?? ""
+        let parts = issuerJWS.split(separator: ".", omittingEmptySubsequences: false)
+        var headerNames: [String] = []
+        var kidKind = "absent"
+        var certificateCount = 0
+        var signatureBytes = 0
+        if parts.count == 3,
+           let headerData = Self.base64URLData(String(parts[0])),
+           let header = try? JSONSerialization.jsonObject(with: headerData) as? [String: Any] {
+            headerNames = header.keys.sorted()
+            if let kid = header["kid"] as? String {
+                kidKind = kid == "None" ? "sentinel" : "present"
+            }
+            certificateCount = (header["x5c"] as? [String])?.count ?? 0
+            signatureBytes = Self.base64URLData(String(parts[2]))?.count ?? 0
+        }
+        print(
+            "LIVE_QESAC protected_header_keys=\(headerNames.joined(separator: ",")) " +
+            "kid=\(kidKind) x5c_count=\(certificateCount) signature_bytes=\(signatureBytes)"
+        )
+        return try await validator.validate(
+            rawCredential: rawCredential,
+            profile: profile,
+            expectedIssuer: expectedIssuer,
+            expectedHolderDID: expectedHolderDID,
+            at: date
+        )
+    }
+
+    private static func base64URLData(_ value: String) -> Data? {
+        var base64 = value.replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+        return Data(base64Encoded: base64)
+    }
 }
 
 private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
@@ -380,6 +791,19 @@ private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
     ])
     struct Request: Sendable { let url: URL; let method: String; let headers: [String: String]; let body: Data? }
     private(set) var requests: [Request] = []
+    private let presentationFormat: String
+    private let credentialFormat: String
+    private let credentialResponse: String
+
+    init(
+        presentationFormat: String = "dc+sd-jwt",
+        credentialFormat: String = "application/vc+jwt",
+        credentialResponse: String = "header.payload.signature"
+    ) {
+        self.presentationFormat = presentationFormat
+        self.credentialFormat = credentialFormat
+        self.credentialResponse = credentialResponse
+    }
     func send(url: URL, method: String, headers: [String: String], body: Data?) async throws -> WorkspaceHTTPResponse {
         requests.append(Request(url: url, method: method, headers: headers, body: body))
         let response: String
@@ -387,18 +811,34 @@ private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
         case "/offer":
             response = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["oari-v2"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":"pre-code","tx_code":{"input_mode":"numeric","length":6}}}}"#
         case "/.well-known/openid-credential-issuer":
-            response = ##"{"credential_endpoint":"https://issuer.example/credential","authorization_servers":["https://issuer.example"],"credential_configurations_supported":{"oari-v2":{"format":"application/vc+jwt","display":[{"name":"OARI Legal Person ID","locale":"en","description":"Legal person credential","background_color":"#003366","text_color":"#ffffff","logo":{"uri":"https://assets.example/logo.png","alt_text":"OARI mark"},"background_image":{"uri":"https://assets.example/background.png"}}]}}}"##
+            response = """
+            {"credential_endpoint":"https://issuer.example/credential","authorization_servers":["https://issuer.example"],"credential_configurations_supported":{"oari-v2":{"format":"\(credentialFormat)","display":[{"name":"OARI Legal Person ID","locale":"en","description":"Legal person credential","background_color":"#003366","text_color":"#ffffff","logo":{"uri":"https://assets.example/logo.png","alt_text":"OARI mark"},"background_image":{"uri":"https://assets.example/background.png"}}]}}}
+            """
         case "/.well-known/oauth-authorization-server":
             response = #"{"token_endpoint":"https://issuer.example/token"}"#
         case "/token":
             response = #"{"access_token":"access","c_nonce":"nonce-1"}"#
         case "/authorize-challenge", "/authorize":
             if String(decoding: body ?? Data(), as: UTF8.self).contains("issuer_state") {
-                return WorkspaceHTTPResponse(statusCode: 403, body: Data(#"{"error":"insufficient_authorization","interaction_type_required":"urn:openid:dcp:ia:openid4vp_presentation","auth_session":"auth-session","openid4vp_request":{"response_type":"vp_token","response_mode":"ia_post","nonce":"vp-nonce","dcql_query":{"credentials":[{"id":"pid","format":"dc+sd-jwt"}]}}}"#.utf8))
+                if url.path == "/authorize" {
+                    return WorkspaceHTTPResponse(
+                        statusCode: 200,
+                        body: Data(#"{"status":"require_interaction","type":"openid4vp_presentation","auth_session":"auth-session","openid4vp_request":{"request":"PLACEHOLDER"}}"#.replacingOccurrences(of: "PLACEHOLDER", with: Self.signedPresentationRequest(format: presentationFormat)).utf8)
+                    )
+                }
+                let query = Self.credentialQuery(format: presentationFormat)
+                return WorkspaceHTTPResponse(
+                    statusCode: 403,
+                    body: Data("""
+                    {"error":"insufficient_authorization","interaction_type_required":"urn:openid:dcp:ia:openid4vp_presentation","auth_session":"auth-session","openid4vp_request":{"response_type":"vp_token","response_mode":"ia_post","nonce":"vp-nonce","dcql_query":{"credentials":[\(query)]}}}
+                    """.utf8)
+                )
             }
             response = #"{"authorization_code":"auth-code","code":"auth-code"}"#
         case "/credential":
-            response = #"{"credentials":[{"credential":"header.payload.signature"}]}"#
+            response = """
+            {"credentials":[{"credential":"\(credentialResponse)"}]}
+            """
         case "/logo.png", "/background.png":
             return WorkspaceHTTPResponse(
                 statusCode: 200,
@@ -408,6 +848,25 @@ private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
         default: throw WorkspaceBackendError.invalidResponse
         }
         return WorkspaceHTTPResponse(statusCode: 200, body: Data(response.utf8))
+    }
+
+    private static func signedPresentationRequest(format: String) -> String {
+        func encode(_ value: String) -> String {
+            Data(value.utf8).base64EncodedString().replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        }
+        let header = encode(#"{"alg":"ES256","typ":"oauth-authz-req+jwt"}"#)
+        let query = credentialQuery(format: format)
+        let payload = encode("""
+        {"client_id":"redirect_uri:https://issuer.example/authorize","response_type":"vp_token","response_mode":"direct_post","response_uri":"https://issuer.example/authorize","nonce":"vp-nonce","state":"auth-session","dcql_query":{"credentials":[\(query)]}}
+        """)
+        return "\(header).\(payload).signature"
+    }
+
+    private static func credentialQuery(format: String) -> String {
+        format == "jwt_vc_json"
+            ? #"{"id":"pid","format":"jwt_vc_json","meta":{"type_values":[["VerifiableCredential","PersonIdentificationData"]]},"claims":[{"path":["credentialSubject","given_name"]},{"path":["credentialSubject","family_name"]}]}"#
+            : #"{"id":"pid","format":"dc+sd-jwt","meta":{"vct_values":["urn:eu.europa.ec.eudi:pid:1"]},"claims":[{"path":["given_name"]},{"path":["family_name"]},{"path":["email"]}]}"#
     }
 }
 
@@ -422,39 +881,63 @@ private actor Draft13WorkspaceTransport: WorkspaceHTTPTransport {
     private let tokenResponse: String
     private let allowsAnonymousAuthentication: Bool
     private let supportsES256Attestation: Bool
+    private let legacyWellKnownOnly: Bool
+    private let rejectedCredentialIdentifier: String?
 
     init(
         tokenResponse: String = #"{"access_token":"access-token","token_type":"bearer","c_nonce":"credential-nonce","authorization_details":[{"type":"openid_credential","credential_configuration_id":"pid-config","credential_identifiers":["authorized-pid"]}]}"#,
         allowsAnonymousAuthentication: Bool = true,
-        supportsES256Attestation: Bool = true
+        supportsES256Attestation: Bool = true,
+        legacyWellKnownOnly: Bool = false,
+        rejectedCredentialIdentifier: String? = nil
     ) {
         self.tokenResponse = tokenResponse
         self.allowsAnonymousAuthentication = allowsAnonymousAuthentication
         self.supportsES256Attestation = supportsES256Attestation
+        self.legacyWellKnownOnly = legacyWellKnownOnly
+        self.rejectedCredentialIdentifier = rejectedCredentialIdentifier
     }
 
     func send(url: URL, method: String, headers: [String: String], body: Data?) async throws -> WorkspaceHTTPResponse {
         requests.append(Request(url: url, method: method, headers: headers, body: body))
         let response: String
         let statusCode: Int
-        if url.path.hasSuffix("/.well-known/openid-credential-issuer") {
-            response = #"{"credential_endpoint":"https://issuer.example/credential","authorization_servers":["https://issuer.example/service/draft-13"],"credential_configurations_supported":{"pid-config":{"format":"dc+sd-jwt","vct":"urn:example:pid"},"pid-alias":{"format":"dc+sd-jwt","vct":"urn:example:pid"},"pid-alias-two":{"format":"dc+sd-jwt","vct":"urn:example:pid"},"other-config":{"format":"dc+sd-jwt","vct":"urn:example:legal-person"}},"notification_endpoint":"https://issuer.example/notification"}"#
-            statusCode = 200
-        } else if url.path.hasSuffix("/.well-known/oauth-authorization-server") {
-            let methods = allowsAnonymousAuthentication
-                ? #"["attest_jwt_client_auth","none"]"#
-                : #"["attest_jwt_client_auth"]"#
-            let algorithms = supportsES256Attestation ? #"["ES256"]"# : #"["ES384"]"#
-            response = """
-            {"token_endpoint":"https://issuer.example/token","token_endpoint_auth_methods_supported":\(methods),"client_attestation_signing_alg_values_supported":\(algorithms),"dpop_signing_alg_values_supported":["ES256"]}
-            """
-            statusCode = 200
+        if url.path.contains("/.well-known/openid-credential-issuer") {
+            let isLegacy = url.path.hasSuffix("/.well-known/openid-credential-issuer")
+            if legacyWellKnownOnly != isLegacy {
+                response = "Demo issuer landing page"
+                statusCode = 200
+            } else {
+                response = #"{"credential_endpoint":"https://issuer.example/credential","authorization_servers":["https://issuer.example/service/draft-13"],"credential_configurations_supported":{"pid-config":{"format":"dc+sd-jwt","vct":"urn:example:pid"},"pid-alias":{"format":"dc+sd-jwt","vct":"urn:example:pid"},"pid-alias-two":{"format":"dc+sd-jwt","vct":"urn:example:pid"},"other-config":{"format":"dc+sd-jwt","vct":"urn:example:legal-person"}},"notification_endpoint":"https://issuer.example/notification"}"#
+                statusCode = 200
+            }
+        } else if url.path.contains("/.well-known/oauth-authorization-server") {
+            let isLegacy = url.path.hasSuffix("/.well-known/oauth-authorization-server")
+            if legacyWellKnownOnly != isLegacy {
+                response = "Demo issuer landing page"
+                statusCode = 200
+            } else {
+                let methods = allowsAnonymousAuthentication
+                    ? #"["attest_jwt_client_auth","none"]"#
+                    : #"["attest_jwt_client_auth"]"#
+                let algorithms = supportsES256Attestation ? #"["ES256"]"# : #"["ES384"]"#
+                response = """
+                {"token_endpoint":"https://issuer.example/token","token_endpoint_auth_methods_supported":\(methods),"client_attestation_signing_alg_values_supported":\(algorithms),"dpop_signing_alg_values_supported":["ES256"]}
+                """
+                statusCode = 200
+            }
         } else if url.path.hasSuffix("/token") {
             response = tokenResponse
             statusCode = 200
         } else if url.path.hasSuffix("/credential") {
-            response = #"{"credentials":[{"credential":"eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJkaWQ6a2V5OnRlc3QifQ.signature~"}],"notification_id":"notification-id"}"#
-            statusCode = 200
+            let bodyObject = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            if bodyObject?["credential_identifier"] as? String == rejectedCredentialIdentifier {
+                response = #"{"error":"invalid_credential_request","error_detail":"identifier rejected"}"#
+                statusCode = 400
+            } else {
+                response = #"{"credentials":[{"credential":"eyJhbGciOiJFUzI1NiJ9.eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwiaXNzIjoiZGlkOmtleTppc3N1ZXIiLCJ2Y3QiOiJ1cm46ZXhhbXBsZTpwaWQifQ.signature~"}],"notification_id":"notification-id"}"#
+                statusCode = 200
+            }
         } else if url.path.hasSuffix("/notification") {
             response = ""
             statusCode = 204
@@ -528,6 +1011,7 @@ private struct TrustedIssuerEvaluator: WorkspaceIssuerTrustEvaluating {
 
 private actor FixtureCredentialStore: EbsiCredentialStore {
     private var values: [StoredEbsiCredential] = []
+    init(values: [StoredEbsiCredential] = []) { self.values = values }
     func credentials() async throws -> [StoredEbsiCredential] { values }
     func save(_ credential: StoredEbsiCredential) async throws { values.append(credential) }
     func delete(id: UUID) async throws { values.removeAll { $0.id == id } }
@@ -538,11 +1022,14 @@ private actor FixtureCredentialValidator: WorkspaceCredentialValidating {
     func validate(
         rawCredential: Data,
         profile: EbsiCredentialProfile,
+        expectedIssuer: String,
         expectedHolderDID: String,
         at date: Date
-    ) async throws {
+    ) async throws -> String {
         calls += 1
+        #expect(!expectedIssuer.isEmpty)
         #expect(!expectedHolderDID.isEmpty)
+        return expectedIssuer
     }
 }
 

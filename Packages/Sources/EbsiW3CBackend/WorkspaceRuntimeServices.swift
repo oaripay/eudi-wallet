@@ -160,21 +160,25 @@ public struct WorkspaceTIRTrustEvaluator: WorkspaceIssuerTrustEvaluating, Sendab
 public struct NativeWorkspaceCredentialValidator: WorkspaceCredentialValidating, Sendable {
     private let resolver: any DIDResolver
     private let transport: (any WorkspaceHTTPTransport)?
+    private let allowsDIDIssuerDelegation: Bool
 
     public init(
         resolver: any DIDResolver,
-        transport: (any WorkspaceHTTPTransport)? = nil
+        transport: (any WorkspaceHTTPTransport)? = nil,
+        allowsDIDIssuerDelegation: Bool = false
     ) {
         self.resolver = resolver
         self.transport = transport
+        self.allowsDIDIssuerDelegation = allowsDIDIssuerDelegation
     }
 
     public func validate(
         rawCredential: Data,
         profile: EbsiCredentialProfile,
+        expectedIssuer: String,
         expectedHolderDID: String,
         at date: Date
-    ) async throws {
+    ) async throws -> String {
         let compact = String(decoding: rawCredential, as: UTF8.self)
         if profile.representation == .dcSdJwt || profile.representation == .vcdm2SdJwt {
             let payload = try EbsiCredentialInspector().inspectSDJWT(
@@ -182,21 +186,30 @@ public struct NativeWorkspaceCredentialValidator: WorkspaceCredentialValidating,
                 requiresHolderBinding: profile.requiresSDJWTHolderBinding
             )
             let issuer = try Self.issuer(fromSDJWT: payload)
+            try validateIssuerBinding(signedIssuer: issuer, expectedIssuer: expectedIssuer)
             let methods = try await verificationMethods(for: issuer)
-            _ = try EbsiJWSVerifier().verify(
-                compactJWS: String(compact.split(separator: "~").first!),
-                methods: methods,
-                requirements: EbsiJWSRequirements(
-                    allowedAlgorithms: profile.allowedAlgorithms,
-                    requiredRelationship: .assertionMethod,
-                    expectedController: issuer,
-                    validationDate: date
+            do {
+                _ = try EbsiJWSVerifier().verify(
+                    compactJWS: String(compact.split(separator: "~").first!),
+                    methods: methods,
+                    requirements: EbsiJWSRequirements(
+                        allowedAlgorithms: profile.allowedAlgorithms,
+                        requiredRelationship: .assertionMethod,
+                        expectedController: issuer,
+                        expectedIssuer: issuer,
+                        validationDate: date
+                    )
                 )
-            )
-            return
+            } catch EbsiCredentialError.algorithmNotAllowed {
+                throw EbsiCredentialError.algorithmNotAllowed
+            } catch {
+                throw EbsiCredentialError.invalidSignature
+            }
+            return issuer
         }
         let credential = try EbsiCredentialInspector().inspectCompactJWT(compact, profile: profile)
         let issuer = try Self.issuer(from: credential)
+        try validateIssuerBinding(signedIssuer: issuer, expectedIssuer: expectedIssuer)
         let document: DIDDocument
         do {
             document = try await resolver.resolve(issuer)
@@ -243,6 +256,14 @@ public struct NativeWorkspaceCredentialValidator: WorkspaceCredentialValidating,
         guard Self.subjectID(from: credential) == expectedHolderDID else {
             throw EbsiCredentialError.invalidHolderBinding
         }
+        return issuer
+    }
+
+    private func validateIssuerBinding(signedIssuer: String, expectedIssuer: String) throws {
+        if signedIssuer == expectedIssuer { return }
+        guard allowsDIDIssuerDelegation, signedIssuer.hasPrefix("did:") else {
+            throw EbsiCredentialError.issuerMismatch
+        }
     }
 
     private static func issuer(from credential: [String: AnySendableJSON]) throws -> String {
@@ -270,7 +291,12 @@ public struct NativeWorkspaceCredentialValidator: WorkspaceCredentialValidating,
 
     private func verificationMethods(for issuer: String) async throws -> [EbsiVerificationMethod] {
         if issuer.hasPrefix("did:") {
-            let document = try await resolver.resolve(issuer)
+            let document: DIDDocument
+            do {
+                document = try await resolver.resolve(issuer)
+            } catch {
+                throw EbsiCredentialError.issuerDIDUnresolved
+            }
             return try document.verificationMethod.map { method in
                 guard method.publicKeyJwk.crv == "P-256",
                       let encodedY = method.publicKeyJwk.y else {
@@ -287,48 +313,117 @@ public struct NativeWorkspaceCredentialValidator: WorkspaceCredentialValidating,
                 )
             }
         }
-        guard let issuerURL = URL(string: issuer), let transport else {
-            throw EbsiCredentialError.issuerDIDUnresolved
+        guard let issuerURL = URL(string: issuer),
+              issuerURL.scheme?.lowercased() == "https",
+              issuerURL.host != nil,
+              issuerURL.user == nil,
+              issuerURL.password == nil,
+              issuerURL.query == nil,
+              issuerURL.fragment == nil,
+              let transport else {
+            throw EbsiCredentialError.issuerSigningKeysUnresolved
         }
-        var metadataComponents = URLComponents()
-        metadataComponents.scheme = issuerURL.scheme
-        metadataComponents.host = issuerURL.host
-        metadataComponents.port = issuerURL.port
-        metadataComponents.path = "/.well-known/jwt-vc-issuer" + issuerURL.path
-        guard let metadataURL = metadataComponents.url else { throw EbsiCredentialError.issuerDIDUnresolved }
-        let metadataResponse = try await transport.send(
-            url: metadataURL,
-            method: "GET",
-            headers: [:],
-            body: nil
-        )
-        guard metadataResponse.statusCode == 200 else { throw EbsiCredentialError.issuerDIDUnresolved }
-        let metadata = try JSONDecoder().decode(JWTIssuerMetadata.self, from: metadataResponse.body)
-        guard let jwksURL = URL(string: metadata.jwksURI) else { throw EbsiCredentialError.issuerDIDUnresolved }
-        let keysResponse = try await transport.send(url: jwksURL, method: "GET", headers: [:], body: nil)
-        guard keysResponse.statusCode == 200 else { throw EbsiCredentialError.issuerDIDUnresolved }
-        let set = try JSONDecoder().decode(JWKSet.self, from: keysResponse.body)
-        return try set.keys.map { key in
-            guard key.crv == "P-256" else { throw EbsiCredentialError.algorithmNotAllowed }
-            return EbsiVerificationMethod(
-                id: key.kid,
-                controller: issuer,
-                key: .p256(
-                    x: try Self.decodeBase64URL(key.x),
-                    y: try Self.decodeBase64URL(key.y)
-                ),
-                relationships: [.assertionMethod]
-            )
+
+        let metadataURLs = Self.issuerMetadataURLs(for: issuerURL)
+        for metadataURL in metadataURLs {
+            let metadataResponse: WorkspaceHTTPResponse
+            do {
+                metadataResponse = try await transport.send(
+                    url: metadataURL,
+                    method: "GET",
+                    headers: [:],
+                    body: nil
+                )
+            } catch {
+                continue
+            }
+            guard metadataResponse.statusCode == 200,
+                  let metadata = try? JSONDecoder().decode(JWTIssuerMetadata.self, from: metadataResponse.body),
+                  metadata.issuer == issuer,
+                  let jwksURL = URL(string: metadata.jwksURI),
+                  jwksURL.scheme?.lowercased() == "https",
+                  jwksURL.host?.lowercased() == issuerURL.host?.lowercased(),
+                  jwksURL.port == issuerURL.port,
+                  jwksURL.user == nil,
+                  jwksURL.password == nil else {
+                continue
+            }
+
+            let keysResponse: WorkspaceHTTPResponse
+            do {
+                keysResponse = try await transport.send(url: jwksURL, method: "GET", headers: [:], body: nil)
+            } catch {
+                throw EbsiCredentialError.issuerSigningKeysUnresolved
+            }
+            guard keysResponse.statusCode == 200,
+                  let set = try? JSONDecoder().decode(JWKSet.self, from: keysResponse.body) else {
+                throw EbsiCredentialError.issuerSigningKeysUnresolved
+            }
+            let signingKeys = set.keys.filter {
+                $0.kty == "EC" && $0.crv == "P-256" &&
+                    ($0.use == nil || $0.use == "sig") &&
+                    ($0.alg == nil || $0.alg == "ES256")
+            }
+            guard !signingKeys.isEmpty else { throw EbsiCredentialError.algorithmNotAllowed }
+            let keyIDs = signingKeys.compactMap(\.kid)
+            guard keyIDs.count == signingKeys.count,
+                  Set(keyIDs).count == keyIDs.count else {
+                throw EbsiCredentialError.issuerSigningKeysUnresolved
+            }
+            return try signingKeys.map { key in
+                guard let kid = key.kid, !kid.isEmpty,
+                      let x = key.x, let y = key.y else {
+                    throw EbsiCredentialError.issuerSigningKeysUnresolved
+                }
+                return EbsiVerificationMethod(
+                    id: kid,
+                    controller: issuer,
+                    key: .p256(
+                        x: try Self.decodeBase64URL(x),
+                        y: try Self.decodeBase64URL(y)
+                    ),
+                    relationships: [.assertionMethod]
+                )
+            }
         }
+        throw EbsiCredentialError.issuerSigningKeysUnresolved
+    }
+
+    private static func issuerMetadataURLs(for issuerURL: URL) -> [URL] {
+        func standard(_ name: String) -> URL? {
+            var components = URLComponents()
+            components.scheme = issuerURL.scheme
+            components.host = issuerURL.host
+            components.port = issuerURL.port
+            components.path = "/.well-known/\(name)" + issuerURL.path
+            return components.url
+        }
+
+        return [
+            standard("jwt-vc-issuer"),
+            standard("oauth-authorization-server"),
+            standard("openid-configuration"),
+            issuerURL.appendingPathComponent(".well-known/openid-configuration"),
+            issuerURL.appendingPathComponent(".well-known/oauth-authorization-server"),
+        ].compactMap { $0 }
     }
 }
 
 private struct JWTIssuerMetadata: Decodable {
+    let issuer: String?
     let jwksURI: String
-    enum CodingKeys: String, CodingKey { case jwksURI = "jwks_uri" }
+    enum CodingKeys: String, CodingKey { case issuer, jwksURI = "jwks_uri" }
 }
 
 private struct JWKSet: Decodable {
-    struct Key: Decodable { let kid: String; let crv: String; let x: String; let y: String }
+    struct Key: Decodable {
+        let kid: String?
+        let kty: String?
+        let crv: String?
+        let x: String?
+        let y: String?
+        let use: String?
+        let alg: String?
+    }
     let keys: [Key]
 }

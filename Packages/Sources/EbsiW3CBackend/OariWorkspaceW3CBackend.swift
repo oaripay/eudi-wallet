@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import IdentityDomain
 import TrustDomain
@@ -32,9 +33,10 @@ public protocol WorkspaceCredentialValidating: Sendable {
     func validate(
         rawCredential: Data,
         profile: EbsiCredentialProfile,
+        expectedIssuer: String,
         expectedHolderDID: String,
         at date: Date
-    ) async throws
+    ) async throws -> String
 }
 
 public struct WorkspaceResolvedOffer: Equatable, Identifiable, Sendable {
@@ -99,12 +101,53 @@ public struct WorkspacePresentationChallenge: Equatable, Identifiable, Sendable 
     public let state: String?
     public let dcqlQuery: [String: AnySendableJSON]
     public let signedRequest: String?
+    public let clientID: String?
+
+    public init(
+        id: UUID,
+        authorizationEndpoint: URL,
+        authSession: String?,
+        interactionType: String,
+        responseMode: String,
+        responseURI: URL?,
+        nonce: String,
+        state: String?,
+        dcqlQuery: [String: AnySendableJSON],
+        signedRequest: String?,
+        clientID: String? = nil
+    ) {
+        self.id = id
+        self.authorizationEndpoint = authorizationEndpoint
+        self.authSession = authSession
+        self.interactionType = interactionType
+        self.responseMode = responseMode
+        self.responseURI = responseURI
+        self.nonce = nonce
+        self.state = state
+        self.dcqlQuery = dcqlQuery
+        self.signedRequest = signedRequest
+        self.clientID = clientID
+    }
+}
+
+public struct WorkspacePIDPresentationClaim: Equatable, Identifiable, Sendable {
+    public let id: String
+    public let path: [String]
+    public let value: String
+    public let required: Bool
+}
+
+public struct WorkspacePIDPresentationRequest: Equatable, Identifiable, Sendable {
+    public let id: UUID
+    public let verifierName: String?
+    public let claims: [WorkspacePIDPresentationClaim]
 }
 
 public struct WorkspaceIssuedCredential: Equatable, Sendable {
     public let id: UUID
     public let configurationID: String
     public let displayName: String
+    public let issuerIdentifier: String
     public let profileID: String
     public let representation: EbsiCredentialRepresentation
     public let displayClaims: [CredentialDisplayClaim]
@@ -125,7 +168,9 @@ public enum WorkspaceBackendError: Error, Equatable, Sendable {
     case unknownTransaction
     case presentationRequired
     case invalidPresentationResponse
+    case presentationCredentialUnavailable
     case authorizationFailed
+    case decodingFailed(stage: String, path: String, reason: String)
     case remoteOAuthError(code: String, detail: String?)
     case remoteHTTPError(status: Int, detail: String?)
     case clientSecurityUnavailable
@@ -164,6 +209,7 @@ public actor OariWorkspaceW3CBackend {
     private var authorizationCodes: [UUID: String] = [:]
     private var trustConsents: Set<UUID> = []
     private var presentationChallenges: [UUID: WorkspacePresentationChallenge] = [:]
+    private var preparedPIDPresentations: [UUID: PreparedW3CPresentation] = [:]
 
     public init(
         transport: any WorkspaceHTTPTransport,
@@ -213,7 +259,7 @@ public actor OariWorkspaceW3CBackend {
         } else {
             throw WorkspaceBackendError.malformedOffer
         }
-        let offer = try JSONDecoder().decode(CredentialOffer.self, from: data)
+        let offer = try Self.decode(CredentialOffer.self, from: data, stage: "credential offer")
         guard let issuer = URL(string: offer.credentialIssuer) else { throw WorkspaceBackendError.malformedOffer }
         try Self.validateHTTPS(issuer)
         let grant: Grant
@@ -230,13 +276,16 @@ public actor OariWorkspaceW3CBackend {
         } else {
             throw WorkspaceBackendError.unsupportedGrant
         }
-        let issuerMetadataURL = issuer.appendingPathComponent(".well-known/openid-credential-issuer")
-        let issuerMetadata = try JSONDecoder().decode(
+        let issuerMetadataURL = try Self.wellKnownURL(
+            name: "openid-credential-issuer",
+            issuer: issuer
+        )
+        let issuerMetadata = try await discoverMetadata(
             IssuerMetadata.self,
-            from: try await successfulGET(
-                issuerMetadataURL,
-                allowedOrigins: [try Self.origin(of: issuer)]
-            )
+            name: "openid-credential-issuer",
+            issuer: issuer,
+            standardURL: issuerMetadataURL,
+            stage: "credential issuer metadata"
         )
         let selectedConfigurations = try offer.credentialConfigurationIds.map { configurationID in
             guard let configuration = issuerMetadata.credentialConfigurations[configurationID] else {
@@ -292,7 +341,10 @@ public actor OariWorkspaceW3CBackend {
             throw WorkspaceBackendError.presentationRequired
         }
         try authorizeTrust(transaction: transaction, id: id, allowUntrusted: allowUntrusted)
-        let endpoint = transaction.issuer.appendingPathComponent("authorize-challenge")
+        let usesDraftInteraction = interactionTypes == ["openid4vp_presentation"]
+        let endpoint = transaction.issuer.appendingPathComponent(
+            usesDraftInteraction ? "authorize" : "authorize-challenge"
+        )
         let body = form([
             "issuer_state": issuerState,
             "interaction_types_supported": interactionTypes.joined(separator: ","),
@@ -309,22 +361,158 @@ public actor OariWorkspaceW3CBackend {
         guard raw.statusCode == 200 || raw.statusCode == 403,
               raw.body.count <= 1_048_576 else { throw WorkspaceBackendError.invalidResponse }
         let data = raw.body
-        let response = try JSONDecoder().decode(PresentationChallengeResponse.self, from: data)
+        let response = try Self.decode(
+            PresentationChallengeResponse.self,
+            from: data,
+            stage: "presentation challenge"
+        )
         guard let request = response.openid4vpRequest else { throw WorkspaceBackendError.invalidResponse }
+        let signedClaims = try request.request.map(Self.decodeSignedPresentationRequest)
+        guard let responseMode = request.responseMode ?? signedClaims?.responseMode,
+              let nonce = request.nonce ?? signedClaims?.nonce,
+              let dcqlQuery = request.dcqlQuery ?? signedClaims?.dcqlQuery else {
+            throw WorkspaceBackendError.invalidResponse
+        }
         let challenge = WorkspacePresentationChallenge(
             id: id,
             authorizationEndpoint: endpoint,
             authSession: response.authSession,
             interactionType: response.interactionTypeRequired ?? "openid4vp_presentation",
-            responseMode: request.responseMode,
-            responseURI: request.responseURI.flatMap(URL.init(string:)),
-            nonce: request.nonce,
-            state: request.state,
-            dcqlQuery: request.dcqlQuery,
-            signedRequest: request.request
+            responseMode: responseMode,
+            responseURI: (request.responseURI ?? signedClaims?.responseURI).flatMap(URL.init(string:)),
+            nonce: nonce,
+            state: request.state ?? signedClaims?.state,
+            dcqlQuery: dcqlQuery,
+            signedRequest: request.request,
+            clientID: signedClaims?.clientID
         )
         presentationChallenges[id] = challenge
         return challenge
+    }
+
+    public func prepareStoredPIDPresentation(id: UUID) async throws -> WorkspacePIDPresentationRequest {
+        guard let challenge = presentationChallenges[id] else {
+            throw WorkspaceBackendError.unknownTransaction
+        }
+        let query = try Self.presentationQuery(from: challenge.dcqlQuery)
+        let credentials = try await credentialStore.credentials()
+        for credential in credentials {
+            var claims: [WorkspacePIDPresentationClaim] = []
+            let kind: PreparedW3CPresentation.Kind
+            switch (query.format, credential.representation) {
+            case ("dc+sd-jwt", .dcSdJwt):
+                let parsed = try Self.parseStoredSDJWT(credential.rawCredential)
+                guard query.vctValues.contains(parsed.vct) else { continue }
+                var disclosures: [String: String] = [:]
+                var satisfies = true
+                for path in query.claimPaths {
+                    guard path.count == 1, let name = path.first else {
+                        satisfies = false
+                        break
+                    }
+                    if let disclosure = parsed.disclosures[name] {
+                        claims.append(Self.presentationClaim(path: path, value: disclosure.displayValue))
+                        disclosures[path.joined(separator: ".")] = disclosure.encoded
+                    } else if let value = parsed.payload[name]?.displayString {
+                        claims.append(Self.presentationClaim(path: path, value: value))
+                    } else {
+                        satisfies = false
+                        break
+                    }
+                }
+                guard satisfies else { continue }
+                kind = .sdJWT(issuerJWT: parsed.issuerJWT, disclosures: disclosures)
+            case ("jwt_vc_json", .jwtVcJson):
+                guard let profile = profiles.first(where: { $0.id == credential.profileID }) else { continue }
+                let compact = String(decoding: credential.rawCredential, as: UTF8.self)
+                let document = try EbsiCredentialInspector().inspectCompactJWT(compact, profile: profile)
+                guard Self.matchesTypeValues(query.typeValues, document: document) else { continue }
+                var satisfies = true
+                for path in query.claimPaths {
+                    guard let value = Self.value(at: path, in: document)?.displayString else {
+                        satisfies = false
+                        break
+                    }
+                    claims.append(Self.presentationClaim(path: path, value: value))
+                }
+                guard satisfies else { continue }
+                kind = .jwtVC(compact)
+            default:
+                continue
+            }
+            preparedPIDPresentations[id] = PreparedW3CPresentation(
+                credential: credential,
+                kind: kind,
+                requiredClaimIDs: Set(claims.map(\.id)),
+                queryID: query.id
+            )
+            return WorkspacePIDPresentationRequest(
+                id: id,
+                verifierName: challenge.clientID,
+                claims: claims
+            )
+        }
+        throw WorkspaceBackendError.presentationCredentialUnavailable
+    }
+
+    public func storedPIDPresentationToken(
+        id: UUID,
+        selectedClaimIDs: Set<String>
+    ) async throws -> String {
+        guard let challenge = presentationChallenges[id],
+              let prepared = preparedPIDPresentations.removeValue(forKey: id),
+              prepared.requiredClaimIDs.isSubset(of: selectedClaimIDs),
+              let keyUUID = UUID(uuidString: prepared.credential.holderKeyReference) else {
+            throw WorkspaceBackendError.invalidPresentationResponse
+        }
+        let audience = challenge.clientID?.hasPrefix("redirect_uri:") == true
+            ? String(challenge.clientID!.dropFirst("redirect_uri:".count))
+            : (challenge.clientID ?? challenge.authorizationEndpoint.absoluteString)
+        let keyID = KeyID(rawValue: keyUUID)
+        let presentation: String
+        switch prepared.kind {
+        case let .sdJWT(issuerJWT, disclosures):
+            let selectedDisclosures = disclosures.keys.sorted().compactMap {
+                selectedClaimIDs.contains($0) ? disclosures[$0] : nil
+            }
+            let withoutKeyBinding = ([issuerJWT] + selectedDisclosures).joined(separator: "~") + "~"
+            presentation = withoutKeyBinding + (try await signedPresentationJWT(
+                keyID: keyID,
+                type: "kb+jwt",
+                payload: [
+                    "aud": audience,
+                    "nonce": challenge.nonce,
+                    "iat": Int(now().timeIntervalSince1970),
+                    "sd_hash": Data(SHA256.hash(data: Data(withoutKeyBinding.utf8))).base64URLEncodedString(),
+                ]
+            ))
+        case let .jwtVC(compactCredential):
+            let publicKey = try await keyProvider.publicKey(id: keyID)
+            let holder = try KeyDIDResolver().derive(publicKeyX963: publicKey.x963Representation)
+            presentation = try await signedPresentationJWT(
+                keyID: keyID,
+                type: "vp-ld+jwt",
+                payload: [
+                    "iss": holder,
+                    "aud": audience,
+                    "nonce": challenge.nonce,
+                    "iat": Int(now().timeIntervalSince1970),
+                    "exp": Int(now().timeIntervalSince1970) + 300,
+                    "vp": [
+                        "@context": ["https://www.w3.org/ns/credentials/v2"],
+                        "type": ["VerifiablePresentation"],
+                        "holder": holder,
+                        "verifiableCredential": [[
+                            "@context": "https://www.w3.org/ns/credentials/v2",
+                            "id": "data:application/vc+jwt,\(compactCredential)",
+                            "type": "EnvelopedVerifiableCredential",
+                        ]],
+                    ],
+                ]
+            )
+        }
+        let object = try JSONSerialization.data(withJSONObject: [prepared.queryID: [presentation]])
+        return String(decoding: object, as: UTF8.self)
     }
 
     public func submitPresentation(
@@ -336,14 +524,18 @@ public actor OariWorkspaceW3CBackend {
               trustConsents.contains(id) else {
             throw WorkspaceBackendError.unknownTransaction
         }
-        var fields: [String: String?] = [
-            "auth_session": challenge.authSession,
-            "state": challenge.state,
-        ]
-        if challenge.responseMode == "iar-post" {
+        var fields: [String: String?] = ["state": challenge.state]
+        if challenge.responseMode == "direct_post" {
+            fields["vp_token"] = vpToken
+        } else if challenge.responseMode == "iar-post" {
+            fields["auth_session"] = challenge.authSession
             fields["vp_token"] = vpToken
         } else {
-            let wrapped = try JSONSerialization.data(withJSONObject: ["vp_token": vpToken])
+            fields["auth_session"] = challenge.authSession
+            guard let tokenObject = try JSONSerialization.jsonObject(with: Data(vpToken.utf8)) as? [String: Any] else {
+                throw WorkspaceBackendError.invalidPresentationResponse
+            }
+            let wrapped = try JSONSerialization.data(withJSONObject: ["vp_token": tokenObject])
             fields["openid4vp_response"] = String(decoding: wrapped, as: UTF8.self)
         }
         let response = try await successfulRequest(
@@ -353,7 +545,11 @@ public actor OariWorkspaceW3CBackend {
             body: form(fields),
             allowedOrigins: [try Self.origin(of: transaction.issuer)]
         )
-        let code = try JSONDecoder().decode(AuthorizationCodeResponse.self, from: response)
+        let code = try Self.decode(
+            AuthorizationCodeResponse.self,
+            from: response,
+            stage: "presentation authorization response"
+        )
         guard let value = code.authorizationCode ?? code.code, !value.isEmpty else {
             throw WorkspaceBackendError.invalidPresentationResponse
         }
@@ -401,14 +597,16 @@ public actor OariWorkspaceW3CBackend {
         guard let authorizationServer = URL(
             string: issuerMetadata.authorizationServers?.first ?? transaction.issuer.absoluteString
         ) else { throw WorkspaceBackendError.unsafeEndpoint }
-        let authMetadataURL = authorizationServer
-            .appendingPathComponent(".well-known/oauth-authorization-server")
-        let authMetadata = try JSONDecoder().decode(
+        let authMetadataURL = try Self.wellKnownURL(
+            name: "oauth-authorization-server",
+            issuer: authorizationServer
+        )
+        let authMetadata = try await discoverMetadata(
             AuthorizationMetadata.self,
-            from: try await successfulGET(
-                authMetadataURL,
-                allowedOrigins: [try Self.origin(of: authorizationServer)]
-            )
+            name: "oauth-authorization-server",
+            issuer: authorizationServer,
+            standardURL: authMetadataURL,
+            stage: "authorization server metadata"
         )
         let transportContract = OID4VCITransportContract.resolve(
             selectedProfile: transportProfileRegistry.profile(for: transaction.issuer),
@@ -461,7 +659,7 @@ public actor OariWorkspaceW3CBackend {
             body: tokenBody,
             allowedOrigins: [try Self.origin(of: authorizationServer)]
         )
-        let token = try JSONDecoder().decode(TokenResponse.self, from: tokenResponse)
+        let token = try Self.decode(TokenResponse.self, from: tokenResponse, stage: "token response")
         let key = try await keyProvider.createKey(
             purpose: .credentialBinding,
             algorithm: .es256,
@@ -534,13 +732,6 @@ public actor OariWorkspaceW3CBackend {
             let credentialIdentifier = draftCredentialIdentifiers[configurationID]
                 ?? authorizationDetail?.credentialIdentifiers?.first(where: { !$0.isEmpty })
                 ?? configurationID
-            let proof = try await proofJWT(
-                key: key,
-                kid: method,
-                issuer: holderDID,
-                audience: transaction.issuer.absoluteString,
-                nonce: token.nonce
-            )
             let responseEncryption: CredentialResponseEncryptionRequest?
             if transportContract.requiresCredentialResponseEncryption,
                let securityState, let clientSecurity {
@@ -558,55 +749,89 @@ public actor OariWorkspaceW3CBackend {
             } else {
                 responseEncryption = nil
             }
-            let request = CredentialRequest(
-                credentialConfigurationId: transportContract.credentialIdentifierField == .credentialConfigurationID ? configurationID : nil,
-                credentialIdentifier: transportContract.credentialIdentifierField == .credentialIdentifier
-                    ? credentialIdentifier
-                    : nil,
-                format: transportContract.credentialIdentifierField == .credentialIdentifier
-                    ? nil
-                    : transaction.issuerMetadata.credentialConfigurations[configurationID]?.format,
-                proof: transportContract.proofShape == .draftProof
-                    ? ProofValue(proofType: "jwt", jwt: proof)
-                    : nil,
-                proofs: transportContract.proofShape == .finalProofsJWT
-                    ? ["jwt": [proof]]
-                    : nil,
-                credentialResponseEncryption: responseEncryption
-            )
-            let data = try JSONEncoder().encode(request)
             guard let credentialEndpoint = URL(string: issuerMetadata.credentialEndpoint) else {
                 throw WorkspaceBackendError.unsafeEndpoint
             }
-            var credentialHeaders = [
-                "Content-Type": "application/json",
-                "Authorization": "Bearer \(token.accessToken)",
-            ]
-            if transportContract.requiresDPoP,
-               let securityState, let clientSecurity {
-                credentialHeaders["DPoP"] = try await clientSecurity.dpopHeader(
-                    state: securityState,
-                    method: "POST",
-                    targetURI: credentialEndpoint,
-                    accessToken: token.accessToken
-                )
-                credentialHeaders["Authorization"] = "DPoP \(token.accessToken)"
+            let identifierCandidates: [String?]
+            if transportContract.credentialIdentifierField == .credentialIdentifier {
+                var values = [credentialIdentifier]
+                if configurationID != credentialIdentifier { values.append(configurationID) }
+                identifierCandidates = values.map(Optional.some)
+            } else {
+                identifierCandidates = [nil]
             }
-            var response = try await successfulRequest(
-                credentialEndpoint,
-                method: "POST",
-                headers: credentialHeaders,
-                body: data,
-                allowedOrigins: [try Self.origin(of: transaction.issuer)]
-            )
+            var successfulResponse: Data?
+            for (index, candidate) in identifierCandidates.enumerated() {
+                let proof = try await proofJWT(
+                    key: key,
+                    kid: method,
+                    issuer: holderDID,
+                    audience: transaction.issuer.absoluteString,
+                    nonce: token.nonce
+                )
+                let request = CredentialRequest(
+                    credentialConfigurationId: transportContract.credentialIdentifierField == .credentialConfigurationID ? configurationID : nil,
+                    credentialIdentifier: candidate,
+                    format: transportContract.credentialIdentifierField == .credentialIdentifier
+                        ? nil
+                        : transaction.issuerMetadata.credentialConfigurations[configurationID]?.format,
+                    proof: transportContract.proofShape == .draftProof
+                        ? ProofValue(proofType: "jwt", jwt: proof)
+                        : nil,
+                    proofs: transportContract.proofShape == .finalProofsJWT
+                        ? ["jwt": [proof]]
+                        : nil,
+                    credentialResponseEncryption: responseEncryption
+                )
+                let data = try JSONEncoder().encode(request)
+                var credentialHeaders = [
+                    "Content-Type": "application/json",
+                    "Authorization": "Bearer \(token.accessToken)",
+                ]
+                if transportContract.requiresDPoP,
+                   let securityState, let clientSecurity {
+                    credentialHeaders["DPoP"] = try await clientSecurity.dpopHeader(
+                        state: securityState,
+                        method: "POST",
+                        targetURI: credentialEndpoint,
+                        accessToken: token.accessToken
+                    )
+                    credentialHeaders["Authorization"] = "DPoP \(token.accessToken)"
+                }
+                do {
+                    successfulResponse = try await successfulRequest(
+                        credentialEndpoint,
+                        method: "POST",
+                        headers: credentialHeaders,
+                        body: data,
+                        allowedOrigins: [try Self.origin(of: transaction.issuer)]
+                    )
+                    break
+                } catch let error as WorkspaceBackendError {
+                    let canRetry = index + 1 < identifierCandidates.count && {
+                        switch error {
+                        case .remoteOAuthError(code: "invalid_credential_request", detail: _),
+                             .remoteOAuthError(code: "unsupported_credential_type", detail: _): true
+                        default: false
+                        }
+                    }()
+                    guard canRetry else { throw error }
+                }
+            }
+            guard var response = successfulResponse else { throw WorkspaceBackendError.invalidResponse }
             if transportContract.requiresCredentialResponseEncryption,
+               Self.looksLikeCompactJWE(response),
                let securityState, let clientSecurity {
                 response = try await clientSecurity.decryptCredentialResponse(
                     state: securityState,
                     compactJWE: response
                 )
             }
-            let credentials = try JSONDecoder().decode(CredentialResponse.self, from: response)
+            let credentials = try Self.decode(
+                CredentialResponse.self,
+                from: response,
+                stage: "credential response"
+            )
             guard !credentials.credentials.isEmpty else {
                 throw WorkspaceBackendError.invalidResponse
             }
@@ -618,9 +843,10 @@ public actor OariWorkspaceW3CBackend {
                         ?? transaction.issuerMetadata.credentialConfigurations[configurationID]?.format,
                     rawCredential: raw
                 )
-                try await credentialValidator.validate(
+                let signedIssuer = try await credentialValidator.validate(
                     rawCredential: raw,
                     profile: selectedProfile,
+                    expectedIssuer: transaction.issuer.absoluteString,
                     expectedHolderDID: holderDID,
                     at: now()
                 )
@@ -637,6 +863,7 @@ public actor OariWorkspaceW3CBackend {
                     configurationID: configurationID,
                     displayName: transaction.issuerMetadata.credentialConfigurations[configurationID]?.display.name
                         ?? "Credential",
+                    issuerIdentifier: signedIssuer,
                     profileID: stored.profileID,
                     representation: stored.representation,
                     displayClaims: Self.displayClaims(
@@ -674,21 +901,6 @@ public actor OariWorkspaceW3CBackend {
         format: String?,
         rawCredential: Data
     ) throws -> EbsiCredentialProfile {
-        let context = Self.jwtContext(rawCredential)
-        if context == "https://www.w3.org/ns/credentials/v2",
-           let profile = profiles.first(where: { $0.dataModel == .v2_0 }) {
-            return profile
-        }
-        if context == "https://www.w3.org/2018/credentials/v1",
-           let profile = profiles.first(where: { $0.dataModel == .v1_1 }) {
-            return profile
-        }
-        if format == "jwt_vc_json" || format == "jwt_vc_json-ld" {
-            guard let profile = profiles.first(where: { $0.dataModel == .v1_1 }) else {
-                throw EbsiCredentialError.unsupportedRepresentation
-            }
-            return profile
-        }
         if format == "dc+sd-jwt" {
             guard let profile = profiles.first(where: { $0.representation == .dcSdJwt }) else {
                 throw EbsiCredentialError.unsupportedRepresentation
@@ -699,6 +911,21 @@ public actor OariWorkspaceW3CBackend {
             guard let profile = profiles.first(where: { $0.representation == .vcdm2SdJwt }) else {
                 throw EbsiCredentialError.unsupportedRepresentation
             }
+            return profile
+        }
+        let context = Self.jwtContext(rawCredential)
+        if context == "https://www.w3.org/ns/credentials/v2",
+           let profile = profiles.first(where: { $0.representation == .vcdm2Jwt }) {
+            return profile
+        }
+        if format == "jwt_vc_json" || format == "jwt_vc_json-ld" {
+            guard let profile = profiles.first(where: { $0.dataModel == .v1_1 }) else {
+                throw EbsiCredentialError.unsupportedRepresentation
+            }
+            return profile
+        }
+        if context == "https://www.w3.org/2018/credentials/v1",
+           let profile = profiles.first(where: { $0.dataModel == .v1_1 }) {
             return profile
         }
         guard let profile = profiles.first(where: { $0.representation == .vcdm2Jwt }) else {
@@ -724,6 +951,203 @@ public actor OariWorkspaceW3CBackend {
     private static func supportedRepresentation(_ format: String) -> Bool {
         ["jwt_vc_json", "jwt_vc_json-ld", "dc+sd-jwt", "vcdm2_sd_jwt", "application/vc+jwt"]
             .contains(format)
+    }
+
+    private static func decode<Value: Decodable>(
+        _ type: Value.Type,
+        from data: Data,
+        stage: String
+    ) throws -> Value {
+        do {
+            return try JSONDecoder().decode(type, from: data)
+        } catch let error as DecodingError {
+            let context: DecodingError.Context
+            let reason: String
+            switch error {
+            case let .dataCorrupted(value):
+                context = value
+                reason = "invalid value"
+            case let .keyNotFound(key, value):
+                context = value
+                reason = "missing key \(key.stringValue)"
+            case let .typeMismatch(expected, value):
+                context = value
+                reason = "expected \(String(describing: expected))"
+            case let .valueNotFound(expected, value):
+                context = value
+                reason = "missing \(String(describing: expected))"
+            @unknown default:
+                throw WorkspaceBackendError.decodingFailed(
+                    stage: stage,
+                    path: "$",
+                    reason: "unknown decoding failure"
+                )
+            }
+            let path = context.codingPath.reduce("$") { partial, key in
+                if let index = key.intValue { return "\(partial)[\(index)]" }
+                return "\(partial).\(key.stringValue)"
+            }
+            throw WorkspaceBackendError.decodingFailed(stage: stage, path: path, reason: reason)
+        }
+    }
+
+    private static func looksLikeCompactJWE(_ data: Data) -> Bool {
+        let compact = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return compact.split(separator: ".", omittingEmptySubsequences: false).count == 5
+    }
+
+    private static func wellKnownURL(name: String, issuer: URL) throws -> URL {
+        guard let scheme = issuer.scheme, let host = issuer.host else {
+            throw WorkspaceBackendError.unsafeEndpoint
+        }
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = host
+        components.port = issuer.port
+        let issuerPath = issuer.path == "/" ? "" : issuer.path
+        components.path = "/.well-known/\(name)\(issuerPath)"
+        guard let url = components.url else { throw WorkspaceBackendError.unsafeEndpoint }
+        return url
+    }
+
+    private static func decodeSignedPresentationRequest(_ compactJWT: String) throws -> SignedPresentationRequest {
+        let parts = compactJWT.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { throw WorkspaceBackendError.invalidResponse }
+        var base64 = String(parts[1]).replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+        guard let data = Data(base64Encoded: base64) else { throw WorkspaceBackendError.invalidResponse }
+        return try Self.decode(
+            SignedPresentationRequest.self,
+            from: data,
+            stage: "signed presentation request"
+        )
+    }
+
+    private static func presentationQuery(
+        from dcqlQuery: [String: AnySendableJSON]
+    ) throws -> (
+        id: String,
+        format: String,
+        vctValues: Set<String>,
+        typeValues: [[String]],
+        claimPaths: [[String]]
+    ) {
+        guard case let .array(credentials)? = dcqlQuery["credentials"] else {
+            throw WorkspaceBackendError.invalidResponse
+        }
+        for credential in credentials {
+            guard case let .object(query) = credential,
+                  let format = query["format"]?.string,
+                  format == "dc+sd-jwt" || format == "jwt_vc_json",
+                  let id = query["id"]?.string,
+                  case let .array(claims)? = query["claims"] else { continue }
+            let meta = query["meta"]?.object ?? [:]
+            let vcts: Set<String>
+            if case let .array(values)? = meta["vct_values"] {
+                vcts = Set(values.compactMap(\.string))
+            } else {
+                vcts = []
+            }
+            let typeValues: [[String]]
+            if case let .array(values)? = meta["type_values"] {
+                typeValues = values.compactMap { value in
+                    guard case let .array(types) = value else { return nil }
+                    return types.compactMap(\.string)
+                }
+            } else {
+                typeValues = []
+            }
+            let paths = claims.compactMap { claim -> [String]? in
+                guard case let .object(value) = claim,
+                      case let .array(path)? = value["path"] else { return nil }
+                return path.compactMap(\.string)
+            }
+            guard paths.count == claims.count, !paths.isEmpty,
+                  format != "dc+sd-jwt" || !vcts.isEmpty else {
+                throw WorkspaceBackendError.invalidResponse
+            }
+            return (id, format, vcts, typeValues, paths)
+        }
+        throw WorkspaceBackendError.presentationCredentialUnavailable
+    }
+
+    private static func presentationClaim(
+        path: [String],
+        value: String
+    ) -> WorkspacePIDPresentationClaim {
+        WorkspacePIDPresentationClaim(
+            id: path.joined(separator: "."),
+            path: path,
+            value: value,
+            required: true
+        )
+    }
+
+    private static func value(
+        at path: [String],
+        in document: [String: AnySendableJSON]
+    ) -> AnySendableJSON? {
+        guard let first = path.first, var value = document[first] else { return nil }
+        for component in path.dropFirst() {
+            guard let next = value.object?[component] else { return nil }
+            value = next
+        }
+        return value
+    }
+
+    private static func matchesTypeValues(
+        _ typeValues: [[String]],
+        document: [String: AnySendableJSON]
+    ) -> Bool {
+        guard !typeValues.isEmpty else { return true }
+        let types: Set<String>
+        if let type = document["type"]?.string {
+            types = [type]
+        } else if case let .array(values)? = document["type"] {
+            types = Set(values.compactMap(\.string))
+        } else {
+            types = []
+        }
+        return typeValues.contains { Set($0).isSubset(of: types) }
+    }
+
+    private static func parseStoredSDJWT(_ rawCredential: Data) throws -> (
+        issuerJWT: String,
+        vct: String,
+        payload: [String: AnySendableJSON],
+        disclosures: [String: (encoded: String, displayValue: String)]
+    ) {
+        let raw = String(decoding: rawCredential, as: UTF8.self)
+        guard let issuerJWT = raw.split(separator: "~", omittingEmptySubsequences: false).first else {
+            throw EbsiCredentialError.malformedCredential
+        }
+        let payload = try EbsiCredentialInspector().inspectSDJWT(raw)
+        guard let vct = payload["vct"]?.string else { throw EbsiCredentialError.profileMismatch }
+        let validDigests: Set<String>
+        if case let .array(values)? = payload["_sd"] {
+            validDigests = Set(values.compactMap(\.string))
+        } else {
+            validDigests = []
+        }
+        var disclosures: [String: (encoded: String, displayValue: String)] = [:]
+        for encoded in raw.split(separator: "~").dropFirst() where !encoded.isEmpty {
+            let digest = Data(SHA256.hash(data: Data(encoded.utf8))).base64URLEncodedString()
+            guard validDigests.contains(digest) else { continue }
+            var base64 = String(encoded).replacingOccurrences(of: "-", with: "+")
+                .replacingOccurrences(of: "_", with: "/")
+            base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+            guard let data = Data(base64Encoded: base64),
+                  let value = try? JSONSerialization.jsonObject(with: data) as? [Any],
+                  value.count == 3, let name = value[1] as? String else { continue }
+            let displayValue: String
+            if let string = value[2] as? String { displayValue = string }
+            else if let number = value[2] as? NSNumber { displayValue = number.stringValue }
+            else { displayValue = "Available" }
+            disclosures[name] = (String(encoded), displayValue)
+        }
+        return (String(issuerJWT), vct, payload, disclosures)
     }
 
     private static func equivalentDraftConfiguration(
@@ -823,6 +1247,7 @@ public actor OariWorkspaceW3CBackend {
         transactions[id] = nil
         authorizationCodes[id] = nil
         presentationChallenges[id] = nil
+        preparedPIDPresentations[id] = nil
         trustConsents.remove(id)
     }
 
@@ -869,6 +1294,23 @@ public actor OariWorkspaceW3CBackend {
         return "\(header).\(encodedPayload).\(signature.base64URLEncodedString())"
     }
 
+    private func signedPresentationJWT(
+        keyID: KeyID,
+        type: String,
+        payload: [String: Any]
+    ) async throws -> String {
+        let header = try Self.base64JSON(["alg": "ES256", "typ": type])
+        let encodedPayload = try Self.base64JSON(payload)
+        let signingInput = Data("\(header).\(encodedPayload)".utf8)
+        let signature = try await keyProvider.sign(SigningRequest(
+            keyID: keyID,
+            payload: signingInput,
+            userAuthenticationReason: "Present approved identity claims",
+            signatureFormat: .joseRaw
+        ))
+        return "\(header).\(encodedPayload).\(signature.base64URLEncodedString())"
+    }
+
     private func successfulGET(_ url: URL, allowedOrigins: Set<String>) async throws -> Data {
         try await successfulRequest(
             url,
@@ -877,6 +1319,34 @@ public actor OariWorkspaceW3CBackend {
             body: nil,
             allowedOrigins: allowedOrigins
         )
+    }
+
+    private func discoverMetadata<Value: Decodable>(
+        _ type: Value.Type,
+        name: String,
+        issuer: URL,
+        standardURL: URL,
+        stage: String
+    ) async throws -> Value {
+        let allowedOrigins = Set([try Self.origin(of: issuer)])
+        do {
+            let data = try await successfulGET(standardURL, allowedOrigins: allowedOrigins)
+            return try Self.decode(type, from: data, stage: stage)
+        } catch let error as WorkspaceBackendError {
+            let shouldTryLegacy = switch error {
+            case .remoteHTTPError(status: 404, detail: _): true
+            case .remoteOAuthError(code: "not_found", detail: _): true
+            case .decodingFailed: true
+            default: false
+            }
+            guard shouldTryLegacy else { throw error }
+            let legacyURL = issuer
+                .appendingPathComponent(".well-known")
+                .appendingPathComponent(name)
+            guard legacyURL != standardURL else { throw error }
+            let data = try await successfulGET(legacyURL, allowedOrigins: allowedOrigins)
+            return try Self.decode(type, from: data, stage: stage)
+        }
     }
 
     private func offlineDisplayMetadata(
@@ -1052,11 +1522,11 @@ private struct PresentationChallengeResponse: Decodable {
 }
 
 private struct PresentationRequest: Decodable {
-    let responseMode: String
+    let responseMode: String?
     let responseURI: String?
-    let nonce: String
+    let nonce: String?
     let state: String?
-    let dcqlQuery: [String: AnySendableJSON]
+    let dcqlQuery: [String: AnySendableJSON]?
     let request: String?
     enum CodingKeys: String, CodingKey {
         case responseMode = "response_mode"
@@ -1065,6 +1535,34 @@ private struct PresentationRequest: Decodable {
         case dcqlQuery = "dcql_query"
         case request
     }
+}
+
+private struct SignedPresentationRequest: Decodable {
+    let clientID: String
+    let responseMode: String
+    let responseURI: String?
+    let nonce: String
+    let state: String?
+    let dcqlQuery: [String: AnySendableJSON]
+    enum CodingKeys: String, CodingKey {
+        case responseMode = "response_mode"
+        case responseURI = "response_uri"
+        case clientID = "client_id"
+        case nonce, state
+        case dcqlQuery = "dcql_query"
+    }
+}
+
+private struct PreparedW3CPresentation: Sendable {
+    enum Kind: Sendable {
+        case sdJWT(issuerJWT: String, disclosures: [String: String])
+        case jwtVC(String)
+    }
+
+    let credential: StoredEbsiCredential
+    let kind: Kind
+    let requiredClaimIDs: Set<String>
+    let queryID: String
 }
 
 private struct AuthorizationCodeResponse: Decodable {

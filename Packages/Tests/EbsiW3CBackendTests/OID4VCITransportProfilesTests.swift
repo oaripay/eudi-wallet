@@ -26,6 +26,15 @@ struct OID4VCITransportProfilesTests {
         #expect(draft18.requiresDPoP)
         #expect(!draft18.requiresClientAttestation)
         #expect(draft18.requiresCredentialResponseEncryption)
+        let draft17 = OID4VCITransportContract.resolve(
+            selectedProfile: .draft17,
+            authorizationMetadata: metadata
+        )
+        #expect(draft17.profile == .draft17)
+        #expect(draft17.proofShape == .finalProofsJWT)
+        #expect(draft17.credentialIdentifierField == .credentialIdentifier)
+        #expect(draft17.requiresDPoP)
+        #expect(draft17.requiresCredentialResponseEncryption)
     }
 
     @Test("Attestation-only draft issuer requires client attestation")
@@ -66,7 +75,21 @@ struct OID4VCITransportProfilesTests {
             authorizationMetadata: OID4VCIAuthorizationMetadata(tokenEndpointAuthenticationMethods: [])
         )
         #expect(omitted.tokenEndpointAuthentication == .anonymous)
+        #expect(omitted.requiresDPoP)
         #expect(empty.tokenEndpointAuthentication == .unsupported)
+    }
+
+    @Test("Registered draft rejects explicitly incompatible DPoP algorithms")
+    func incompatibleDPoP() {
+        let profile = OID4VCITransportContract.resolve(
+            selectedProfile: .draft17,
+            authorizationMetadata: OID4VCIAuthorizationMetadata(
+                dpopSigningAlgorithms: ["ES384"],
+                tokenEndpointAuthenticationMethods: ["none"]
+            )
+        )
+        #expect(profile.requiresDPoP)
+        #expect(profile.tokenEndpointAuthentication == .unsupported)
     }
 
     @Test("Final profile remains issuer-generic and metadata-driven")
@@ -86,6 +109,8 @@ struct OID4VCITransportProfilesTests {
         let issuer = URL(string: "https://issuer.example/service/draft-13")!
         #expect(OID4VCITransportProfileRegistry.finalOnly.profile(for: issuer) == .final)
         #expect(OID4VCITransportProfileRegistry.developmentDraftCompatibility.profile(for: issuer) == .draft13)
+        let draft17 = URL(string: "https://issuer.example/service/draft-17")!
+        #expect(OID4VCITransportProfileRegistry.developmentDraftCompatibility.profile(for: draft17) == .draft17)
         let draftLookingFinal = URL(string: "https://issuer.example/draft-13/service/final")!
         #expect(OID4VCITransportProfileRegistry.developmentDraftCompatibility.profile(for: draftLookingFinal) == .final)
     }
