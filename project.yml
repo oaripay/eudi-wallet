@@ -67,6 +67,9 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         NSFaceIDUsageDescription: Authenticate before sharing credentials or approving sensitive wallet actions.
         NSCameraUsageDescription: Scan credential offers and presentation requests.
         CFBundleURLTypes:
