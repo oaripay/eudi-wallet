@@ -3,6 +3,7 @@ import Foundation
 
 public struct KeyDIDResolver: DIDResolver, Sendable {
     private static let p256Multicodec = 0x1200
+    private static let jwkJCSMultiCodec = 0xeb51
 
     public init() {}
 
@@ -15,18 +16,36 @@ public struct KeyDIDResolver: DIDResolver, Sendable {
         guard Array(decoded.prefix(offset)) == Varint.encode(code) else {
             throw DIDResolutionError.malformedKey
         }
-        guard code == Self.p256Multicodec else { throw DIDResolutionError.unsupportedKeyType }
-        let compressed = Data(decoded.dropFirst(offset))
-        guard compressed.count == 33 else { throw DIDResolutionError.malformedKey }
-        let publicKey: P256.Signing.PublicKey
-        do {
-            publicKey = try P256.Signing.PublicKey(compressedRepresentation: compressed)
-        } catch {
-            throw DIDResolutionError.malformedKey
+        let jwk: PublicJWK
+        switch code {
+        case Self.p256Multicodec:
+            let compressed = Data(decoded.dropFirst(offset))
+            guard compressed.count == 33 else { throw DIDResolutionError.malformedKey }
+            let publicKey: P256.Signing.PublicKey
+            do {
+                publicKey = try P256.Signing.PublicKey(compressedRepresentation: compressed)
+            } catch {
+                throw DIDResolutionError.malformedKey
+            }
+            let x963 = publicKey.x963Representation
+            jwk = PublicJWK(
+                kty: "EC",
+                crv: "P-256",
+                x: Data(x963[1 ..< 33]).base64URLEncodedString(),
+                y: Data(x963[33 ..< 65]).base64URLEncodedString()
+            )
+        case Self.jwkJCSMultiCodec:
+            let data = Data(decoded.dropFirst(offset))
+            guard let decodedJWK = try? JSONDecoder().decode(PublicJWK.self, from: data),
+                  decodedJWK.kty == "EC",
+                  decodedJWK.crv == "P-256",
+                  decodedJWK.y != nil else {
+                throw DIDResolutionError.unsupportedKeyType
+            }
+            jwk = decodedJWK
+        default:
+            throw DIDResolutionError.unsupportedKeyType
         }
-        let x963 = publicKey.x963Representation
-        let x = Data(x963[1 ..< 33]).base64URLEncodedString()
-        let y = Data(x963[33 ..< 65]).base64URLEncodedString()
         let methodID = "\(did)#\(identifier)"
         return DIDDocument(
             id: did,
@@ -35,7 +54,7 @@ public struct KeyDIDResolver: DIDResolver, Sendable {
                     id: methodID,
                     type: "JsonWebKey2020",
                     controller: did,
-                    publicKeyJwk: PublicJWK(kty: "EC", crv: "P-256", x: x, y: y)
+                    publicKeyJwk: jwk
                 ),
             ],
             authentication: [methodID],

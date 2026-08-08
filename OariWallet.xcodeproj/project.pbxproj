@@ -74,7 +74,7 @@
 		7C930619E1432B0507B293A0 /* WalletKitRuntimeProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletKitRuntimeProbe.swift; sourceTree = "<group>"; };
 		85D309EBDC2A9920E5B60BC6 /* WalletScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletScreens.swift; sourceTree = "<group>"; };
 		874E8679A6B79243A4C14054 /* OariWallet.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = OariWallet.entitlements; sourceTree = "<group>"; };
-		97A15E0BE6ACA09A914CCF44 /* OariWallet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OariWallet.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		97A15E0BE6ACA09A914CCF44 /* OARIWallet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OARIWallet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9A28098C49ABBDC5A6B792F5 /* WalletAppModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletAppModelTests.swift; sourceTree = "<group>"; };
 		A173F8F1FF8FA4B69FBCBB21 /* WalletTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = WalletTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		BBDE0CBAB3548D875B281AA6 /* WalletKitIOSIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletKitIOSIntegrationTests.swift; sourceTree = "<group>"; };
@@ -146,7 +146,7 @@
 		CEC098C124B80E784FFC1DAE /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				97A15E0BE6ACA09A914CCF44 /* OariWallet.app */,
+				97A15E0BE6ACA09A914CCF44 /* OARIWallet.app */,
 				A173F8F1FF8FA4B69FBCBB21 /* WalletTests.xctest */,
 				EE6231651ABE932AFB55827B /* WalletUITests.xctest */,
 			);
@@ -258,8 +258,8 @@
 				377D5477E6619F6CD2F469DD /* EudiWalletKitAdapter */,
 				F3D2D3D88DF7E075E9286D51 /* EbsiW3CBackend */,
 			);
-			productName = OariWallet;
-			productReference = 97A15E0BE6ACA09A914CCF44 /* OariWallet.app */;
+			productName = OARIWallet;
+			productReference = 97A15E0BE6ACA09A914CCF44 /* OARIWallet.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -476,7 +476,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = io.oari.wallet;
 				PRODUCT_MODULE_NAME = OariWallet;
-				PRODUCT_NAME = OariWallet;
+				PRODUCT_NAME = OARIWallet;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_MODULE_NAME = OariWallet;
@@ -497,7 +497,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = io.oari.wallet.tests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OariWallet.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OariWallet";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OARIWallet.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OARIWallet";
 			};
 			name = Debug;
 		};
@@ -615,7 +615,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = io.oari.wallet.tests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OariWallet.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OariWallet";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OARIWallet.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OARIWallet";
 			};
 			name = Release;
 		};
@@ -637,7 +637,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = io.oari.wallet;
 				PRODUCT_MODULE_NAME = OariWallet;
-				PRODUCT_NAME = OariWallet;
+				PRODUCT_NAME = OARIWallet;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_MODULE_NAME = OariWallet;
@@ -725,7 +725,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = io.oari.wallet;
 				PRODUCT_MODULE_NAME = OariWallet;
-				PRODUCT_NAME = OariWallet;
+				PRODUCT_NAME = OARIWallet;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_MODULE_NAME = OariWallet;
@@ -746,7 +746,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = io.oari.wallet.tests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OariWallet.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OariWallet";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OARIWallet.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OARIWallet";
 			};
 			name = ReleaseTesting;
 		};

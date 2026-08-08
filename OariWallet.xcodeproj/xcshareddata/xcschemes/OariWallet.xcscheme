@@ -15,7 +15,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "DB226ABFBC1EC926AA7764CB"
-               BuildableName = "OariWallet.app"
+               BuildableName = "OARIWallet.app"
                BlueprintName = "OariWallet"
                ReferencedContainer = "container:OariWallet.xcodeproj">
             </BuildableReference>
@@ -61,7 +61,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "DB226ABFBC1EC926AA7764CB"
-            BuildableName = "OariWallet.app"
+             BuildableName = "OARIWallet.app"
             BlueprintName = "OariWallet"
             ReferencedContainer = "container:OariWallet.xcodeproj">
          </BuildableReference>
@@ -70,7 +70,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "DB226ABFBC1EC926AA7764CB"
-            BuildableName = "OariWallet.app"
+             BuildableName = "OARIWallet.app"
             BlueprintName = "OariWallet"
             ReferencedContainer = "container:OariWallet.xcodeproj">
          </BuildableReference>
@@ -115,7 +115,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "DB226ABFBC1EC926AA7764CB"
-            BuildableName = "OariWallet.app"
+             BuildableName = "OARIWallet.app"
             BlueprintName = "OariWallet"
             ReferencedContainer = "container:OariWallet.xcodeproj">
          </BuildableReference>
@@ -132,7 +132,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "DB226ABFBC1EC926AA7764CB"
-            BuildableName = "OariWallet.app"
+             BuildableName = "OARIWallet.app"
             BlueprintName = "OariWallet"
             ReferencedContainer = "container:OariWallet.xcodeproj">
          </BuildableReference>
