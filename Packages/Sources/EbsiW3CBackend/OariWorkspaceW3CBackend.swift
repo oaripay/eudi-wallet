@@ -119,6 +119,9 @@ public enum WorkspaceBackendError: Error, Equatable, Sendable {
     case untrustedConsentRequired
     case rejectedTrust
     case invalidResponse
+    case missingCredentialNonce
+    case missingCredentialAuthorization
+    case credentialAuthorizationMismatch(offered: String, authorized: [String])
     case unknownTransaction
     case presentationRequired
     case invalidPresentationResponse
@@ -155,6 +158,7 @@ public actor OariWorkspaceW3CBackend {
     private let credentialValidator: any WorkspaceCredentialValidating
     private let profiles: [EbsiCredentialProfile]
     private let clientSecurity: (any OID4VCIClientSecurity)?
+    private let transportProfileRegistry: OID4VCITransportProfileRegistry
     private let now: @Sendable () -> Date
     private var transactions: [UUID: Transaction] = [:]
     private var authorizationCodes: [UUID: String] = [:]
@@ -170,6 +174,7 @@ public actor OariWorkspaceW3CBackend {
         profile: EbsiCredentialProfile,
         additionalProfiles: [EbsiCredentialProfile] = [],
         clientSecurity: (any OID4VCIClientSecurity)? = nil,
+        transportProfileRegistry: OID4VCITransportProfileRegistry = .finalOnly,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.transport = transport
@@ -179,6 +184,7 @@ public actor OariWorkspaceW3CBackend {
         self.credentialValidator = credentialValidator
         self.profiles = [profile] + additionalProfiles
         self.clientSecurity = clientSecurity
+        self.transportProfileRegistry = transportProfileRegistry
         self.now = now
     }
 
@@ -232,7 +238,13 @@ public actor OariWorkspaceW3CBackend {
                 allowedOrigins: [try Self.origin(of: issuer)]
             )
         )
-        let representations = issuerMetadata.credentialConfigurations.values.map(\.format)
+        let selectedConfigurations = try offer.credentialConfigurationIds.map { configurationID in
+            guard let configuration = issuerMetadata.credentialConfigurations[configurationID] else {
+                throw WorkspaceBackendError.unsupportedGrant
+            }
+            return configuration
+        }
+        let representations = selectedConfigurations.map(\.format)
         guard representations.allSatisfy(Self.supportedRepresentation) else {
             throw WorkspaceBackendError.unsupportedGrant
         }
@@ -399,13 +411,16 @@ public actor OariWorkspaceW3CBackend {
             )
         )
         let transportContract = OID4VCITransportContract.resolve(
-            issuerURL: transaction.issuer,
+            selectedProfile: transportProfileRegistry.profile(for: transaction.issuer),
             authorizationMetadata: OID4VCIAuthorizationMetadata(
                 dpopSigningAlgorithms: authMetadata.dpopSigningAlgorithms,
                 clientAttestationAlgorithms: authMetadata.clientAttestationAlgorithms,
                 tokenEndpointAuthenticationMethods: authMetadata.tokenEndpointAuthenticationMethods
             )
         )
+        guard transportContract.tokenEndpointAuthentication != .unsupported else {
+            throw WorkspaceBackendError.clientSecurityUnavailable
+        }
         let securityState: OID4VCIClientSecurityState?
         if transportContract.requiresDPoP || transportContract.requiresClientAttestation ||
             transportContract.requiresCredentialResponseEncryption {
@@ -457,20 +472,68 @@ public actor OariWorkspaceW3CBackend {
         let holderDID = try KeyDIDResolver().derive(publicKeyX963: publicKey.x963Representation)
         let method = try await KeyDIDResolver().resolve(holderDID).assertionMethod.first!
         var results: [WorkspaceIssuedCredential] = []
-        let advertisedConfigurationIDs = Set(transaction.issuerMetadata.credentialConfigurations.keys)
-        let authorizedConfigurationIDs = token.authorizationDetails?.compactMap(\.credentialConfigurationID)
-            .filter { !$0.isEmpty && advertisedConfigurationIDs.contains($0) } ?? []
-        let configurationIDs = authorizedConfigurationIDs.isEmpty
-            ? transaction.configurationIDs
-            : authorizedConfigurationIDs
+        let configurationIDs: [String]
+        var draftAuthorizationDetails: [String: TokenResponse.AuthorizationDetail] = [:]
+        var draftCredentialIdentifiers: [String: String] = [:]
+        if transportContract.profile != .final {
+            guard let nonce = token.nonce, !nonce.isEmpty else {
+                throw WorkspaceBackendError.missingCredentialNonce
+            }
+            if let authorizationDetails = token.authorizationDetails {
+                guard !authorizationDetails.isEmpty else {
+                    throw WorkspaceBackendError.missingCredentialAuthorization
+                }
+                var matchedIndexes: Set<Int> = []
+                for offeredID in transaction.configurationIDs {
+                    var ranked = authorizationDetails.indices.compactMap { index -> (Int, Int, String)? in
+                        guard let match = Self.draftAuthorizationMatch(
+                            offeredID: offeredID,
+                            detail: authorizationDetails[index],
+                            configurations: transaction.issuerMetadata.credentialConfigurations
+                        ) else { return nil }
+                        return (index, match.score, match.credentialIdentifier)
+                    }
+                    if ranked.isEmpty, transaction.configurationIDs.count == 1 {
+                        ranked = authorizationDetails.indices.compactMap { index in
+                            guard let identifier = authorizationDetails[index].credentialIdentifiers?
+                                .first(where: { !$0.isEmpty }) else { return nil }
+                            return (index, 0, identifier)
+                        }
+                    }
+                    let highestScore = ranked.map(\.1).max()
+                    let candidates = ranked.filter { $0.1 == highestScore }
+                    guard highestScore != nil, candidates.count == 1,
+                          let candidate = candidates.first,
+                          matchedIndexes.insert(candidate.0).inserted else {
+                        throw WorkspaceBackendError.credentialAuthorizationMismatch(
+                            offered: offeredID,
+                            authorized: Self.authorizationIdentifiers(authorizationDetails)
+                        )
+                    }
+                    let index = candidate.0
+                    draftAuthorizationDetails[offeredID] = authorizationDetails[index]
+                    draftCredentialIdentifiers[offeredID] = candidate.2
+                }
+            }
+            configurationIDs = transaction.configurationIDs
+        } else {
+            let advertisedConfigurationIDs = Set(transaction.issuerMetadata.credentialConfigurations.keys)
+            let authorizedConfigurationIDs = token.authorizationDetails?.compactMap(\.credentialConfigurationID)
+                .filter { !$0.isEmpty && advertisedConfigurationIDs.contains($0) } ?? []
+            configurationIDs = authorizedConfigurationIDs.isEmpty
+                ? transaction.configurationIDs
+                : authorizedConfigurationIDs
+        }
         for configurationID in configurationIDs {
             let display = await offlineDisplayMetadata(
                 transaction.issuerMetadata.credentialConfigurations[configurationID]?.display
             )
-            let authorizationDetail = token.authorizationDetails?.first {
-                $0.credentialConfigurationID == configurationID
-            }
-            let credentialIdentifier = authorizationDetail?.credentialIdentifiers?.first ?? configurationID
+            let authorizationDetail = transportContract.profile == .final
+                ? token.authorizationDetails?.first { $0.credentialConfigurationID == configurationID }
+                : draftAuthorizationDetails[configurationID]
+            let credentialIdentifier = draftCredentialIdentifiers[configurationID]
+                ?? authorizationDetail?.credentialIdentifiers?.first(where: { !$0.isEmpty })
+                ?? configurationID
             let proof = try await proofJWT(
                 key: key,
                 kid: method,
@@ -550,7 +613,9 @@ public actor OariWorkspaceW3CBackend {
             for item in credentials.credentials {
                 let raw = Data(item.credential.utf8)
                 let selectedProfile = try selectProfile(
-                    format: credentials.format ?? item.format,
+                    format: credentials.format
+                        ?? item.format
+                        ?? transaction.issuerMetadata.credentialConfigurations[configurationID]?.format,
                     rawCredential: raw
                 )
                 try await credentialValidator.validate(
@@ -605,7 +670,10 @@ public actor OariWorkspaceW3CBackend {
         return results
     }
 
-    private func selectProfile(format: String?, rawCredential: Data) throws -> EbsiCredentialProfile {
+    private func selectProfile(
+        format: String?,
+        rawCredential: Data
+    ) throws -> EbsiCredentialProfile {
         let context = Self.jwtContext(rawCredential)
         if context == "https://www.w3.org/ns/credentials/v2",
            let profile = profiles.first(where: { $0.dataModel == .v2_0 }) {
@@ -621,10 +689,16 @@ public actor OariWorkspaceW3CBackend {
             }
             return profile
         }
-        if format == "dc+sd-jwt" || format == "vcdm2_sd_jwt" {
-            guard let profile = profiles.first(where: {
-                $0.representation == .dcSdJwt || $0.representation == .vcdm2SdJwt
-            }) else { throw EbsiCredentialError.unsupportedRepresentation }
+        if format == "dc+sd-jwt" {
+            guard let profile = profiles.first(where: { $0.representation == .dcSdJwt }) else {
+                throw EbsiCredentialError.unsupportedRepresentation
+            }
+            return profile
+        }
+        if format == "vcdm2_sd_jwt" {
+            guard let profile = profiles.first(where: { $0.representation == .vcdm2SdJwt }) else {
+                throw EbsiCredentialError.unsupportedRepresentation
+            }
             return profile
         }
         guard let profile = profiles.first(where: { $0.representation == .vcdm2Jwt }) else {
@@ -650,6 +724,64 @@ public actor OariWorkspaceW3CBackend {
     private static func supportedRepresentation(_ format: String) -> Bool {
         ["jwt_vc_json", "jwt_vc_json-ld", "dc+sd-jwt", "vcdm2_sd_jwt", "application/vc+jwt"]
             .contains(format)
+    }
+
+    private static func equivalentDraftConfiguration(
+        offeredID: String,
+        authorizedID: String,
+        configurations: [String: SupportedConfiguration]
+    ) -> Bool {
+        if offeredID == authorizedID { return true }
+        guard let offered = configurations[offeredID],
+              let authorized = configurations[authorizedID],
+              let offeredVCT = offered.vct, !offeredVCT.isEmpty,
+              offeredVCT == authorized.vct else {
+            return false
+        }
+        return offered.format == authorized.format
+    }
+
+    private static func draftAuthorizationMatch(
+        offeredID: String,
+        detail: TokenResponse.AuthorizationDetail,
+        configurations: [String: SupportedConfiguration]
+    ) -> (score: Int, credentialIdentifier: String)? {
+        let identifiers = detail.credentialIdentifiers?.filter { !$0.isEmpty } ?? []
+        guard !identifiers.isEmpty else { return nil }
+        let equivalentIdentifier = identifiers.first {
+            equivalentDraftConfiguration(
+                offeredID: offeredID,
+                authorizedID: $0,
+                configurations: configurations
+            )
+        }
+        if detail.credentialConfigurationID == offeredID {
+            return (400, identifiers.first(where: { $0 == offeredID }) ?? equivalentIdentifier ?? identifiers[0])
+        }
+        if identifiers.contains(offeredID) {
+            return (300, offeredID)
+        }
+        if let authorizedID = detail.credentialConfigurationID,
+           equivalentDraftConfiguration(
+               offeredID: offeredID,
+               authorizedID: authorizedID,
+               configurations: configurations
+           ) {
+            return (200, equivalentIdentifier ?? identifiers[0])
+        }
+        if let equivalentIdentifier {
+            return (100, equivalentIdentifier)
+        }
+        return nil
+    }
+
+    private static func authorizationIdentifiers(
+        _ details: [TokenResponse.AuthorizationDetail]
+    ) -> [String] {
+        var seen: Set<String> = []
+        return details.flatMap { detail in
+            [detail.credentialConfigurationID].compactMap { $0 } + (detail.credentialIdentifiers ?? [])
+        }.filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
     private static func displayClaims(from credential: [String: AnySendableJSON]?) -> [CredentialDisplayClaim] {
@@ -1015,6 +1147,7 @@ private struct IssuerMetadata: Decodable {
 
 private struct SupportedConfiguration: Decodable {
     let format: String
+    let vct: String?
     let credentialMetadata: CredentialMetadata?
     let directDisplay: [CredentialDisplay]?
     let directClaims: [String: ClaimDefinition]?
@@ -1042,7 +1175,7 @@ private struct SupportedConfiguration: Decodable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case format
+        case format, vct
         case credentialMetadata = "credential_metadata"
         case directDisplay = "display"
         case directClaims = "claims"
@@ -1051,6 +1184,7 @@ private struct SupportedConfiguration: Decodable {
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         format = try values.decode(String.self, forKey: .format)
+        vct = try values.decodeIfPresent(String.self, forKey: .vct)
         credentialMetadata = try values.decodeIfPresent(CredentialMetadata.self, forKey: .credentialMetadata)
         directDisplay = try values.decodeIfPresent([CredentialDisplay].self, forKey: .directDisplay)
         directClaims = try values.decodeIfPresent([String: ClaimDefinition].self, forKey: .directClaims)

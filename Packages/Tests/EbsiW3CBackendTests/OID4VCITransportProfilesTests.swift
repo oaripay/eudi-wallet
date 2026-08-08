@@ -11,7 +11,7 @@ struct OID4VCITransportProfilesTests {
             tokenEndpointAuthenticationMethods: ["attest_jwt_client_auth", "none"]
         )
         let draft13 = OID4VCITransportContract.resolve(
-            issuerURL: URL(string: "https://issuer.example/service/draft-13")!,
+            selectedProfile: .draft13,
             authorizationMetadata: metadata
         )
         #expect(draft13.profile == .draft13)
@@ -19,7 +19,7 @@ struct OID4VCITransportProfilesTests {
         #expect(!draft13.requiresClientAttestation)
         #expect(draft13.requiresCredentialResponseEncryption)
         let draft18 = OID4VCITransportContract.resolve(
-            issuerURL: URL(string: "https://issuer.example/service/draft-18")!,
+            selectedProfile: .draft18,
             authorizationMetadata: metadata
         )
         #expect(draft18.profile == .draft18)
@@ -31,7 +31,7 @@ struct OID4VCITransportProfilesTests {
     @Test("Attestation-only draft issuer requires client attestation")
     func attestationOnlyDraft() {
         let profile = OID4VCITransportContract.resolve(
-            issuerURL: URL(string: "https://issuer.example/service/draft-13")!,
+            selectedProfile: .draft13,
             authorizationMetadata: OID4VCIAuthorizationMetadata(
                 dpopSigningAlgorithms: ["ES256"],
                 clientAttestationAlgorithms: ["ES256"],
@@ -42,15 +42,51 @@ struct OID4VCITransportProfilesTests {
         #expect(profile.requiresClientAttestation)
     }
 
+    @Test("Unsupported required token authentication fails closed")
+    func unsupportedTokenAuthentication() {
+        let profile = OID4VCITransportContract.resolve(
+            selectedProfile: .draft13,
+            authorizationMetadata: OID4VCIAuthorizationMetadata(
+                clientAttestationAlgorithms: ["ES384"],
+                tokenEndpointAuthenticationMethods: ["attest_jwt_client_auth"]
+            )
+        )
+        #expect(profile.tokenEndpointAuthentication == .unsupported)
+        #expect(!profile.requiresClientAttestation)
+    }
+
+    @Test("Omitted authentication metadata is public while explicit empty metadata is unsupported")
+    func omittedAndEmptyAuthenticationMetadata() {
+        let omitted = OID4VCITransportContract.resolve(
+            selectedProfile: .draft13,
+            authorizationMetadata: OID4VCIAuthorizationMetadata()
+        )
+        let empty = OID4VCITransportContract.resolve(
+            selectedProfile: .draft13,
+            authorizationMetadata: OID4VCIAuthorizationMetadata(tokenEndpointAuthenticationMethods: [])
+        )
+        #expect(omitted.tokenEndpointAuthentication == .anonymous)
+        #expect(empty.tokenEndpointAuthentication == .unsupported)
+    }
+
     @Test("Final profile remains issuer-generic and metadata-driven")
     func finalProfile() {
         let profile = OID4VCITransportContract.resolve(
-            issuerURL: URL(string: "https://oid4vc.igrant.io/service/final")!,
+            selectedProfile: .final,
             authorizationMetadata: OID4VCIAuthorizationMetadata()
         )
         #expect(profile.profile == .final)
         #expect(profile.credentialIdentifierField == .credentialConfigurationID)
         #expect(profile.proofShape == .finalProofsJWT)
         #expect(!profile.requiresClientAttestation)
+    }
+
+    @Test("Draft routes require an explicitly configured registry")
+    func explicitDraftRegistry() {
+        let issuer = URL(string: "https://issuer.example/service/draft-13")!
+        #expect(OID4VCITransportProfileRegistry.finalOnly.profile(for: issuer) == .final)
+        #expect(OID4VCITransportProfileRegistry.developmentDraftCompatibility.profile(for: issuer) == .draft13)
+        let draftLookingFinal = URL(string: "https://issuer.example/draft-13/service/final")!
+        #expect(OID4VCITransportProfileRegistry.developmentDraftCompatibility.profile(for: draftLookingFinal) == .final)
     }
 }

@@ -23,16 +23,40 @@ public enum OID4VCIResponseEnvelope: String, Codable, Equatable, Sendable {
     case deferredTransaction
 }
 
+public enum OID4VCITokenEndpointAuthentication: String, Codable, Equatable, Sendable {
+    case anonymous
+    case clientAttestation
+    case unsupported
+}
+
+public struct OID4VCITransportProfileRegistry: Sendable, Equatable {
+    private let terminalPathComponents: [String: OID4VCITransportProfile]
+
+    public static let finalOnly = OID4VCITransportProfileRegistry(terminalPathComponents: [:])
+    public static let developmentDraftCompatibility = OID4VCITransportProfileRegistry(
+        terminalPathComponents: ["draft-13": .draft13, "draft-18": .draft18]
+    )
+
+    public init(terminalPathComponents: [String: OID4VCITransportProfile]) {
+        self.terminalPathComponents = terminalPathComponents
+    }
+
+    public func profile(for issuerURL: URL) -> OID4VCITransportProfile {
+        terminalPathComponents[issuerURL.lastPathComponent.lowercased()] ?? .final
+    }
+}
+
 public struct OID4VCITransportContract: Equatable, Sendable {
     public let profile: OID4VCITransportProfile
     public let proofShape: OID4VCIProofShape
     public let credentialIdentifierField: OID4VCICredentialIdentifierField
     public let responseEnvelopes: Set<OID4VCIResponseEnvelope>
     public let requiresDPoP: Bool
-    public let requiresClientAttestation: Bool
+    public let tokenEndpointAuthentication: OID4VCITokenEndpointAuthentication
     public let requiresCredentialResponseEncryption: Bool
     public let supportsDeferredIssuance: Bool
     public let supportsBatchIssuance: Bool
+    public var requiresClientAttestation: Bool { tokenEndpointAuthentication == .clientAttestation }
 
     public static let final = OID4VCITransportContract(
         profile: .final,
@@ -40,7 +64,7 @@ public struct OID4VCITransportContract: Equatable, Sendable {
         credentialIdentifierField: .credentialConfigurationID,
         responseEnvelopes: [.jsonCredential, .jsonCredentials, .encryptedJWT, .deferredTransaction],
         requiresDPoP: false,
-        requiresClientAttestation: false,
+        tokenEndpointAuthentication: .anonymous,
         requiresCredentialResponseEncryption: false,
         supportsDeferredIssuance: true,
         supportsBatchIssuance: true
@@ -52,7 +76,7 @@ public struct OID4VCITransportContract: Equatable, Sendable {
         credentialIdentifierField: .credentialIdentifier,
         responseEnvelopes: [.encryptedJWT, .jsonCredential, .jsonCredentials, .deferredTransaction],
         requiresDPoP: true,
-        requiresClientAttestation: true,
+        tokenEndpointAuthentication: .unsupported,
         requiresCredentialResponseEncryption: true,
         supportsDeferredIssuance: true,
         supportsBatchIssuance: true
@@ -64,34 +88,51 @@ public struct OID4VCITransportContract: Equatable, Sendable {
         credentialIdentifierField: .credentialIdentifier,
         responseEnvelopes: [.encryptedJWT, .jsonCredential, .jsonCredentials, .deferredTransaction],
         requiresDPoP: true,
-        requiresClientAttestation: true,
+        tokenEndpointAuthentication: .unsupported,
         requiresCredentialResponseEncryption: true,
         supportsDeferredIssuance: true,
         supportsBatchIssuance: true
     )
 
     public static func resolve(
-        issuerURL: URL,
+        selectedProfile: OID4VCITransportProfile,
         authorizationMetadata: OID4VCIAuthorizationMetadata
     ) -> OID4VCITransportContract {
-        let path = issuerURL.path.lowercased()
-        if path.contains("draft-13") || path.contains("draft-18") {
-            let base = path.contains("draft-13") ? OID4VCITransportContract.draft13 : .draft18
-            let authenticationMethods = authorizationMetadata.tokenEndpointAuthenticationMethods ?? []
-            let supportsAnonymousAuthentication = authenticationMethods.contains("none")
-            let supportsClientAttestation = authenticationMethods.contains("attest_jwt_client_auth") &&
-                authorizationMetadata.clientAttestationAlgorithms?.contains("ES256") == true
+        if selectedProfile == .draft13 || selectedProfile == .draft18 {
+            let base = selectedProfile == .draft13 ? OID4VCITransportContract.draft13 : .draft18
+            let authentication: OID4VCITokenEndpointAuthentication
+            if authorizationMetadata.tokenEndpointAuthenticationMethods == nil {
+                authentication = .anonymous
+            } else if authorizationMetadata.tokenEndpointAuthenticationMethods?.contains("none") == true {
+                authentication = .anonymous
+            } else if authorizationMetadata.tokenEndpointAuthenticationMethods?.contains("attest_jwt_client_auth") == true &&
+                        authorizationMetadata.clientAttestationAlgorithms?.contains("ES256") == true {
+                authentication = .clientAttestation
+            } else {
+                authentication = .unsupported
+            }
             return OID4VCITransportContract(
                 profile: base.profile,
                 proofShape: base.proofShape,
                 credentialIdentifierField: base.credentialIdentifierField,
                 responseEnvelopes: base.responseEnvelopes,
                 requiresDPoP: authorizationMetadata.dpopSigningAlgorithms?.contains("ES256") == true,
-                requiresClientAttestation: supportsClientAttestation && !supportsAnonymousAuthentication,
+                tokenEndpointAuthentication: authentication,
                 requiresCredentialResponseEncryption: true,
                 supportsDeferredIssuance: true,
                 supportsBatchIssuance: true
             )
+        }
+        let authentication: OID4VCITokenEndpointAuthentication
+        if authorizationMetadata.tokenEndpointAuthenticationMethods == nil {
+            authentication = .anonymous
+        } else if authorizationMetadata.tokenEndpointAuthenticationMethods?.contains("none") == true {
+            authentication = .anonymous
+        } else if authorizationMetadata.tokenEndpointAuthenticationMethods?.contains("attest_jwt_client_auth") == true &&
+                    authorizationMetadata.clientAttestationAlgorithms?.contains("ES256") == true {
+            authentication = .clientAttestation
+        } else {
+            authentication = .unsupported
         }
         return OID4VCITransportContract(
             profile: .final,
@@ -99,10 +140,7 @@ public struct OID4VCITransportContract: Equatable, Sendable {
             credentialIdentifierField: .credentialConfigurationID,
             responseEnvelopes: [.jsonCredential, .jsonCredentials, .encryptedJWT, .deferredTransaction],
             requiresDPoP: false,
-            requiresClientAttestation:
-                authorizationMetadata.clientAttestationAlgorithms?.contains("ES256") == true &&
-                authorizationMetadata.tokenEndpointAuthenticationMethods?.contains("attest_jwt_client_auth") == true &&
-                authorizationMetadata.tokenEndpointAuthenticationMethods?.contains("none") == false,
+            tokenEndpointAuthentication: authentication,
             requiresCredentialResponseEncryption: false,
             supportsDeferredIssuance: true,
             supportsBatchIssuance: true

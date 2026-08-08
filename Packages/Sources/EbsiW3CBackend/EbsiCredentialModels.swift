@@ -89,11 +89,23 @@ public struct EbsiCredentialProfile: Codable, Equatable, Identifiable, Sendable 
         try EbsiCredentialProfile(
             id: "ebsi-vcdm2-sd-jwt",
             dataModel: .v2_0,
-            representation: .dcSdJwt,
+            representation: .vcdm2SdJwt,
             allowedAlgorithms: [.es256, .es256K],
             context: "https://www.w3.org/ns/credentials/v2"
         )
     }
+
+    public static func dcSdJWTVC() throws -> EbsiCredentialProfile {
+        try EbsiCredentialProfile(
+            id: "ietf-dc-sd-jwt-vc",
+            dataModel: .v2_0,
+            representation: .dcSdJwt,
+            allowedAlgorithms: [.es256],
+            context: "urn:ietf:params:oauth:token-type:sd-jwt"
+        )
+    }
+
+    var requiresSDJWTHolderBinding: Bool { representation == .vcdm2SdJwt }
 }
 
 public enum EbsiCredentialError: Error, Equatable, Sendable {
@@ -205,7 +217,10 @@ public struct EbsiCredentialInspector: Sendable {
         }
     }
 
-    public func inspectSDJWT(_ value: String) throws -> [String: AnySendableJSON] {
+    public func inspectSDJWT(
+        _ value: String,
+        requiresHolderBinding: Bool = true
+    ) throws -> [String: AnySendableJSON] {
         guard let issuer = value.split(separator: "~").first else {
             throw EbsiCredentialError.malformedCredential
         }
@@ -215,8 +230,10 @@ public struct EbsiCredentialInspector: Sendable {
             throw EbsiCredentialError.malformedCredential
         }
         guard payload["iss"]?.string != nil,
-              payload["vct"]?.string != nil,
-              payload["cnf"]?.object != nil else {
+              payload["vct"]?.string != nil else {
+            throw EbsiCredentialError.profileMismatch
+        }
+        if requiresHolderBinding, payload["cnf"]?.object == nil {
             throw EbsiCredentialError.profileMismatch
         }
         return payload

@@ -61,12 +61,21 @@ struct EudiFlowView: View {
                                 .frame(width: 42, height: 42)
                                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
                             }
-                            VStack(alignment: .leading) {
-                                Text(document.displayName).font(.headline)
-                                Text(document.documentType).font(.caption).opacity(0.78)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(document.displayName)
+                                    .font(.headline)
+                                    .lineLimit(2)
+                                    .minimumScaleFactor(0.82)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Text(document.documentType)
+                                    .font(.caption)
+                                    .opacity(0.78)
+                                    .lineLimit(2)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                         }
                         .padding(12)
+                        .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
                     }
                     .foregroundStyle(OariColor.safeColor(
                         document.display?.textColor,
@@ -76,12 +85,26 @@ struct EudiFlowView: View {
                 }
             }
             if offer.transactionCode != nil {
-                SecureField("Transaction code", text: $model.transactionCode)
-                    .textContentType(.oneTimeCode)
-                    .keyboardType(offer.transactionCode?.inputMode == "numeric" ? .numberPad : .asciiCapable)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($focusedField, equals: .transactionCode)
-                    .submitLabel(.done)
+                if let requirement = offer.transactionCode, requirement.inputMode == "numeric" {
+                    SecurePINCodeField(
+                        value: $model.transactionCode,
+                        length: requirement.length ?? 4,
+                        label: "Transaction code"
+                    )
+                } else {
+                    SecureField("Transaction code", text: $model.transactionCode)
+                        .textContentType(.oneTimeCode)
+                        .keyboardType(.asciiCapable)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($focusedField, equals: .transactionCode)
+                        .submitLabel(.done)
+                        .toolbar {
+                            ToolbarItemGroup(placement: .keyboard) {
+                                Spacer()
+                                Button("Done") { focusedField = nil }
+                            }
+                        }
+                }
             }
             primaryButton("Add to wallet", icon: "plus.circle.fill", disabled: !validTransactionCode(offer.transactionCode)) {
                 focusedField = nil
@@ -93,6 +116,8 @@ struct EudiFlowView: View {
                 .font(OariTypography.heading)
             Text(interaction.displayName ?? interaction.counterpartyIdentifier)
                 .foregroundStyle(OariColor.textSecondary(scheme))
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
             ForEach(interaction.configurationIDs, id: \.self) { configurationID in
                 if let display = interaction.credentialDisplay[configurationID] {
                     ZStack(alignment: .leading) {
@@ -117,14 +142,23 @@ struct EudiFlowView: View {
                                 .frame(width: 48, height: 48)
                                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 11))
                             }
-                            Text(display.name).font(.headline)
+                            Spacer(minLength: 12)
+                            Text(display.name)
+                                .font(.headline)
+                                .lineLimit(2)
+                                .minimumScaleFactor(0.82)
+                                .fixedSize(horizontal: false, vertical: true)
                             if let description = display.description ?? display.claims.first?.description {
-                                Text(description).font(.caption)
+                                Text(description)
+                                    .font(.caption)
+                                    .lineLimit(3)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
-                            Text("Claims: \(display.claims.map { $0.name ?? $0.path.joined(separator: ".") }.joined(separator: ", "))")
-                                .font(.caption)
+                            Text(display.claims.count == 1 ? "1 attribute" : "\(display.claims.count) attributes")
+                                .font(.caption.weight(.semibold))
                         }
                         .padding(14)
+                        .frame(maxWidth: .infinity, minHeight: 190, alignment: .bottomLeading)
                     }
                     .foregroundStyle(OariColor.safeColor(
                         display.textColor,
@@ -137,18 +171,26 @@ struct EudiFlowView: View {
             if interaction.transactionCodeRequired {
                 Text(interaction.transactionCodeDescription ?? "Enter the PIN supplied by the issuer.")
                     .font(.caption).foregroundStyle(.secondary)
-                SecureField("PIN / transaction code", text: $model.ebsiTransactionCode)
-                    .textContentType(.oneTimeCode)
-                    .keyboardType(.numberPad)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($focusedField, equals: .ebsiPIN)
-                    .submitLabel(.done)
-                    .onChange(of: model.ebsiTransactionCode) { _, value in
-                        if let length = interaction.transactionCodeLength,
-                           value.count > length {
-                            model.ebsiTransactionCode = String(value.prefix(length))
+                if let length = interaction.transactionCodeLength {
+                    SecurePINCodeField(
+                        value: $model.ebsiTransactionCode,
+                        length: length,
+                        label: "PIN"
+                    )
+                } else {
+                    SecureField("PIN / transaction code", text: $model.ebsiTransactionCode)
+                        .textContentType(.oneTimeCode)
+                        .keyboardType(.numberPad)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($focusedField, equals: .ebsiPIN)
+                        .submitLabel(.done)
+                        .toolbar {
+                            ToolbarItemGroup(placement: .keyboard) {
+                                Spacer()
+                                Button("Done") { focusedField = nil }
+                            }
                         }
-                    }
+                }
             }
             primaryButton("Issue and store credential", icon: "plus.circle.fill", disabled: !validPIN(interaction)) {
                 focusedField = nil
@@ -249,12 +291,6 @@ struct EudiFlowView: View {
         }
         .buttonStyle(OariPrimaryButtonStyle())
         .disabled(disabled)
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Done") { focusedField = nil }
-            }
-        }
     }
 
     private func validTransactionCode(_ requirement: EudiTransactionCodeRequirement?) -> Bool {
@@ -270,5 +306,70 @@ struct EudiFlowView: View {
         guard !value.isEmpty else { return false }
         if let length = interaction.transactionCodeLength, value.count != length { return false }
         return value.unicodeScalars.allSatisfy { $0.value >= 48 && $0.value <= 57 }
+    }
+}
+
+private struct SecurePINCodeField: View {
+    @Binding var value: String
+    let length: Int
+    let label: String
+
+    @Environment(\.colorScheme) private var scheme
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(0..<length, id: \.self) { index in
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(OariColor.surface(scheme))
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(
+                            index == activeIndex && isFocused
+                                ? OariColor.action
+                                : Color.secondary.opacity(0.25),
+                            lineWidth: isFocused && index == activeIndex ? 2 : 1
+                        )
+                    if index < value.count {
+                        Circle()
+                            .fill(OariColor.textPrimary(scheme))
+                            .frame(width: 10, height: 10)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 54)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { isFocused = true }
+        .onAppear { isFocused = true }
+        .background {
+            TextField("", text: $value)
+                .textContentType(.oneTimeCode)
+                .keyboardType(.numberPad)
+                .focused($isFocused)
+                .frame(width: 1, height: 1)
+                .opacity(0.01)
+                .accessibilityHidden(true)
+                .onChange(of: value) { _, newValue in
+                    let digits = newValue.filter { $0 >= "0" && $0 <= "9" }
+                    let normalized = String(digits.prefix(length))
+                    if value != normalized { value = normalized }
+                }
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("Done") { isFocused = false }
+                    }
+                }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue("\(value.count) of \(length) digits entered")
+        .accessibilityHint("Double tap to enter the code")
+    }
+
+    private var activeIndex: Int {
+        max(0, min(value.count, length - 1))
     }
 }

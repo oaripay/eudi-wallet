@@ -557,6 +557,13 @@ final class WalletAppModel: ObservableObject {
             case .untrustedConsentRequired: return "Review the development trust warning before continuing."
             case .rejectedTrust: return "The issuer request failed trust or signature validation."
             case .invalidResponse: return "The issuer returned an invalid or incomplete OpenID4VCI response."
+            case .missingCredentialNonce:
+                return "The issuer token response omitted the credential nonce required for a replay-protected proof. Create a new offer or correct the issuer configuration."
+            case .missingCredentialAuthorization:
+                return "The issuer token response contained no authorized credential identifier. This offer cannot be redeemed; create a new issuer offer."
+            case let .credentialAuthorizationMismatch(offered, authorized):
+                let values = authorized.isEmpty ? "none" : authorized.joined(separator: ", ")
+                return "The issuer token did not authorize the reviewed configuration \(offered). It returned: \(values). The wallet stopped before requesting a credential."
             case .unknownTransaction: return "The issuer transaction expired or was already used."
             case .presentationRequired: return "The issuer requires PID presentation before issuing this credential."
             case .invalidPresentationResponse: return "The issuer rejected the PID presentation response."

@@ -53,6 +53,20 @@ struct EbsiCredentialModelsTests {
         }
     }
 
+    @Test("Standard SD-JWT VC permits optional cnf while workspace VCDM profile requires it")
+    func standardSDJWTVC() throws {
+        let token = try compactJWT(
+            header: ["alg": "ES256"],
+            payload: ["iss": "https://issuer.example", "vct": "urn:example:pid"]
+        ) + "~"
+        let inspector = EbsiCredentialInspector()
+        #expect(throws: EbsiCredentialError.profileMismatch) {
+            _ = try inspector.inspectSDJWT(token)
+        }
+        let payload = try inspector.inspectSDJWT(token, requiresHolderBinding: false)
+        #expect(payload["vct"] == .string("urn:example:pid"))
+    }
+
     private func compactJWT(header: Any, payload: Any) throws -> String {
         func encode(_ value: Any) throws -> String {
             try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])

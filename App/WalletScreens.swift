@@ -113,13 +113,21 @@ private struct CredentialListRow: View {
                 }
                 Spacer(minLength: 6)
                 VStack(alignment: .trailing, spacing: 4) {
-                    Label(statusText, systemImage: statusIcon)
-                        .font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .background(.ultraThinMaterial, in: Capsule())
+                    if credential.issuerTrust == .untrusted {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.orange)
+                            .accessibilityLabel("Development warning")
+                    } else {
+                        Label(statusText, systemImage: statusIcon)
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(.ultraThinMaterial, in: Capsule())
+                    }
                     Image(systemName: "chevron.right").font(.caption.weight(.semibold)).opacity(0.7)
                 }
+                .frame(maxHeight: .infinity, alignment: .topTrailing)
             }
             .padding(12)
         }
@@ -292,47 +300,41 @@ private struct CredentialHeroCard: View {
     let credential: CredentialRecord
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            OariColor.safeColor(credential.display?.backgroundColor, fallback: OariColor.action.opacity(0.13))
-            if let background = credential.display?.backgroundImage {
-                LocalCredentialImage(image: background, contentMode: .fill)
-                LinearGradient(
-                    colors: [.black.opacity(0.02), .black.opacity(0.62)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+        VStack(alignment: .leading, spacing: OariSpacing.x3) {
+            HStack(alignment: .top) {
+                logo
+                Spacer()
+                Label(statusLabel, systemImage: statusIcon)
+                    .font(.caption.weight(.bold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.ultraThinMaterial, in: Capsule())
             }
-            VStack(alignment: .leading, spacing: OariSpacing.x3) {
-                HStack(alignment: .top) {
-                    logo
-                    Spacer()
-                    Label(statusLabel, systemImage: statusIcon)
-                        .font(.caption.weight(.bold))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(.ultraThinMaterial, in: Capsule())
-                }
-                Spacer(minLength: 24)
-                Text(credential.displayName)
-                    .font(.title2.weight(.bold))
-                    .lineLimit(2)
-                Text(credential.issuerIdentifier)
-                    .font(.caption)
-                    .opacity(0.82)
-                    .lineLimit(2)
-                HStack(spacing: 6) {
-                    OariBackendBadge(credential.backendID == "oari-workspace-w3c" ? "Workspace W3C" : "EUDI Wallet Kit")
-                    Text(credential.format.rawValue)
-                        .font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .background(.ultraThinMaterial, in: Capsule())
-                }
+            Spacer(minLength: 20)
+            Text(credential.displayName)
+                .font(.title2.weight(.bold))
+                .lineLimit(3)
+                .minimumScaleFactor(0.82)
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
+            Text(issuerLabel)
+                .font(.caption)
+                .opacity(0.82)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                OariBackendBadge(credential.backendID == "oari-workspace-w3c" ? "Workspace W3C" : "EUDI Wallet Kit")
+                Text(credential.format.rawValue)
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(.ultraThinMaterial, in: Capsule())
             }
-            .padding(OariSpacing.x5)
         }
+        .padding(OariSpacing.x5)
         .foregroundStyle(textColor)
-        .aspectRatio(1.58, contentMode: .fit)
+        .frame(maxWidth: .infinity, minHeight: 260, alignment: .bottomLeading)
+        .background { artworkBackground }
         .clipShape(RoundedRectangle(cornerRadius: OariRadius.extraLarge, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: OariRadius.extraLarge, style: .continuous)
@@ -340,6 +342,27 @@ private struct CredentialHeroCard: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(credential.displayName), issued by \(credential.issuerIdentifier), \(statusLabel)")
+    }
+
+    @ViewBuilder private var artworkBackground: some View {
+        ZStack {
+            OariColor.safeColor(
+                credential.display?.backgroundColor,
+                fallback: OariColor.action.opacity(0.13)
+            )
+            if let background = credential.display?.backgroundImage {
+                GeometryReader { geometry in
+                    LocalCredentialImage(image: background, contentMode: .fill)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
+                }
+                LinearGradient(
+                    colors: [.black.opacity(0.02), .black.opacity(0.62)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+        }
     }
 
     @ViewBuilder private var logo: some View {
@@ -363,6 +386,14 @@ private struct CredentialHeroCard: View {
             credential.display?.textColor,
             fallback: credential.display?.backgroundImage == nil ? OariColor.textPrimary(scheme) : .white
         )
+    }
+
+    private var issuerLabel: String {
+        if let url = URL(string: credential.issuerIdentifier), let host = url.host {
+            return host
+        }
+        guard credential.issuerIdentifier.count > 52 else { return credential.issuerIdentifier }
+        return "\(credential.issuerIdentifier.prefix(36))...\(credential.issuerIdentifier.suffix(10))"
     }
 
     private var statusLabel: String {

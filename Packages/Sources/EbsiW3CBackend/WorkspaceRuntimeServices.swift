@@ -177,7 +177,10 @@ public struct NativeWorkspaceCredentialValidator: WorkspaceCredentialValidating,
     ) async throws {
         let compact = String(decoding: rawCredential, as: UTF8.self)
         if profile.representation == .dcSdJwt || profile.representation == .vcdm2SdJwt {
-            let payload = try EbsiCredentialInspector().inspectSDJWT(compact)
+            let payload = try EbsiCredentialInspector().inspectSDJWT(
+                compact,
+                requiresHolderBinding: profile.requiresSDJWTHolderBinding
+            )
             let issuer = try Self.issuer(fromSDJWT: payload)
             let methods = try await verificationMethods(for: issuer)
             _ = try EbsiJWSVerifier().verify(
