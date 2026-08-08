@@ -2,11 +2,11 @@
 
 Read these before changing code:
 
-- `docs/IMPLEMENTATION-PLAN.md`
-- `docs/EBSI_PROFILE_MATRIX.md`
-- `docs/EBSI_BACKEND_REVIEW.md`
-- `docs/WALLET_KIT_REVIEW.md`
-- `docs/EVIDENCE.md`
+- `.agents/IMPLEMENTATION-PLAN.md`
+- `.agents/EBSI_PROFILE_MATRIX.md`
+- `.agents/EBSI_BACKEND_REVIEW.md`
+- `.agents/WALLET_KIT_REVIEW.md`
+- `.agents/EVIDENCE.md`
 
 The goal is a development-capable wallet with two separate backends. “All possible”
 means every explicitly registered profile in the matrix, not permissive parsing of
@@ -40,12 +40,7 @@ Do not copy EUDI credentials/keys into the W3C backend or reimplement these prot
 
 Do **not** use SpruceKit in the app. Remove its package/target/review code before
 integration. Use the OARI workspace repositories as the development issuer/verifier
-and public EBSI service backend:
-
-- `workspace/repos/openid` — OpenID4VCI/VP issuer/verifier;
-- `workspace/repos/identity` — JWT VC, VCDM, DID, EBSI registry and key logic;
-- `workspace/repos/schemas` — schemas and status material;
-- `workspace/repos/wallet` — wallet-side protocol examples.
+and public EBSI service backend.
 
 The iOS adapter calls these services over bounded HTTPS. Raw W3C credentials and
 holder private keys are encrypted on-device; private keys never go to the workspace.
@@ -196,7 +191,7 @@ private keys, nonces, proof state and protocol handles.
 
 ## Single consolidated milestone
 
-Execute every step in `docs/ITERATOR-EBSI-W3C-PLAN.md` as one milestone. Internal
+Execute every step in `.agents/ITERATOR-EBSI-W3C-PLAN.md` as one milestone. Internal
 steps may use focused checks but must not be committed or declared complete
 individually. Run one consolidated review loop over the complete implementation, fix
 all BLOCKER/MAJOR findings (maximum four cycles), run the complete verification matrix
