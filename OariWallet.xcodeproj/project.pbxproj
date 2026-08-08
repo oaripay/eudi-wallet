@@ -21,7 +21,7 @@
 		82646659A1496DE955924E7D /* WalletKitIOSIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBDE0CBAB3548D875B281AA6 /* WalletKitIOSIntegrationTests.swift */; };
 		90573B64E924980278DB944F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5D5F89C3D4788628CA6D8014 /* Assets.xcassets */; };
 		A5BC8036BA15C3E8CCA1991F /* EbsiW3CBackend in Frameworks */ = {isa = PBXBuildFile; productRef = F3D2D3D88DF7E075E9286D51 /* EbsiW3CBackend */; };
-		B7F4A0EA061D661AAD284544 /* OARIWalletApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A9C46307DCA15FD7387FFEF /* OARIWalletApp.swift */; };
+		B7F4A0EA061D661AAD284544 /* OariWalletApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A9C46307DCA15FD7387FFEF /* OariWalletApp.swift */; };
 		B8154EDB019B50F15B841451 /* DevelopmentTrustAnchor.der in Resources */ = {isa = PBXBuildFile; fileRef = 12C2443E04EEA39F34D91B6E /* DevelopmentTrustAnchor.der */; };
 		BB5F75258CF99035C9D5D1AA /* TestTrustAnchor.bin in Resources */ = {isa = PBXBuildFile; fileRef = 4FE288BD4E8DB12A11690ACD /* TestTrustAnchor.bin */; };
 		C032DC2FA8CD786F33ABA8F2 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 41B338197E405D85D26A6274 /* Preview Assets.xcassets */; };
@@ -56,7 +56,7 @@
 /* Begin PBXFileReference section */
 		021FE192C1057D5360B98083 /* EudiFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EudiFlowView.swift; sourceTree = "<group>"; };
 		07421C4B64D228DC046D3FC5 /* eudi-wallet */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "eudi-wallet"; path = .; sourceTree = SOURCE_ROOT; };
-		0A9C46307DCA15FD7387FFEF /* OARIWalletApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OARIWalletApp.swift; sourceTree = "<group>"; };
+		0A9C46307DCA15FD7387FFEF /* OariWalletApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OariWalletApp.swift; sourceTree = "<group>"; };
 		0DA4F4FA098A6A9F2A1575D3 /* EbsiWalletService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EbsiWalletService.swift; sourceTree = "<group>"; };
 		12C2443E04EEA39F34D91B6E /* DevelopmentTrustAnchor.der */ = {isa = PBXFileReference; lastKnownFileType = file; path = DevelopmentTrustAnchor.der; sourceTree = "<group>"; };
 		286031545802A58CB1A31335 /* WalletUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletUITests.swift; sourceTree = "<group>"; };
@@ -73,7 +73,7 @@
 		7B6F76900B66D3073C3CE152 /* AppConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfiguration.swift; sourceTree = "<group>"; };
 		7C930619E1432B0507B293A0 /* WalletKitRuntimeProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletKitRuntimeProbe.swift; sourceTree = "<group>"; };
 		85D309EBDC2A9920E5B60BC6 /* WalletScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletScreens.swift; sourceTree = "<group>"; };
-		874E8679A6B79243A4C14054 /* OARIWallet.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = OARIWallet.entitlements; sourceTree = "<group>"; };
+		874E8679A6B79243A4C14054 /* OariWallet.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = OariWallet.entitlements; sourceTree = "<group>"; };
 		97A15E0BE6ACA09A914CCF44 /* OariWallet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OariWallet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9A28098C49ABBDC5A6B792F5 /* WalletAppModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletAppModelTests.swift; sourceTree = "<group>"; };
 		A173F8F1FF8FA4B69FBCBB21 /* WalletTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = WalletTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -176,8 +176,8 @@
 				77A3EE9337DA562CCE187E33 /* EudiWalletService.swift */,
 				F3D980FA8255B7B04C70751B /* Info.plist */,
 				72F7A3A7F4A3777C428A9A4C /* OariTrustWarningView.swift */,
-				874E8679A6B79243A4C14054 /* OARIWallet.entitlements */,
-				0A9C46307DCA15FD7387FFEF /* OARIWalletApp.swift */,
+				874E8679A6B79243A4C14054 /* OariWallet.entitlements */,
+				0A9C46307DCA15FD7387FFEF /* OariWalletApp.swift */,
 				64C03187412B0090004CAC94 /* WalletAppDependencies.swift */,
 				6E9337B2250C6D7FDA1FEFA6 /* WalletAppModel.swift */,
 				7C930619E1432B0507B293A0 /* WalletKitRuntimeProbe.swift */,
@@ -336,7 +336,7 @@
 				7026F00F74825511D888C465 /* EbsiWalletService.swift in Sources */,
 				13A9D5AC982E9BA38ECA114E /* EudiFlowView.swift in Sources */,
 				2F5C9E869D646A5A3044A087 /* EudiWalletService.swift in Sources */,
-				B7F4A0EA061D661AAD284544 /* OARIWalletApp.swift in Sources */,
+				B7F4A0EA061D661AAD284544 /* OariWalletApp.swift in Sources */,
 				FEB053137A42C5523CE4EA54 /* OariTrustWarningView.swift in Sources */,
 				C3D6493B7D6D8F95986DCA5D /* WalletAppDependencies.swift in Sources */,
 				22C63C48873AF23E8411BE40 /* WalletAppModel.swift in Sources */,
@@ -461,7 +461,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = App/OARIWallet.entitlements;
+				CODE_SIGN_ENTITLEMENTS = App/OariWallet.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_ASSET_PATHS = "\"App/Preview Content\"";
@@ -623,7 +623,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = App/OARIWallet.entitlements;
+				CODE_SIGN_ENTITLEMENTS = App/OariWallet.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_ASSET_PATHS = "\"App/Preview Content\"";
@@ -710,7 +710,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = App/OARIWallet.entitlements;
+				CODE_SIGN_ENTITLEMENTS = App/OariWallet.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_ASSET_PATHS = "\"App/Preview Content\"";

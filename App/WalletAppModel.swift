@@ -356,10 +356,6 @@ final class WalletAppModel: ObservableObject {
 
     func reviewScannedRequest() async {
         classifyScan()
-        guard isEudiOperational, let eudiWallet else {
-            eudiFlow = .configurationRequired(eudiConfigurationMessage)
-            return
-        }
         do {
             switch scanResult {
             case .issuance:
@@ -385,25 +381,35 @@ final class WalletAppModel: ObservableObject {
                     }
                 }
                 if let w3cRoutingError {
-                    throw w3cRoutingError
+                    guard let eudiWallet, isEudiOperational else {
+                        throw w3cRoutingError
+                    }
+                    do {
+                        let offer = try await eudiWallet.resolveIssuanceOffer(uri: scanInput)
+                        selectedIssuanceConfigurationIDs = Set(offer.documents.map(\.configurationID))
+                        transactionCode = ""
+                        eudiFlow = .issuanceReview(offer)
+                    } catch {
+                        throw w3cRoutingError
+                    }
+                    return
                 }
-                do {
+                if ebsiWallet == nil {
+                    guard let eudiWallet, isEudiOperational else {
+                        throw EbsiCredentialError.backendUnavailable
+                    }
                     let offer = try await eudiWallet.resolveIssuanceOffer(uri: scanInput)
                     selectedIssuanceConfigurationIDs = Set(offer.documents.map(\.configurationID))
                     transactionCode = ""
                     eudiFlow = .issuanceReview(offer)
-                } catch {
-                    guard let ebsiWallet else { throw error }
-                    let interaction = try await ebsiWallet.resolveInteraction(uri: scanInput)
-                    activeEbsiInteractionID = interaction.id
-                    activeEbsiInteraction = interaction
-                    switch interaction.trustOutcome {
-                    case .allow: prepareEbsiInteraction(allowUntrusted: false)
-                    case let .requireExplicitWarning(warning): ebsiTrustWarning = warning; eudiFlow = .idle
-                    case .reject: throw error
-                    }
                 }
+                // W3C resolved the offer and owns the remaining issuance flow.
+                return
             case .presentation:
+                guard isEudiOperational, let eudiWallet else {
+                    eudiFlow = .configurationRequired(eudiConfigurationMessage)
+                    return
+                }
                 eudiFlow = .working("Checking the verifier and requested claims…")
                 activePendingIssuanceID = nil
                 let request = try await eudiWallet.beginOpenID4VPPresentation(requestURI: scanInput)
