@@ -4,6 +4,7 @@ build/
 *.xcuserstate
 xcuserdata/
 *.xccheckout
+.agents
 
 # Swift Package Manager
 .build/
