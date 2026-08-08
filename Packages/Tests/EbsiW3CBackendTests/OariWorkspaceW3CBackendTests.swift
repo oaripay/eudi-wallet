@@ -351,6 +351,33 @@ struct OariWorkspaceW3CBackendTests {
         #expect(issued.first?.representation == .vcdm2Jwt)
     }
 
+    @Test("Credential metadata paths normalize wildcard and array index components")
+    func credentialMetadataPathComponents() throws {
+        let claim = try JSONDecoder().decode(
+            WorkspaceCredentialClaim.self,
+            from: Data(#"{"path":["credentialSubject","items",null,2,"name"],"name":"Item name"}"#.utf8)
+        )
+        #expect(claim.path == ["credentialSubject", "items", "*", "[2]", "name"])
+        #expect(claim.id == "credentialSubject.items.*.[2].name")
+    }
+
+    @Test("Complete issuer metadata tolerates unrelated Portable Document wildcard paths")
+    func portableDocumentWildcardMetadata() async throws {
+        let backend = OariWorkspaceW3CBackend(
+            transport: WildcardIssuerMetadataTransport(),
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(),
+            credentialStore: FixtureCredentialStore(),
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .dcSdJWTVC()
+        )
+        let offerJSON = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["selected"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":"code"}}}"#
+        let encoded = try #require(offerJSON.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed))
+        let offer = try await backend.resolveOffer("openid-credential-offer://?credential_offer=\(encoded)")
+        #expect(offer.configurationIDs == ["selected"])
+        #expect(offer.representations == ["dc+sd-jwt"])
+    }
+
     @Test("Pre-authorized offer requires warning, signs proof, validates and stores credential")
     func preauthorizedIssuance() async throws {
         let transport = FixtureWorkspaceTransport()
@@ -882,6 +909,36 @@ private struct LiveDiagnosticCredentialValidator: WorkspaceCredentialValidating 
             .replacingOccurrences(of: "_", with: "/")
         base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
         return Data(base64Encoded: base64)
+    }
+}
+
+private actor WildcardIssuerMetadataTransport: WorkspaceHTTPTransport {
+    func send(url: URL, method: String, headers: [String: String], body: Data?) async throws -> WorkspaceHTTPResponse {
+        guard url.path == "/.well-known/openid-credential-issuer" else {
+            return WorkspaceHTTPResponse(statusCode: 404, body: Data())
+        }
+        return WorkspaceHTTPResponse(statusCode: 200, body: Data(#"""
+        {
+          "credential_endpoint":"https://issuer.example/credential",
+          "credential_configurations_supported":{
+            "selected":{
+              "format":"dc+sd-jwt",
+              "vct":"UniversityDegree",
+              "credential_metadata":{"display":[{"name":"University Degree"}],"claims":[{"path":["degree","name"]}]}
+            },
+            "PortableDocumentA1bDEeedcj":{
+              "format":"jwt_vc_json",
+              "credential_metadata":{
+                "display":[{"name":"Portable Document A1"}],
+                "claims":[
+                  {"path":["credentialSubject","section5","workPlaceAddresses",null,"address","countryCode"]},
+                  {"path":["credentialSubject","items",0,"name"]}
+                ]
+              }
+            }
+          }
+        }
+        """#.utf8))
     }
 }
 

@@ -81,7 +81,29 @@ public struct WorkspaceCredentialClaim: Codable, Equatable, Sendable, Identifiab
 
     public init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        path = try values.decodeIfPresent([String].self, forKey: .path) ?? []
+        if values.contains(.path), !(try values.decodeNil(forKey: .path)) {
+            var components = try values.nestedUnkeyedContainer(forKey: .path)
+            var decodedPath: [String] = []
+            while !components.isAtEnd {
+                let componentDecoder = try components.superDecoder()
+                let component = try componentDecoder.singleValueContainer()
+                if component.decodeNil() {
+                    decodedPath.append("*")
+                } else if let value = try? component.decode(String.self) {
+                    decodedPath.append(value)
+                } else if let value = try? component.decode(Int.self) {
+                    decodedPath.append("[\(value)]")
+                } else {
+                    throw DecodingError.dataCorruptedError(
+                        in: component,
+                        debugDescription: "Credential claim paths support string, integer, and null components."
+                    )
+                }
+            }
+            path = decodedPath
+        } else {
+            path = []
+        }
         name = try values.decodeIfPresent(String.self, forKey: .name)
         description = try values.decodeIfPresent(String.self, forKey: .description)
         id = path.joined(separator: ".")
