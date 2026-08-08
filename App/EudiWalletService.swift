@@ -1,5 +1,6 @@
 import EudiWalletKitAdapter
 import Foundation
+import WalletDomain
 
 protocol EudiWalletOperating: Sendable {
     func resolveIssuanceOffer(uri: String) async throws -> EudiIssuanceOffer
@@ -20,6 +21,7 @@ protocol EudiWalletOperating: Sendable {
     ) async throws -> EudiPresentationCompletion
     func loadPendingIssuances() async throws -> [EudiPendingIssuance]
     func loadDocumentSummaries() async throws -> [EudiWalletDocumentSummary]
+    func loadStartupSnapshot() async throws -> EudiWalletStartupSnapshot
     func deleteDocument(id: String, status: String) async throws
     func retryDeferredIssuance(issuerName: String, documentID: String) async throws -> EudiWalletDocumentSummary
     func reconcilePendingOperations() async throws
@@ -84,6 +86,9 @@ actor LiveEudiWalletService: EudiWalletOperating {
     }
     func loadDocumentSummaries() async throws -> [EudiWalletDocumentSummary] {
         try await adapter.loadDocumentSummaries()
+    }
+    func loadStartupSnapshot() async throws -> EudiWalletStartupSnapshot {
+        try await adapter.loadStartupSnapshot()
     }
     func deleteDocument(id: String, status: String) async throws {
         try await adapter.deleteDocument(id: id, status: status)

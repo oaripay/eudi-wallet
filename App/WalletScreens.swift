@@ -642,7 +642,9 @@ struct WalletHistoryView: View {
             }
             .accessibilityIdentifier("history.list")
             .overlay {
-                if model.auditEvents.isEmpty {
+                if model.isAuditHistoryLoading {
+                    ProgressView("Loading activity…")
+                } else if model.auditEvents.isEmpty {
                     ContentUnavailableView("No activity", systemImage: "clock", description: Text("Completed wallet actions appear here without credential values."))
                         .accessibilityIdentifier("history.empty")
                 }
@@ -651,6 +653,7 @@ struct WalletHistoryView: View {
             .background(OariColor.background(scheme))
             .navigationTitle("History")
         }
+        .task { await model.loadAuditHistoryIfNeeded() }
     }
 }
 

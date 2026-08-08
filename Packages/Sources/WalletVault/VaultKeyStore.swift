@@ -6,6 +6,32 @@ public protocol VaultKeyStore: Sendable {
     func loadOrCreateKey() throws -> SymmetricKey
 }
 
+public final class CachedVaultKeyStore: VaultKeyStore, @unchecked Sendable {
+    private let wrapped: any VaultKeyStore
+    private let lock = NSLock()
+    private var cachedKey: SymmetricKey?
+
+    public init(wrapping wrapped: any VaultKeyStore) {
+        self.wrapped = wrapped
+    }
+
+    public func loadOrCreateKey() throws -> SymmetricKey {
+        lock.lock()
+        if let cachedKey {
+            lock.unlock()
+            return cachedKey
+        }
+        lock.unlock()
+
+        let key = try wrapped.loadOrCreateKey()
+        lock.lock()
+        defer { lock.unlock() }
+        if let cachedKey { return cachedKey }
+        cachedKey = key
+        return key
+    }
+}
+
 public struct KeychainVaultKeyStore: VaultKeyStore, Sendable {
     private let service: String
     private let account: String

@@ -101,10 +101,28 @@ struct OariWorkspaceW3CBackendTests {
         #expect(requests.contains { $0.url.path.hasSuffix("/notification") && $0.method == "POST" })
     }
 
-    @Test("Draft issuance rejects a missing nonce before credential request")
+    @Test("Draft issuance signs a proof without nonce when token omits c_nonce")
     func draftMissingNonce() async throws {
         let response = #"{"access_token":"access-token","authorization_details":[{"credential_configuration_id":"pid-config","credential_identifiers":["authorized-pid"]}]}"#
-        try await assertRejectedDraftToken(response, expected: .missingCredentialNonce)
+        let transport = Draft13WorkspaceTransport(tokenResponse: response)
+        let backend = OariWorkspaceW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(),
+            credentialStore: FixtureCredentialStore(),
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .dcSdJWTVC(),
+            clientSecurity: RecordingOID4VCIClientSecurity(),
+            transportProfileRegistry: .developmentDraftCompatibility
+        )
+        let offer = try await backend.resolveOffer(try Self.draftOffer())
+        #expect(try await backend.issue(id: offer.id, allowUntrusted: false, transactionCode: "1234").count == 1)
+        let request = try #require((await transport.requests).first { $0.url.path.hasSuffix("/credential") })
+        let requestBody = try #require(request.body)
+        let body = try #require(JSONSerialization.jsonObject(with: requestBody) as? [String: Any])
+        let proof = try #require(body["proof"] as? [String: Any])
+        let payload = try Self.jwtPayload(try #require(proof["jwt"] as? String))
+        #expect(payload["nonce"] == nil)
     }
 
     @Test("Draft issuance reports the stage and coding path for malformed token JSON")
@@ -122,7 +140,7 @@ struct OariWorkspaceW3CBackendTests {
 
     @Test("Draft issuance accepts one token-authorized identifier despite configuration mismatch")
     func draftMismatchedAuthorization() async throws {
-        let response = #"{"access_token":"access-token","c_nonce":"credential-nonce","authorization_details":[{"credential_configuration_id":"other-config","credential_identifiers":["unauthorized-pid"]}]}"#
+        let response = #"{"access_token":"access-token","c_nonce":"credential-nonce","authorization_details":[{"credential_configuration_id":"other-config","credential_identifiers":["unauthorized-pid","authorized-fallback"]}]}"#
         let transport = Draft13WorkspaceTransport(
             tokenResponse: response,
             rejectedCredentialIdentifier: "unauthorized-pid"
@@ -143,7 +161,7 @@ struct OariWorkspaceW3CBackendTests {
         let request = try #require(credentialRequests.last)
         let data = try #require(request.body)
         let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        #expect(body["credential_identifier"] as? String == "pid-config")
+        #expect(body["credential_identifier"] as? String == "authorized-fallback")
         #expect(credentialRequests.count == 2)
     }
 

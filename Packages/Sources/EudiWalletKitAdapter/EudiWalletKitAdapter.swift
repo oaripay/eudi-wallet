@@ -483,6 +483,22 @@ public struct EudiWalletDocumentSummary: Equatable, Sendable {
     }
 }
 
+public struct EudiWalletStartupSnapshot: Equatable, Sendable {
+    public let metadata: [CredentialRecord]
+    public let documents: [EudiWalletDocumentSummary]
+    public let pendingIssuances: [EudiPendingIssuance]
+
+    public init(
+        metadata: [CredentialRecord],
+        documents: [EudiWalletDocumentSummary],
+        pendingIssuances: [EudiPendingIssuance]
+    ) {
+        self.metadata = metadata
+        self.documents = documents
+        self.pendingIssuances = pendingIssuances
+    }
+}
+
 public struct EudiIssuanceOfferDisplay: Equatable, Sendable {
     public let description: String?
     public let backgroundColor: String?
@@ -879,6 +895,63 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
     public func loadDocumentSummaries() async throws -> [EudiWalletDocumentSummary] {
         try await operationalState.performLifecycleOperation { [self] in
             try await loadDocumentSummariesUnlocked()
+        }
+    }
+
+    public func loadStartupSnapshot() async throws -> EudiWalletStartupSnapshot {
+        try await operationalState.performLifecycleOperation { [self] in
+            try requireOperationalRuntime()
+            let configuration = try requireOperationalConfiguration()
+            try await reconcilePendingOperationsUnlocked()
+            async let metadataTask = configuration.metadataRepository.credentials()
+            async let documentsTask = wallet.loadAllDocuments()
+            let metadata = try await metadataTask
+            let documents = try await documentsTask ?? []
+            let summaries = documents.map { document in
+                let display = Self.storedDisplayMetadata(from: document.metadata)
+                return EudiWalletDocumentSummary(
+                    id: document.id,
+                    documentType: document.docType,
+                    displayName: document.displayName,
+                    format: document.docDataFormat.rawValue,
+                    status: document.status.rawValue,
+                    configurationID: display?.configurationID,
+                    issuerIdentifier: display?.issuerIdentifier,
+                    display: display?.display
+                )
+            }
+            var pending: [EudiPendingIssuance] = []
+            for document in documents where document.status == .pending {
+                guard let requestURI = document.authorizePresentationUrl,
+                      let record = metadata.first(where: { $0.walletDocumentID == document.id }) else {
+                    throw EudiWalletKitAdapterError.invalidPendingIssuance
+                }
+                let id = await operationalState.upsertPending(
+                    documentID: document.id,
+                    issuerName: record.issuerIdentifier,
+                    profileID: record.profileID,
+                    metadataCredentialID: record.id,
+                    presentationRequestURI: requestURI
+                )
+                pending.append(EudiPendingIssuance(
+                    id: id,
+                    document: EudiWalletDocumentSummary(
+                        id: document.id,
+                        documentType: document.docType,
+                        displayName: document.displayName,
+                        format: document.docDataFormat.rawValue,
+                        status: document.status.rawValue,
+                        configurationID: record.configurationID,
+                        issuerIdentifier: record.issuerIdentifier,
+                        display: record.display
+                    )
+                ))
+            }
+            return EudiWalletStartupSnapshot(
+                metadata: metadata,
+                documents: summaries,
+                pendingIssuances: pending
+            )
         }
     }
 

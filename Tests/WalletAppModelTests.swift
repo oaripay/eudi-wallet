@@ -147,10 +147,30 @@ struct WalletAppModelTests {
         let model = WalletAppModel()
         await model.load(.success(testDependencies(service)))
         #expect(model.eudiFlow == .pending(pending))
+        #expect(await service.operationCount == 1)
         await model.continuePendingIssuance()
         #expect(model.eudiFlow == .presentationConsent(request))
         await model.submitPresentation(accepted: true)
         #expect(model.eudiFlow == .idle)
+    }
+
+    @Test("Audit history is deferred and loaded once on demand")
+    func lazyAuditHistory() async {
+        let audit = CountingAuditRepository()
+        let model = WalletAppModel()
+        await model.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(),
+            audit: audit,
+            localAuthenticator: FixtureAuthenticator(),
+            eudiWallet: nil,
+            eudiAvailability: .configurationRequired("Unavailable"),
+            ebsiWallet: nil
+        )))
+        #expect(await audit.loadCount == 0)
+        await model.loadAuditHistoryIfNeeded()
+        await model.loadAuditHistoryIfNeeded()
+        #expect(await audit.loadCount == 1)
+        #expect(model.hasLoadedAuditHistory)
     }
 
     @Test("Declined or failed PID presentation preserves recoverable pending issuance")
@@ -636,6 +656,14 @@ private actor FixtureEudiWallet: EudiWalletOperating {
     }
     func loadPendingIssuances() async throws -> [EudiPendingIssuance] { operationCount += 1; return pendingAtLoad }
     func loadDocumentSummaries() async throws -> [EudiWalletDocumentSummary] { operationCount += 1; return summaries }
+    func loadStartupSnapshot() async throws -> EudiWalletStartupSnapshot {
+        operationCount += 1
+        return EudiWalletStartupSnapshot(
+            metadata: [],
+            documents: summaries,
+            pendingIssuances: pendingAtLoad
+        )
+    }
     func deleteDocument(id: String, status: String) async throws {
         operationCount += 1; lastDeleted = "\(id):\(status)"
     }
@@ -667,6 +695,13 @@ private actor FixedMetadataRepository: CredentialMetadataRepository {
 
 private actor EmptyAuditRepository: AuditRepository {
     func events() async throws -> [AuditEvent] { [] }
+    func append(_ event: AuditEvent) async throws {}
+    func deleteAll() async throws {}
+}
+
+private actor CountingAuditRepository: AuditRepository {
+    private(set) var loadCount = 0
+    func events() async throws -> [AuditEvent] { loadCount += 1; return [] }
     func append(_ event: AuditEvent) async throws {}
     func deleteAll() async throws {}
 }

@@ -17,6 +17,8 @@ final class WalletAppModel: ObservableObject {
 
     @Published private(set) var credentials: [CredentialRecord] = []
     @Published private(set) var auditEvents: [AuditEvent] = []
+    @Published private(set) var isAuditHistoryLoading = false
+    @Published private(set) var hasLoadedAuditHistory = false
     @Published var theme: OariTheme = .dark
     @Published var scanInput = ""
     @Published private(set) var scanResult: ScanResult = .idle
@@ -103,6 +105,7 @@ final class WalletAppModel: ObservableObject {
     ) async throws {
         credentials = try await repository.credentials()
         auditEvents = try await auditRepository.events().sorted { $0.occurredAt > $1.occurredAt }
+        hasLoadedAuditHistory = true
     }
 
     func load(_ dependencies: Result<WalletAppDependencies, Error>) async {
@@ -113,23 +116,40 @@ final class WalletAppModel: ObservableObject {
             eudiAvailability = dependencies.eudiAvailability
             ebsiWallet = dependencies.ebsiWallet
             repositories = (dependencies.credentials, dependencies.audit)
-            try await load(credentials: dependencies.credentials, audit: dependencies.audit)
             if isEudiOperational, let eudiWallet {
-                try await eudiWallet.reconcilePendingOperations()
+                let snapshot = try await eudiWallet.loadStartupSnapshot()
+                credentials = snapshot.metadata.isEmpty
+                    ? try await dependencies.credentials.credentials()
+                    : snapshot.metadata
                 walletDocumentSummaries = Dictionary(
-                    uniqueKeysWithValues: try await eudiWallet.loadDocumentSummaries().map { ($0.id, $0) }
+                    uniqueKeysWithValues: snapshot.documents.map { ($0.id, $0) }
                 )
-                if let pending = try await eudiWallet.loadPendingIssuances().first {
+                if let pending = snapshot.pendingIssuances.first {
                     activePendingIssuanceID = pending.id
                     activePendingIssuance = pending
                     eudiFlow = .pending(pending)
                 }
-            } else if case let .configurationRequired(message) = dependencies.eudiAvailability {
-                eudiFlow = .configurationRequired(message)
+            } else {
+                credentials = try await dependencies.credentials.credentials()
+                if case let .configurationRequired(message) = dependencies.eudiAvailability {
+                    eudiFlow = .configurationRequired(message)
+                }
             }
             loadingState = .loaded
         } catch {
             loadingState = .failed("Development wallet setup failed: \(Self.developmentErrorMessage(error))")
+        }
+    }
+
+    func loadAuditHistoryIfNeeded() async {
+        guard !hasLoadedAuditHistory, !isAuditHistoryLoading, let repositories else { return }
+        isAuditHistoryLoading = true
+        defer { isAuditHistoryLoading = false }
+        do {
+            auditEvents = try await repositories.audit.events().sorted { $0.occurredAt > $1.occurredAt }
+            hasLoadedAuditHistory = true
+        } catch {
+            auditEvents = []
         }
     }
 

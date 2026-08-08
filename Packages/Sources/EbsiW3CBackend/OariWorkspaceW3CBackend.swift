@@ -672,11 +672,8 @@ public actor OariWorkspaceW3CBackend {
         var results: [WorkspaceIssuedCredential] = []
         let configurationIDs: [String]
         var draftAuthorizationDetails: [String: TokenResponse.AuthorizationDetail] = [:]
-        var draftCredentialIdentifiers: [String: String] = [:]
+        var draftCredentialIdentifiers: [String: [String]] = [:]
         if transportContract.profile != .final {
-            guard let nonce = token.nonce, !nonce.isEmpty else {
-                throw WorkspaceBackendError.missingCredentialNonce
-            }
             if let authorizationDetails = token.authorizationDetails {
                 guard !authorizationDetails.isEmpty else {
                     throw WorkspaceBackendError.missingCredentialAuthorization
@@ -700,8 +697,10 @@ public actor OariWorkspaceW3CBackend {
                     }
                     let highestScore = ranked.map(\.1).max()
                     let candidates = ranked.filter { $0.1 == highestScore }
-                    guard highestScore != nil, candidates.count == 1,
-                          let candidate = candidates.first,
+                    let candidate = transaction.configurationIDs.count == 1
+                        ? candidates.first
+                        : (candidates.count == 1 ? candidates.first : nil)
+                    guard highestScore != nil, let candidate,
                           matchedIndexes.insert(candidate.0).inserted else {
                         throw WorkspaceBackendError.credentialAuthorizationMismatch(
                             offered: offeredID,
@@ -710,7 +709,10 @@ public actor OariWorkspaceW3CBackend {
                     }
                     let index = candidate.0
                     draftAuthorizationDetails[offeredID] = authorizationDetails[index]
-                    draftCredentialIdentifiers[offeredID] = candidate.2
+                    var identifiers = [candidate.2]
+                    identifiers.append(contentsOf: authorizationDetails[index].credentialIdentifiers ?? [])
+                    identifiers.append(contentsOf: authorizationDetails.flatMap { $0.credentialIdentifiers ?? [] })
+                    draftCredentialIdentifiers[offeredID] = Self.uniqueNonEmpty(identifiers)
                 }
             }
             configurationIDs = transaction.configurationIDs
@@ -729,7 +731,7 @@ public actor OariWorkspaceW3CBackend {
             let authorizationDetail = transportContract.profile == .final
                 ? token.authorizationDetails?.first { $0.credentialConfigurationID == configurationID }
                 : draftAuthorizationDetails[configurationID]
-            let credentialIdentifier = draftCredentialIdentifiers[configurationID]
+            let credentialIdentifier = draftCredentialIdentifiers[configurationID]?.first
                 ?? authorizationDetail?.credentialIdentifiers?.first(where: { !$0.isEmpty })
                 ?? configurationID
             let responseEncryption: CredentialResponseEncryptionRequest?
@@ -754,8 +756,9 @@ public actor OariWorkspaceW3CBackend {
             }
             let identifierCandidates: [String?]
             if transportContract.credentialIdentifierField == .credentialIdentifier {
-                var values = [credentialIdentifier]
-                if configurationID != credentialIdentifier { values.append(configurationID) }
+                var values = draftCredentialIdentifiers[configurationID] ?? [credentialIdentifier]
+                values.append(configurationID)
+                values = Self.uniqueNonEmpty(values)
                 identifierCandidates = values.map(Optional.some)
             } else {
                 identifierCandidates = [nil]
@@ -808,13 +811,8 @@ public actor OariWorkspaceW3CBackend {
                     )
                     break
                 } catch let error as WorkspaceBackendError {
-                    let canRetry = index + 1 < identifierCandidates.count && {
-                        switch error {
-                        case .remoteOAuthError(code: "invalid_credential_request", detail: _),
-                             .remoteOAuthError(code: "unsupported_credential_type", detail: _): true
-                        default: false
-                        }
-                    }()
+                    let canRetry = index + 1 < identifierCandidates.count &&
+                        Self.isRetryableCredentialIdentifierError(error)
                     guard canRetry else { throw error }
                 }
             }
@@ -1206,6 +1204,25 @@ public actor OariWorkspaceW3CBackend {
         return details.flatMap { detail in
             [detail.credentialConfigurationID].compactMap { $0 } + (detail.credentialIdentifiers ?? [])
         }.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    private static func uniqueNonEmpty(_ values: [String]) -> [String] {
+        var seen: Set<String> = []
+        return values.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    private static func isRetryableCredentialIdentifierError(_ error: WorkspaceBackendError) -> Bool {
+        switch error {
+        case .remoteOAuthError(code: "invalid_credential_request", detail: _),
+             .remoteOAuthError(code: "unsupported_credential_type", detail: _):
+            return true
+        case let .remoteHTTPError(status: 400, detail):
+            let value = detail?.lowercased() ?? ""
+            return value.contains("invalid credential request") ||
+                value.contains("unsupported credential type")
+        default:
+            return false
+        }
     }
 
     private static func displayClaims(from credential: [String: AnySendableJSON]?) -> [CredentialDisplayClaim] {

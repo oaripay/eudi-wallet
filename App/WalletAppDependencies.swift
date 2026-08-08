@@ -34,7 +34,9 @@ struct WalletAppDependencies: Sendable {
                 appropriateFor: nil,
                 create: true
             ).appendingPathComponent("OARIWallet", isDirectory: true)
-            let keyStore = KeychainVaultKeyStore(service: "io.oari.wallet.vault")
+            let keyStore = CachedVaultKeyStore(
+                wrapping: KeychainVaultKeyStore(service: "io.oari.wallet.vault")
+            )
             let metadataRepository = try EncryptedCredentialMetadataRepository(
                 directory: root.appendingPathComponent("credential-metadata", isDirectory: true),
                 keyStore: keyStore
