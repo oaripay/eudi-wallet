@@ -15,9 +15,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "63B87EF358F508A7B5EB94C7"
-               BuildableName = "OARIWallet.app"
-               BlueprintName = "OARIWallet"
+               BlueprintIdentifier = "DB226ABFBC1EC926AA7764CB"
+               BuildableName = "OariWallet.app"
+               BlueprintName = "OariWallet"
                ReferencedContainer = "container:OariWallet.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -61,9 +61,9 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "63B87EF358F508A7B5EB94C7"
-            BuildableName = "OARIWallet.app"
-            BlueprintName = "OARIWallet"
+            BlueprintIdentifier = "DB226ABFBC1EC926AA7764CB"
+            BuildableName = "OariWallet.app"
+            BlueprintName = "OariWallet"
             ReferencedContainer = "container:OariWallet.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
@@ -97,9 +97,9 @@
       <CodeCoverageTargets>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "63B87EF358F508A7B5EB94C7"
-            BuildableName = "OARIWallet.app"
-            BlueprintName = "OARIWallet"
+            BlueprintIdentifier = "DB226ABFBC1EC926AA7764CB"
+            BuildableName = "OariWallet.app"
+            BlueprintName = "OariWallet"
             ReferencedContainer = "container:OariWallet.xcodeproj">
          </BuildableReference>
       </CodeCoverageTargets>
@@ -118,9 +118,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "63B87EF358F508A7B5EB94C7"
-            BuildableName = "OARIWallet.app"
-            BlueprintName = "OARIWallet"
+            BlueprintIdentifier = "DB226ABFBC1EC926AA7764CB"
+            BuildableName = "OariWallet.app"
+            BlueprintName = "OariWallet"
             ReferencedContainer = "container:OariWallet.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -137,9 +137,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "63B87EF358F508A7B5EB94C7"
-            BuildableName = "OARIWallet.app"
-            BlueprintName = "OARIWallet"
+            BlueprintIdentifier = "DB226ABFBC1EC926AA7764CB"
+            BuildableName = "OariWallet.app"
+            BlueprintName = "OariWallet"
             ReferencedContainer = "container:OariWallet.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

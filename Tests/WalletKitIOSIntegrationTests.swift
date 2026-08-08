@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import OARIWallet
+@testable import OariWallet
 
 @MainActor
 struct WalletKitIOSIntegrationTests {

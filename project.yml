@@ -32,11 +32,11 @@ settings:
       VALIDATE_PRODUCT: YES
 
 packages:
-  OARIWalletModules:
+  OariWalletModules:
     path: .
 
 targets:
-  OARIWallet:
+  OariWallet:
     type: application
     platform: iOS
     sources:
@@ -44,17 +44,17 @@ targets:
     resources:
       - path: App/Resources
     dependencies:
-      - package: OARIWalletModules
+      - package: OariWalletModules
         product: WalletDomain
-      - package: OARIWalletModules
+      - package: OariWalletModules
         product: ProtocolEngine
-      - package: OARIWalletModules
+      - package: OariWalletModules
         product: OariDesignSystem
-      - package: OARIWalletModules
+      - package: OariWalletModules
         product: WalletVault
-      - package: OARIWalletModules
+      - package: OariWalletModules
         product: EudiWalletKitAdapter
-      - package: OARIWalletModules
+      - package: OariWalletModules
         product: EbsiW3CBackend
     info:
       path: App/Info.plist
@@ -80,7 +80,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.oari.wallet
         TARGETED_DEVICE_FAMILY: "1"
-        PRODUCT_NAME: OARIWallet
+        PRODUCT_NAME: OariWallet
+        PRODUCT_MODULE_NAME: OariWallet
+        SWIFT_MODULE_NAME: OariWallet
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_ENTITLEMENTS: App/OARIWallet.entitlements
@@ -89,6 +91,8 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         SUPPORTS_MACCATALYST: NO
       configs:
+        Debug:
+          ENABLE_TESTABILITY: YES
         ReleaseTesting:
           ENABLE_TESTABILITY: YES
 
@@ -98,12 +102,12 @@ targets:
     sources:
        - path: Tests
     dependencies:
-      - target: OARIWallet
+      - target: OariWallet
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.oari.wallet.tests
         GENERATE_INFOPLIST_FILE: YES
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/OARIWallet.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OARIWallet"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/OariWallet.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OariWallet"
         BUNDLE_LOADER: "$(TEST_HOST)"
 
   WalletUITests:
@@ -112,24 +116,24 @@ targets:
     sources:
        - path: UITests
     dependencies:
-      - target: OARIWallet
+      - target: OariWallet
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.oari.wallet.uitests
         GENERATE_INFOPLIST_FILE: YES
-        TEST_TARGET_NAME: OARIWallet
+        TEST_TARGET_NAME: OariWallet
 
 schemes:
-  OARIWallet:
+  OariWallet:
     build:
       targets:
-        OARIWallet: all
+        OariWallet: all
         WalletTests: [test]
         WalletUITests: [test]
     test:
       gatherCoverageData: true
       coverageTargets:
-        - OARIWallet
+        - OariWallet
       targets:
         - name: WalletTests
           parallelizable: true

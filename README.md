@@ -2,7 +2,7 @@
 
 Oari Wallet is a native SwiftUI iOS development wallet for EUDI and workspace-backed
 EBSI/W3C interoperability testing. The app display name is **Oari Wallet**; the
-technical target and bundle identity remain `OARIWallet` and `io.oari.wallet`.
+technical target is `OariWallet`; the bundle identifier remains `io.oari.wallet`.
 
 This repository is development/interoperability software. It is not a certification,
 eIDAS legal-recognition or production-readiness claim.
@@ -97,7 +97,7 @@ Run the renamed unit target:
 ```sh
 xcodebuild \
   -project OariWallet.xcodeproj \
-  -scheme OARIWallet \
+  -scheme OariWallet \
   -configuration Debug \
   -skipMacroValidation \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \

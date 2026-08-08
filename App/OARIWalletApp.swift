@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct OARIWalletApp: App {
+struct OariWalletApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model: WalletAppModel
     private let configuration: AppConfiguration

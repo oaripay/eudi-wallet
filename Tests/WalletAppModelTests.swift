@@ -4,7 +4,7 @@ import EbsiW3CBackend
 import ProtocolEngine
 import Testing
 import WalletDomain
-@testable import OARIWallet
+@testable import OariWallet
 
 @MainActor
 struct WalletAppModelTests {

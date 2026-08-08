@@ -15,7 +15,7 @@ def fail(message: str) -> None:
 
 def main() -> None:
     imports = []
-    for source_root in (ROOT / "Packages/Sources", ROOT / "OARIWallet"):
+    for source_root in (ROOT / "Packages/Sources", ROOT / "App"):
         for source in source_root.rglob("*.swift"):
             if "import EudiWalletKit" in source.read_text().splitlines():
                 imports.append(source.resolve())
@@ -35,7 +35,7 @@ def main() -> None:
         fail("metadata-only repository references a raw credential representation")
 
     forbidden = ("CredentialEnvelope", "encodedCredential", "EncryptedCredentialRepository")
-    for source_root in (ROOT / "Packages/Sources", ROOT / "OARIWallet"):
+    for source_root in (ROOT / "Packages/Sources", ROOT / "App"):
         for source in source_root.rglob("*.swift"):
             text = source.read_text()
             if any(term in text for term in forbidden):
