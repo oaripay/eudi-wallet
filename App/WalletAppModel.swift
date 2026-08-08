@@ -495,7 +495,10 @@ final class WalletAppModel: ObservableObject {
         let hasMatchingEudiPID = requestedVCTs.isEmpty || walletDocumentSummaries.values.contains { document in
             document.status == "issued" && requestedVCTs.contains(document.documentType)
         }
-        if requestedFormats.contains("jwt_vc_json") || !hasMatchingEudiPID {
+        let requestsW3CCredential = requestedFormats.contains {
+            $0 == "dc+sd-jwt" || $0 == "jwt_vc_json" || $0 == "jwt_vc_json-ld"
+        }
+        if requestsW3CCredential || !hasMatchingEudiPID {
             guard let id = activeEbsiInteractionID, let ebsiWallet else {
                 eudiFlow = .failed("The issuer authorization transaction expired before PID selection.")
                 return
@@ -910,6 +913,10 @@ final class WalletAppModel: ObservableObject {
             case .invalidPresentationResponse: return "The issuer rejected the PID presentation response."
             case .presentationCredentialUnavailable:
                 return "No stored W3C credential satisfies the verifier's requested format, type, and claims."
+            case let .invalidPresentationChallenge(reason):
+                return "The verifier presentation challenge was invalid: \(reason)."
+            case let .presentationSubmissionHTTPError(method, path, status, detail):
+                return "Presentation submission failed: \(method) \(path) returned HTTP \(status)\(detail.map { ": \($0)" } ?? "")."
             case .authorizationFailed: return "The issuer authorization exchange failed."
             case let .decodingFailed(stage, path, reason):
                 return "The issuer returned an invalid \(stage) at \(path): \(reason)."

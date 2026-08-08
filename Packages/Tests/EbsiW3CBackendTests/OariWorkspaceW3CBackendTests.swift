@@ -507,6 +507,62 @@ struct OariWorkspaceW3CBackendTests {
         ])
     }
 
+    @Test("IAR compact signed request exposes iGrant DCQL challenge fields")
+    func iGrantCompactChallenge() async throws {
+        let transport = FixtureWorkspaceTransport(iGrantCompactPresentation: true)
+        let backend = OariWorkspaceW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(),
+            credentialStore: FixtureCredentialStore(),
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .dcSdJWTVC(),
+            transportProfileRegistry: .developmentDraftCompatibility
+        )
+        let offer = try await Self.authorizationOffer(backend)
+        let challenge = try await backend.beginPresentationRequired(
+            id: offer.id,
+            allowUntrusted: false,
+            interactionTypes: ["openid4vp_presentation"]
+        )
+        #expect(challenge.responseMode == "iar-post")
+        #expect(challenge.responseURI?.path == "/service/iar")
+        #expect(challenge.clientID?.hasPrefix("redirect_uri:") == true)
+        #expect(challenge.dcqlQuery["credentials"] != nil)
+    }
+
+    @Test("Draft authorization uses published GET endpoint and never guesses IAR")
+    func draftAuthorizationEndpoint() async throws {
+        let transport = DraftIARFallbackTransport()
+        let backend = OariWorkspaceW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(),
+            credentialStore: FixtureCredentialStore(),
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .dcSdJWTVC(),
+            transportProfileRegistry: .developmentDraftCompatibility
+        )
+        let json = #"{"credential_issuer":"https://issuer.example/service/draft-13","credential_configuration_ids":["pid"],"grants":{"authorization_code":{"issuer_state":"issuer-state"}}}"#
+        let encoded = json.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
+        let offer = try await backend.resolveOffer("openid-credential-offer://?credential_offer=\(encoded)")
+        let challenge = try await backend.beginPresentationRequired(
+            id: offer.id,
+            allowUntrusted: false,
+            interactionTypes: ["openid4vp_presentation"]
+        )
+        #expect(challenge.authorizationEndpoint.path == "/service/draft-13/authorize")
+        #expect(challenge.responseMode == "iar-post")
+        let requests = await transport.requests
+        let authorization = try #require(requests.first { $0.url.path == "/service/draft-13/authorize" })
+        #expect(authorization.method == "GET")
+        let query = URLComponents(url: authorization.url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        #expect(query.contains { $0.name == "response_type" && $0.value == "code" })
+        #expect(query.contains { $0.name == "code_challenge" && !($0.value ?? "").isEmpty })
+        #expect(query.contains { $0.name == "authorization_details" })
+        #expect(!requests.contains { $0.url.path == "/service/iar" })
+    }
+
     @Test("Stored W3C SD-JWT PID creates a selective DCQL key-bound presentation")
     func storedSDJWTPresentation() async throws {
         let transport = FixtureWorkspaceTransport()
@@ -829,6 +885,39 @@ private struct LiveDiagnosticCredentialValidator: WorkspaceCredentialValidating 
     }
 }
 
+private actor DraftIARFallbackTransport: WorkspaceHTTPTransport {
+    struct Request: Sendable { let url: URL; let method: String; let body: Data? }
+    private(set) var requests: [Request] = []
+
+    func send(url: URL, method: String, headers: [String: String], body: Data?) async throws -> WorkspaceHTTPResponse {
+        requests.append(Request(url: url, method: method, body: body))
+        switch url.path {
+        case "/.well-known/openid-credential-issuer/service/draft-13":
+            return WorkspaceHTTPResponse(statusCode: 200, body: Data(#"{"credential_endpoint":"https://issuer.example/credential","authorization_servers":["https://issuer.example/service/draft-13"],"credential_configurations_supported":{"pid":{"format":"dc+sd-jwt","vct":"urn:example:pid"}}}"#.utf8))
+        case "/.well-known/oauth-authorization-server/service/draft-13":
+            return WorkspaceHTTPResponse(statusCode: 200, body: Data(#"{"issuer":"https://issuer.example/service/draft-13","authorization_endpoint":"https://issuer.example/service/draft-13/authorize","token_endpoint":"https://issuer.example/token"}"#.utf8))
+        case "/service/draft-13/authorize":
+            guard method == "GET" else {
+                return WorkspaceHTTPResponse(statusCode: 405, body: Data(#"{"detail":"method not allowed"}"#.utf8))
+            }
+            let payload = Self.base64URL(#"{"client_id":"redirect_uri:https://issuer.example/service/draft-13/authorize","response_type":"vp_token","response_mode":"iar-post","response_uri":"https://issuer.example/service/draft-13/authorize","nonce":"nonce","state":"state","dcql_query":{"credentials":[{"id":"pid","format":"dc+sd-jwt","meta":{"vct_values":["urn:example:pid"]},"claims":[{"path":["given_name"]}]}]}}"#)
+            let response = """
+            {"status":"require_interaction","type":"openid4vp_presentation","openid4vp_request":{"request":"header.\(payload).signature"}}
+            """
+            return WorkspaceHTTPResponse(statusCode: 200, body: Data(response.utf8))
+        default:
+            return WorkspaceHTTPResponse(statusCode: 404, body: Data())
+        }
+    }
+
+    private static func base64URL(_ value: String) -> String {
+        Data(value.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+}
+
 private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
     static let png = Data([
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -839,15 +928,18 @@ private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
     private let presentationFormat: String
     private let credentialFormat: String
     private let credentialResponse: String
+    private let iGrantCompactPresentation: Bool
 
     init(
         presentationFormat: String = "dc+sd-jwt",
         credentialFormat: String = "application/vc+jwt",
-        credentialResponse: String = "header.payload.signature"
+        credentialResponse: String = "header.payload.signature",
+        iGrantCompactPresentation: Bool = false
     ) {
         self.presentationFormat = presentationFormat
         self.credentialFormat = credentialFormat
         self.credentialResponse = credentialResponse
+        self.iGrantCompactPresentation = iGrantCompactPresentation
     }
     func send(url: URL, method: String, headers: [String: String], body: Data?) async throws -> WorkspaceHTTPResponse {
         requests.append(Request(url: url, method: method, headers: headers, body: body))
@@ -866,6 +958,12 @@ private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
         case "/authorize-challenge", "/authorize":
             if String(decoding: body ?? Data(), as: UTF8.self).contains("issuer_state") {
                 if url.path == "/authorize" {
+                    if iGrantCompactPresentation {
+                        return WorkspaceHTTPResponse(
+                            statusCode: 200,
+                            body: Data(#"{"status":"require_interaction","type":"openid4vp_presentation","openid4vp_request":{"request":"header.eyJjbGllbnRfaWQiOiJyZWRpcmVjdF91cmk6aHR0cHM6Ly9pc3N1ZXIuZXhhbXBsZS9zZXJ2aWNlL3ZlcnNpb24tMDEiLCJyZXNwb25zZV90eXBlIjoidnBfdG9rZW4iLCJyZXNwb25zZV9tb2RlIjoiaWFyLXBvc3QiLCJyZXNwb25zZV91cmkiOiJodHRwczovL2lzc3Vlci5leGFtcGxlL3NlcnZpY2UvaWFyIiwibm9uY2UiOiJub25jZSIsInN0YXRlIjoic3RhdGUiLCJkY3FsX3F1ZXJ5Ijp7ImNyZWRlbnRpYWxzIjpbeyJpZCI6IlByZXNlbnRhdGlvbiBEZWZpbml0aW9uIDEiLCJmb3JtYXQiOiJkYytzZC1qd3QifV19fQ.signature"}}"#.utf8)
+                        )
+                    }
                     return WorkspaceHTTPResponse(
                         statusCode: 200,
                         body: Data(#"{"status":"require_interaction","type":"openid4vp_presentation","auth_session":"auth-session","openid4vp_request":{"request":"PLACEHOLDER"}}"#.replacingOccurrences(of: "PLACEHOLDER", with: Self.signedPresentationRequest(format: presentationFormat)).utf8)

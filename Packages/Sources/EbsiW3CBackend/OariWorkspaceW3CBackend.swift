@@ -169,6 +169,8 @@ public enum WorkspaceBackendError: Error, Equatable, Sendable {
     case presentationRequired
     case invalidPresentationResponse
     case presentationCredentialUnavailable
+    case invalidPresentationChallenge(reason: String)
+    case presentationSubmissionHTTPError(method: String, path: String, status: Int, detail: String?)
     case authorizationFailed
     case decodingFailed(stage: String, path: String, reason: String)
     case remoteOAuthError(code: String, detail: String?)
@@ -207,6 +209,7 @@ public actor OariWorkspaceW3CBackend {
     private let now: @Sendable () -> Date
     private var transactions: [UUID: Transaction] = [:]
     private var authorizationCodes: [UUID: String] = [:]
+    private var authorizationCodeVerifiers: [UUID: String] = [:]
     private var trustConsents: Set<UUID> = []
     private var presentationChallenges: [UUID: WorkspacePresentationChallenge] = [:]
     private var preparedPIDPresentations: [UUID: PreparedW3CPresentation] = [:]
@@ -342,36 +345,107 @@ public actor OariWorkspaceW3CBackend {
         }
         try authorizeTrust(transaction: transaction, id: id, allowUntrusted: allowUntrusted)
         let usesDraftInteraction = interactionTypes == ["openid4vp_presentation"]
-        let endpoint = transaction.issuer.appendingPathComponent(
-            usesDraftInteraction ? "authorize" : "authorize-challenge"
-        )
-        let body = form([
-            "issuer_state": issuerState,
-            "interaction_types_supported": interactionTypes.joined(separator: ","),
-        ])
+        let endpoint: URL
+        let requestMethod: String
+        let requestURL: URL
+        let requestBody: Data?
+        if let publishedEndpoint = transaction.issuerMetadata.interactiveAuthorizationEndpoint,
+           let url = URL(string: publishedEndpoint),
+           try Self.origin(of: url) == Self.origin(of: transaction.issuer) {
+            endpoint = url
+            requestMethod = "POST"
+            requestURL = endpoint
+            requestBody = try interactiveAuthorizationRequestBody(
+                id: id,
+                issuerState: issuerState,
+                interactionTypes: interactionTypes,
+                endpoint: endpoint,
+                configurationIDs: transaction.configurationIDs
+            )
+        } else {
+            let authorizationServer = URL(
+                string: transaction.issuerMetadata.authorizationServers?.first ?? transaction.issuer.absoluteString
+            ) ?? transaction.issuer
+            let metadataURL = try Self.wellKnownURL(
+                name: "oauth-authorization-server",
+                issuer: authorizationServer
+            )
+            let metadata = try await discoverMetadata(
+                AuthorizationMetadata.self,
+                name: "oauth-authorization-server",
+                issuer: authorizationServer,
+                standardURL: metadataURL,
+                stage: "authorization server metadata"
+            )
+            if let value = metadata.authorizationEndpoint,
+               let url = URL(string: value),
+               try Self.origin(of: url) == Self.origin(of: transaction.issuer) {
+                endpoint = url
+                requestMethod = "GET"
+                let fields = try interactiveAuthorizationRequestFields(
+                    id: id,
+                    issuerState: issuerState,
+                    interactionTypes: interactionTypes,
+                    endpoint: endpoint,
+                    configurationIDs: transaction.configurationIDs
+                )
+                var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
+                components?.queryItems = fields.compactMap { key, value in
+                    value.map { URLQueryItem(name: key, value: $0) }
+                }
+                guard let url = components?.url else { throw WorkspaceBackendError.unsafeEndpoint }
+                requestURL = url
+                requestBody = nil
+            } else {
+                endpoint = transaction.issuer.appendingPathComponent(
+                    usesDraftInteraction ? "authorize" : "authorize-challenge"
+                )
+                requestMethod = "POST"
+                requestURL = endpoint
+                requestBody = form([
+                    "issuer_state": issuerState,
+                    "interaction_types_supported": interactionTypes.joined(separator: ","),
+                ])
+            }
+        }
         guard try Self.origin(of: endpoint) == Self.origin(of: transaction.issuer) else {
             throw WorkspaceBackendError.unsafeEndpoint
         }
         let raw = try await transport.send(
-            url: endpoint,
-            method: "POST",
-            headers: ["Content-Type": "application/x-www-form-urlencoded"],
-            body: body
+            url: requestURL,
+            method: requestMethod,
+            headers: requestMethod == "POST"
+                ? ["Content-Type": "application/x-www-form-urlencoded"]
+                : ["Accept": "application/json"],
+            body: requestBody
         )
-        guard raw.statusCode == 200 || raw.statusCode == 403,
-              raw.body.count <= 1_048_576 else { throw WorkspaceBackendError.invalidResponse }
+        guard raw.body.count <= 1_048_576 else {
+            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "response exceeded the 1 MB limit")
+        }
+        guard raw.statusCode == 200 || raw.statusCode == 403 else {
+            let detail = Self.safeHTTPErrorDetail(raw.body)
+            throw WorkspaceBackendError.invalidPresentationChallenge(
+                reason: "\(requestMethod) \(endpoint.path) returned HTTP \(raw.statusCode)\(detail.map { ": \($0)" } ?? "")"
+            )
+        }
         let data = raw.body
         let response = try Self.decode(
             PresentationChallengeResponse.self,
             from: data,
             stage: "presentation challenge"
         )
-        guard let request = response.openid4vpRequest else { throw WorkspaceBackendError.invalidResponse }
-        let signedClaims = try request.request.map(Self.decodeSignedPresentationRequest)
-        guard let responseMode = request.responseMode ?? signedClaims?.responseMode,
-              let nonce = request.nonce ?? signedClaims?.nonce,
-              let dcqlQuery = request.dcqlQuery ?? signedClaims?.dcqlQuery else {
-            throw WorkspaceBackendError.invalidResponse
+        guard let request = response.openid4vpRequest else {
+            throw WorkspaceBackendError.invalidPresentationChallenge(
+                reason: "response did not contain openid4vp_request"
+            )
+        }
+        let signedClaims = try request.requestJWT.map(Self.decodeSignedPresentationRequest)
+        guard let responseMode = request.responseMode ?? request.requestObject?.responseMode ?? signedClaims?.responseMode,
+              let nonce = request.nonce ?? request.requestObject?.nonce ?? signedClaims?.nonce,
+              let dcqlQuery = request.dcqlQuery ?? request.requestObject?.dcqlQuery ?? signedClaims?.dcqlQuery else {
+            throw WorkspaceBackendError.invalidPresentationChallenge(
+                reason: "request did not contain response_mode, nonce, and dcql_query"
+            )
         }
         let challenge = WorkspacePresentationChallenge(
             id: id,
@@ -379,12 +453,12 @@ public actor OariWorkspaceW3CBackend {
             authSession: response.authSession,
             interactionType: response.interactionTypeRequired ?? "openid4vp_presentation",
             responseMode: responseMode,
-            responseURI: (request.responseURI ?? signedClaims?.responseURI).flatMap(URL.init(string:)),
+            responseURI: (request.responseURI ?? request.requestObject?.responseURI ?? signedClaims?.responseURI).flatMap(URL.init(string:)),
             nonce: nonce,
-            state: request.state ?? signedClaims?.state,
+            state: request.state ?? request.requestObject?.state ?? signedClaims?.state,
             dcqlQuery: dcqlQuery,
             signedRequest: request.request,
-            clientID: signedClaims?.clientID
+            clientID: request.clientID ?? request.requestObject?.clientID ?? signedClaims?.clientID
         )
         presentationChallenges[id] = challenge
         return challenge
@@ -529,7 +603,23 @@ public actor OariWorkspaceW3CBackend {
             fields["vp_token"] = vpToken
         } else if challenge.responseMode == "iar-post" {
             fields["auth_session"] = challenge.authSession
-            fields["vp_token"] = vpToken
+            if case let .authorizationCode(issuerState) = transaction.grant {
+                fields["issuer_state"] = issuerState
+            }
+            fields["response_type"] = "code"
+            fields["client_id"] = challenge.clientID
+            fields["code_challenge"] = authorizationCodeVerifiers[id].map {
+                Data(SHA256.hash(data: Data($0.utf8))).base64URLEncodedString()
+            }
+            fields["code_challenge_method"] = "S256"
+            fields["interaction_types_supported"] = "openid4vp_presentation"
+            let authorizationDetails = try JSONSerialization.data(
+                withJSONObject: transaction.configurationIDs.map { configurationID in
+                    ["type": "openid_credential", "credential_configuration_id": configurationID]
+                }
+            )
+            fields["authorization_details"] = String(decoding: authorizationDetails, as: UTF8.self)
+            fields["openid4vp_presentation"] = vpToken
         } else {
             fields["auth_session"] = challenge.authSession
             guard let tokenObject = try JSONSerialization.jsonObject(with: Data(vpToken.utf8)) as? [String: Any] else {
@@ -538,13 +628,27 @@ public actor OariWorkspaceW3CBackend {
             let wrapped = try JSONSerialization.data(withJSONObject: ["vp_token": tokenObject])
             fields["openid4vp_response"] = String(decoding: wrapped, as: UTF8.self)
         }
-        let response = try await successfulRequest(
-            challenge.responseURI ?? challenge.authorizationEndpoint,
-            method: "POST",
-            headers: ["Content-Type": "application/x-www-form-urlencoded"],
-            body: form(fields),
-            allowedOrigins: [try Self.origin(of: transaction.issuer)]
-        )
+        let responseEndpoint = challenge.responseURI ?? challenge.authorizationEndpoint
+        let response: Data
+        do {
+            response = try await successfulRequest(
+                responseEndpoint,
+                method: "POST",
+                headers: ["Content-Type": "application/x-www-form-urlencoded"],
+                body: form(fields),
+                allowedOrigins: [try Self.origin(of: transaction.issuer)]
+            )
+        } catch let error as WorkspaceBackendError {
+            if case let .remoteHTTPError(status, detail) = error {
+                throw WorkspaceBackendError.presentationSubmissionHTTPError(
+                    method: "POST",
+                    path: responseEndpoint.path,
+                    status: status,
+                    detail: detail
+                )
+            }
+            throw error
+        }
         let code = try Self.decode(
             AuthorizationCodeResponse.self,
             from: response,
@@ -591,6 +695,7 @@ public actor OariWorkspaceW3CBackend {
             tokenValues = [
                 "grant_type": "authorization_code",
                 "code": code,
+                "code_verifier": authorizationCodeVerifiers[id],
             ]
         }
         let issuerMetadata = transaction.issuerMetadata
@@ -891,6 +996,7 @@ public actor OariWorkspaceW3CBackend {
         }
         transactions[id] = nil
         authorizationCodes[id] = nil
+        authorizationCodeVerifiers[id] = nil
         trustConsents.remove(id)
         return results
     }
@@ -949,6 +1055,38 @@ public actor OariWorkspaceW3CBackend {
     private static func supportedRepresentation(_ format: String) -> Bool {
         ["jwt_vc_json", "jwt_vc_json-ld", "dc+sd-jwt", "vcdm2_sd_jwt", "application/vc+jwt"]
             .contains(format)
+    }
+
+    private static func base64URL(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private static func safeHTTPErrorDetail(_ data: Data) -> String? {
+        guard data.count <= 1_048_576,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let detail = object["detail"] as? String {
+            if let nestedData = detail.data(using: .utf8),
+               let failures = try? JSONSerialization.jsonObject(with: nestedData) as? [[String: Any]] {
+                let values = failures.compactMap { failure -> String? in
+                    let path = (failure["loc"] as? [Any])?.compactMap { $0 as? String }.joined(separator: ".")
+                    let message = failure["msg"] as? String
+                    guard let message else { return nil }
+                    return path.map { "\($0): \(message)" } ?? message
+                }
+                return values.isEmpty ? nil : values.joined(separator: ", ")
+            }
+            return detail.count <= 200 && !detail.contains("eyJ") ? detail : nil
+        }
+        if let description = object["error_description"] as? String, description.count <= 200 {
+            return description
+        }
+        if let error = object["error"] as? String, error.count <= 100 { return error }
+        return nil
     }
 
     private static func decode<Value: Decodable>(
@@ -1011,11 +1149,15 @@ public actor OariWorkspaceW3CBackend {
 
     private static func decodeSignedPresentationRequest(_ compactJWT: String) throws -> SignedPresentationRequest {
         let parts = compactJWT.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 3 else { throw WorkspaceBackendError.invalidResponse }
+        guard parts.count == 3 else {
+            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "signed request was not a compact JWT")
+        }
         var base64 = String(parts[1]).replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
         base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
-        guard let data = Data(base64Encoded: base64) else { throw WorkspaceBackendError.invalidResponse }
+        guard let data = Data(base64Encoded: base64) else {
+            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "signed request payload was not valid base64url")
+        }
         return try Self.decode(
             SignedPresentationRequest.self,
             from: data,
@@ -1263,6 +1405,7 @@ public actor OariWorkspaceW3CBackend {
     public func cancel(id: UUID) {
         transactions[id] = nil
         authorizationCodes[id] = nil
+        authorizationCodeVerifiers[id] = nil
         presentationChallenges[id] = nil
         preparedPIDPresentations[id] = nil
         trustConsents.remove(id)
@@ -1286,6 +1429,48 @@ public actor OariWorkspaceW3CBackend {
             trustConsents.insert(id)
         case .reject: throw WorkspaceBackendError.rejectedTrust
         }
+    }
+
+    private func interactiveAuthorizationRequestBody(
+        id: UUID,
+        issuerState: String,
+        interactionTypes: [String],
+        endpoint: URL,
+        configurationIDs: [String]
+    ) throws -> Data {
+        form(try interactiveAuthorizationRequestFields(
+            id: id,
+            issuerState: issuerState,
+            interactionTypes: interactionTypes,
+            endpoint: endpoint,
+            configurationIDs: configurationIDs
+        ))
+    }
+
+    private func interactiveAuthorizationRequestFields(
+        id: UUID,
+        issuerState: String,
+        interactionTypes: [String],
+        endpoint: URL,
+        configurationIDs: [String]
+    ) throws -> [String: String?] {
+        let verifier = Self.base64URL(Data((UUID().uuidString + UUID().uuidString).utf8))
+        authorizationCodeVerifiers[id] = verifier
+        let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URLEncodedString()
+        let authorizationDetails = try JSONSerialization.data(
+            withJSONObject: configurationIDs.map { configurationID in
+                ["type": "openid_credential", "credential_configuration_id": configurationID]
+            }
+        )
+        return [
+            "issuer_state": issuerState,
+            "interaction_types_supported": interactionTypes.joined(separator: ","),
+            "response_type": "code",
+            "client_id": "redirect_uri:\(endpoint.absoluteString)",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "authorization_details": String(decoding: authorizationDetails, as: UTF8.self),
+        ]
     }
 
     private func proofJWT(
@@ -1545,16 +1730,56 @@ private struct PresentationChallengeResponse: Decodable {
 private struct PresentationRequest: Decodable {
     let responseMode: String?
     let responseURI: String?
+    let clientID: String?
     let nonce: String?
     let state: String?
     let dcqlQuery: [String: AnySendableJSON]?
     let request: String?
+    let requestJWT: String?
+    let requestObject: PresentationRequestObject?
     enum CodingKeys: String, CodingKey {
+        case responseMode = "response_mode"
+        case responseURI = "response_uri"
+        case clientID = "client_id"
+        case nonce, state
+        case dcqlQuery = "dcql_query"
+        case request
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        responseMode = try values.decodeIfPresent(String.self, forKey: .responseMode)
+        responseURI = try values.decodeIfPresent(String.self, forKey: .responseURI)
+        clientID = try values.decodeIfPresent(String.self, forKey: .clientID)
+        nonce = try values.decodeIfPresent(String.self, forKey: .nonce)
+        state = try values.decodeIfPresent(String.self, forKey: .state)
+        dcqlQuery = try values.decodeIfPresent([String: AnySendableJSON].self, forKey: .dcqlQuery)
+        if let jwt = try? values.decode(String.self, forKey: .request) {
+            request = jwt
+            requestJWT = jwt
+            requestObject = nil
+        } else {
+            request = nil
+            requestJWT = nil
+            requestObject = try values.decodeIfPresent(PresentationRequestObject.self, forKey: .request)
+        }
+    }
+}
+
+private struct PresentationRequestObject: Decodable {
+    let clientID: String?
+    let responseMode: String?
+    let responseURI: String?
+    let nonce: String?
+    let state: String?
+    let dcqlQuery: [String: AnySendableJSON]?
+
+    enum CodingKeys: String, CodingKey {
+        case clientID = "client_id"
         case responseMode = "response_mode"
         case responseURI = "response_uri"
         case nonce, state
         case dcqlQuery = "dcql_query"
-        case request
     }
 }
 
@@ -1643,12 +1868,14 @@ private struct IssuerMetadata: Decodable {
     let display: [Display]?
     let credentialConfigurations: [String: SupportedConfiguration]
     let notificationEndpoint: String?
+    let interactiveAuthorizationEndpoint: String?
     enum CodingKeys: String, CodingKey {
         case credentialEndpoint = "credential_endpoint"
         case authorizationServers = "authorization_servers"
         case display
         case credentialConfigurations = "credential_configurations_supported"
         case notificationEndpoint = "notification_endpoint"
+        case interactiveAuthorizationEndpoint = "interactive_authorization_endpoint"
     }
 
     init(from decoder: any Decoder) throws {
@@ -1661,6 +1888,7 @@ private struct IssuerMetadata: Decodable {
             forKey: .credentialConfigurations
         ) ?? [:]
         notificationEndpoint = try values.decodeIfPresent(String.self, forKey: .notificationEndpoint)
+        interactiveAuthorizationEndpoint = try values.decodeIfPresent(String.self, forKey: .interactiveAuthorizationEndpoint)
     }
 }
 
@@ -1762,11 +1990,13 @@ private struct DisplayImage: Decodable {
 
 private struct AuthorizationMetadata: Decodable {
     let tokenEndpoint: String
+    let authorizationEndpoint: String?
     let dpopSigningAlgorithms: [String]?
     let clientAttestationAlgorithms: [String]?
     let tokenEndpointAuthenticationMethods: [String]?
     enum CodingKeys: String, CodingKey {
         case tokenEndpoint = "token_endpoint"
+        case authorizationEndpoint = "authorization_endpoint"
         case dpopSigningAlgorithms = "dpop_signing_alg_values_supported"
         case clientAttestationAlgorithms = "client_attestation_signing_alg_values_supported"
         case tokenEndpointAuthenticationMethods = "token_endpoint_auth_methods_supported"

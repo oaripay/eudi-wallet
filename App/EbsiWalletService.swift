@@ -150,13 +150,6 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
     }
 
     func preparePIDPresentation(id: UUID) async throws -> EudiPresentationRequest {
-        // W3C-owned credentials use the workspace final interaction profile.
-        // The initial signed draft challenge remains available for Wallet Kit-owned PID.
-        _ = try await backend.beginPresentationRequired(
-            id: id,
-            allowUntrusted: false,
-            interactionTypes: ["urn:openid:dcp:ia:openid4vp_presentation"]
-        )
         let request = try await backend.prepareStoredPIDPresentation(id: id)
         return EudiPresentationRequest(
             id: request.id,
