@@ -67,6 +67,6 @@ struct AuditModelsTests {
         let decoded = try JSONDecoder().decode([KeyPurpose].self, from: encoded)
 
         #expect(decoded == KeyPurpose.allCases)
-        #expect(decoded.count == 7)
+        #expect(decoded.count == 9)
     }
 }

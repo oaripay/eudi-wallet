@@ -84,6 +84,16 @@ public struct EbsiCredentialProfile: Codable, Equatable, Identifiable, Sendable 
             context: "https://www.w3.org/2018/credentials/v1"
         )
     }
+
+    public static func vcdm2SdJWT() throws -> EbsiCredentialProfile {
+        try EbsiCredentialProfile(
+            id: "ebsi-vcdm2-sd-jwt",
+            dataModel: .v2_0,
+            representation: .dcSdJwt,
+            allowedAlgorithms: [.es256, .es256K],
+            context: "https://www.w3.org/ns/credentials/v2"
+        )
+    }
 }
 
 public enum EbsiCredentialError: Error, Equatable, Sendable {
@@ -193,6 +203,23 @@ public struct EbsiCredentialInspector: Sendable {
                 throw EbsiCredentialError.algorithmNotAllowed
             }
         }
+    }
+
+    public func inspectSDJWT(_ value: String) throws -> [String: AnySendableJSON] {
+        guard let issuer = value.split(separator: "~").first else {
+            throw EbsiCredentialError.malformedCredential
+        }
+        let parts = issuer.split(separator: ".")
+        guard parts.count == 3,
+              let payload = try Self.decodeJSON(String(parts[1])) else {
+            throw EbsiCredentialError.malformedCredential
+        }
+        guard payload["iss"]?.string != nil,
+              payload["vct"]?.string != nil,
+              payload["cnf"]?.object != nil else {
+            throw EbsiCredentialError.profileMismatch
+        }
+        return payload
     }
 
     private static func decodeJSON(_ value: String) throws -> [String: AnySendableJSON]? {

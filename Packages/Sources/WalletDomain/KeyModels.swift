@@ -19,6 +19,8 @@ public enum KeyPurpose: String, Codable, CaseIterable, Sendable {
     case sdJWTKeyBinding
     case didAuthentication
     case didAssertion
+    case dpop
+    case clientAttestation
     case ephemeralSession
 }
 

@@ -52,6 +52,8 @@ struct WalletVaultView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(OariColor.background(scheme).ignoresSafeArea())
             .searchable(text: $searchText, prompt: "Search credentials")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

@@ -107,6 +107,7 @@ let package = Package(
                 "IdentityDomain",
                 "TrustDomain",
                 "WalletDomain",
+                .product(name: "JOSESwift", package: "joseswift"),
             ],
             path: "Packages/Sources/EbsiW3CBackend"
         ),
@@ -155,6 +156,7 @@ let package = Package(
             name: "EbsiW3CBackendTests",
             dependencies: [
                 "EbsiW3CBackend",
+                .product(name: "JOSESwift", package: "joseswift"),
             ],
             path: "Packages/Tests/EbsiW3CBackendTests"
         ),

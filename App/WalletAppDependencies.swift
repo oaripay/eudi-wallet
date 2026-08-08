@@ -121,10 +121,16 @@ struct WalletAppDependencies: Sendable {
                     credentialValidator: NativeWorkspaceCredentialValidator(
                         resolver: CompositeDIDResolver(
                             ebsi: EBSIDIDResolver(client: registryClient)
-                        )
+                        ),
+                        transport: workspaceTransport
                     ),
                     profile: try .oariVcdm2Jwt(),
-                    additionalProfiles: [try .vcdm11Jwt()]
+                    additionalProfiles: [try .vcdm11Jwt(), try .vcdm2SdJWT()],
+                    clientSecurity: DefaultOID4VCIClientSecurity(
+                        keyProvider: DeviceBoundKeyProvider(
+                            applicationTagPrefix: "io.oari.wallet.oid4vci.security"
+                        )
+                    )
                 )
                 ebsiWallet = LiveWorkspaceEbsiWalletService(
                     backend: ebsiBackend,

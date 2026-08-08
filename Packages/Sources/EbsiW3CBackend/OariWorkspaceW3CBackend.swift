@@ -67,6 +67,13 @@ public struct WorkspaceCredentialClaim: Codable, Equatable, Sendable, Identifiab
     public let name: String?
     public let description: String?
 
+    public init(id: String, path: [String], name: String?, description: String?) {
+        self.id = id
+        self.path = path
+        self.name = name
+        self.description = description
+    }
+
     public init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         path = try values.decodeIfPresent([String].self, forKey: .path) ?? []
@@ -111,6 +118,8 @@ public enum WorkspaceBackendError: Error, Equatable, Sendable {
     case invalidPresentationResponse
     case authorizationFailed
     case remoteOAuthError(code: String, detail: String?)
+    case remoteHTTPError(status: Int, detail: String?)
+    case clientSecurityUnavailable
 }
 
 public actor OariWorkspaceW3CBackend {
@@ -139,6 +148,7 @@ public actor OariWorkspaceW3CBackend {
     private let credentialStore: any EbsiCredentialStore
     private let credentialValidator: any WorkspaceCredentialValidating
     private let profiles: [EbsiCredentialProfile]
+    private let clientSecurity: (any OID4VCIClientSecurity)?
     private let now: @Sendable () -> Date
     private var transactions: [UUID: Transaction] = [:]
     private var authorizationCodes: [UUID: String] = [:]
@@ -153,6 +163,7 @@ public actor OariWorkspaceW3CBackend {
         credentialValidator: any WorkspaceCredentialValidating,
         profile: EbsiCredentialProfile,
         additionalProfiles: [EbsiCredentialProfile] = [],
+        clientSecurity: (any OID4VCIClientSecurity)? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.transport = transport
@@ -161,6 +172,7 @@ public actor OariWorkspaceW3CBackend {
         self.credentialStore = credentialStore
         self.credentialValidator = credentialValidator
         self.profiles = [profile] + additionalProfiles
+        self.clientSecurity = clientSecurity
         self.now = now
     }
 
@@ -380,14 +392,48 @@ public actor OariWorkspaceW3CBackend {
                 allowedOrigins: [try Self.origin(of: authorizationServer)]
             )
         )
+        let transportContract = OID4VCITransportContract.resolve(
+            issuerURL: transaction.issuer,
+            authorizationMetadata: OID4VCIAuthorizationMetadata(
+                dpopSigningAlgorithms: authMetadata.dpopSigningAlgorithms,
+                clientAttestationAlgorithms: authMetadata.clientAttestationAlgorithms
+            )
+        )
+        let securityState: OID4VCIClientSecurityState?
+        if transportContract.requiresDPoP || transportContract.requiresClientAttestation ||
+            transportContract.requiresCredentialResponseEncryption {
+            guard let clientSecurity else { throw WorkspaceBackendError.clientSecurityUnavailable }
+            securityState = try await clientSecurity.state(for: transportContract.profile)
+        } else {
+            securityState = nil
+        }
         let tokenBody = form(tokenValues)
         guard let tokenEndpoint = URL(string: authMetadata.tokenEndpoint) else {
             throw WorkspaceBackendError.unsafeEndpoint
         }
+        var tokenHeaders = ["Content-Type": "application/x-www-form-urlencoded"]
+        if let securityState, let clientSecurity {
+            if transportContract.requiresDPoP {
+                tokenHeaders["DPoP"] = try await clientSecurity.dpopHeader(
+                    state: securityState,
+                    method: "POST",
+                    targetURI: tokenEndpoint
+                )
+            }
+            if transportContract.requiresClientAttestation {
+                tokenHeaders.merge(
+                    try await clientSecurity.clientAttestationHeaders(
+                        state: securityState,
+                        audience: tokenEndpoint
+                    ),
+                    uniquingKeysWith: { _, new in new }
+                )
+            }
+        }
         let tokenResponse = try await successfulRequest(
             tokenEndpoint,
             method: "POST",
-            headers: ["Content-Type": "application/x-www-form-urlencoded"],
+            headers: tokenHeaders,
             body: tokenBody,
             allowedOrigins: [try Self.origin(of: authorizationServer)]
         )
@@ -402,7 +448,13 @@ public actor OariWorkspaceW3CBackend {
         let holderDID = try KeyDIDResolver().derive(publicKeyX963: publicKey.x963Representation)
         let method = try await KeyDIDResolver().resolve(holderDID).assertionMethod.first!
         var results: [WorkspaceIssuedCredential] = []
-        for configurationID in transaction.configurationIDs {
+        let advertisedConfigurationIDs = Set(transaction.issuerMetadata.credentialConfigurations.keys)
+        let authorizedConfigurationIDs = token.authorizationDetails?.compactMap(\.credentialConfigurationID)
+            .filter { !$0.isEmpty && advertisedConfigurationIDs.contains($0) } ?? []
+        let configurationIDs = authorizedConfigurationIDs.isEmpty
+            ? transaction.configurationIDs
+            : authorizedConfigurationIDs
+        for configurationID in configurationIDs {
             let proof = try await proofJWT(
                 key: key,
                 kid: method,
@@ -410,24 +462,68 @@ public actor OariWorkspaceW3CBackend {
                 audience: transaction.issuer.absoluteString,
                 nonce: token.nonce
             )
+            let responseEncryption: CredentialResponseEncryptionRequest?
+            if transportContract.requiresCredentialResponseEncryption,
+               let securityState, let clientSecurity {
+                let parameters = try await clientSecurity.responseEncryption(state: securityState)
+                guard let jwk = try JSONSerialization.jsonObject(
+                    with: Data(parameters.publicJWK.utf8)
+                ) as? [String: String] else {
+                    throw WorkspaceBackendError.clientSecurityUnavailable
+                }
+                responseEncryption = CredentialResponseEncryptionRequest(
+                    jwk: jwk,
+                    alg: parameters.algorithm,
+                    enc: parameters.encryption
+                )
+            } else {
+                responseEncryption = nil
+            }
             let request = CredentialRequest(
-                credentialConfigurationId: configurationID,
-                proofs: ["jwt": [proof]]
+                credentialConfigurationId: transportContract.credentialIdentifierField == .credentialConfigurationID ? configurationID : nil,
+                credentialIdentifier: transportContract.credentialIdentifierField == .credentialIdentifier
+                    ? token.authorizationDetails?.first?.credentialIdentifiers?.first
+                    : nil,
+                format: transaction.issuerMetadata.credentialConfigurations[configurationID]?.format,
+                proof: transportContract.proofShape == .draftProof
+                    ? ProofValue(proofType: "jwt", jwt: proof)
+                    : nil,
+                proofs: transportContract.proofShape == .finalProofsJWT
+                    ? ["jwt": [proof]]
+                    : nil,
+                credentialResponseEncryption: responseEncryption
             )
             let data = try JSONEncoder().encode(request)
             guard let credentialEndpoint = URL(string: issuerMetadata.credentialEndpoint) else {
                 throw WorkspaceBackendError.unsafeEndpoint
             }
-            let response = try await successfulRequest(
+            var credentialHeaders = [
+                "Content-Type": "application/json",
+                "Authorization": "Bearer \(token.accessToken)",
+            ]
+            if transportContract.requiresDPoP,
+               let securityState, let clientSecurity {
+                credentialHeaders["DPoP"] = try await clientSecurity.dpopHeader(
+                    state: securityState,
+                    method: "POST",
+                    targetURI: credentialEndpoint
+                )
+                credentialHeaders["Authorization"] = "DPoP \(token.accessToken)"
+            }
+            var response = try await successfulRequest(
                 credentialEndpoint,
                 method: "POST",
-                headers: [
-                    "Content-Type": "application/json",
-                    "Authorization": "Bearer \(token.accessToken)",
-                ],
+                headers: credentialHeaders,
                 body: data,
                 allowedOrigins: [try Self.origin(of: transaction.issuer)]
             )
+            if transportContract.requiresCredentialResponseEncryption,
+               let securityState, let clientSecurity {
+                response = try await clientSecurity.decryptCredentialResponse(
+                    state: securityState,
+                    compactJWE: response
+                )
+            }
             let credentials = try JSONDecoder().decode(CredentialResponse.self, from: response)
             guard !credentials.credentials.isEmpty else {
                 throw WorkspaceBackendError.invalidResponse
@@ -456,10 +552,28 @@ public actor OariWorkspaceW3CBackend {
                     id: stored.id,
                     profileID: stored.profileID,
                     representation: stored.representation,
-                    displayClaims: Self.displayClaims(from: try? EbsiCredentialInspector().inspectCompactJWT(
-                        String(decoding: raw, as: UTF8.self), profile: selectedProfile
-                    ))
+                    displayClaims: Self.displayClaims(
+                        raw: String(decoding: raw, as: UTF8.self),
+                        profile: selectedProfile
+                    )
                 ))
+            }
+            if let notificationID = credentials.notificationID,
+               let notificationEndpoint = issuerMetadata.notificationEndpoint.flatMap(URL.init(string:)) {
+                let notification = try JSONSerialization.data(withJSONObject: [
+                    "event": "credential_accepted",
+                    "notification_id": notificationID,
+                ])
+                _ = try await successfulRequest(
+                    notificationEndpoint,
+                    method: "POST",
+                    headers: [
+                        "Content-Type": "application/json",
+                        "Authorization": "Bearer \(token.accessToken)",
+                    ],
+                    body: notification,
+                    allowedOrigins: [try Self.origin(of: transaction.issuer)]
+                )
             }
         }
         transactions[id] = nil
@@ -516,7 +630,8 @@ public actor OariWorkspaceW3CBackend {
     }
 
     private static func displayClaims(from credential: [String: AnySendableJSON]?) -> [CredentialDisplayClaim] {
-        guard let subject = credential?["credentialSubject"]?.object else { return [] }
+        guard let credential else { return [] }
+        let subject = credential["credentialSubject"]?.object ?? credential
         return subject.compactMap { key, value in
             guard let string = value.displayString else { return nil }
             return CredentialDisplayClaim(
@@ -526,6 +641,27 @@ public actor OariWorkspaceW3CBackend {
                 isSensitive: key.lowercased().contains("id") || key.lowercased().contains("name")
             )
         }.sorted { $0.label < $1.label }
+    }
+
+    private static func displayClaims(
+        raw: String,
+        profile: EbsiCredentialProfile
+    ) -> [CredentialDisplayClaim] {
+        if profile.representation == .dcSdJwt || profile.representation == .vcdm2SdJwt {
+            var claims = (try? EbsiCredentialInspector().inspectSDJWT(raw)) ?? [:]
+            for disclosure in raw.split(separator: "~").dropFirst() where !disclosure.isEmpty {
+                var value = String(disclosure).replacingOccurrences(of: "-", with: "+")
+                    .replacingOccurrences(of: "_", with: "/")
+                value += String(repeating: "=", count: (4 - value.count % 4) % 4)
+                guard let data = Data(base64Encoded: value),
+                      let array = try? JSONDecoder().decode([AnySendableJSON].self, from: data),
+                      array.count >= 3, let name = array[1].string else { continue }
+                claims[name] = array[2]
+            }
+            let hidden = Set(["_sd", "_sd_alg", "cnf", "iss", "iat", "exp", "vct", "status"])
+            return displayClaims(from: claims.filter { !hidden.contains($0.key) })
+        }
+        return displayClaims(from: try? EbsiCredentialInspector().inspectCompactJWT(raw, profile: profile))
     }
 
     public func cancel(id: UUID) {
@@ -605,7 +741,9 @@ public actor OariWorkspaceW3CBackend {
             if let error = try? JSONDecoder().decode(RemoteOAuthError.self, from: response.body) {
                 throw WorkspaceBackendError.remoteOAuthError(code: error.error, detail: error.errorDetail)
             }
-            throw WorkspaceBackendError.invalidResponse
+            let detail = (try? JSONDecoder().decode(RemoteHTTPError.self, from: response.body))?.detail
+                ?? String(data: response.body, encoding: .utf8)
+            throw WorkspaceBackendError.remoteHTTPError(status: response.statusCode, detail: detail)
         }
         return response.body
     }
@@ -763,11 +901,13 @@ private struct IssuerMetadata: Decodable {
     let authorizationServers: [String]?
     let display: [Display]?
     let credentialConfigurations: [String: SupportedConfiguration]
+    let notificationEndpoint: String?
     enum CodingKeys: String, CodingKey {
         case credentialEndpoint = "credential_endpoint"
         case authorizationServers = "authorization_servers"
         case display
         case credentialConfigurations = "credential_configurations_supported"
+        case notificationEndpoint = "notification_endpoint"
     }
 
     init(from decoder: any Decoder) throws {
@@ -779,28 +919,48 @@ private struct IssuerMetadata: Decodable {
             [String: SupportedConfiguration].self,
             forKey: .credentialConfigurations
         ) ?? [:]
+        notificationEndpoint = try values.decodeIfPresent(String.self, forKey: .notificationEndpoint)
     }
 }
 
 private struct SupportedConfiguration: Decodable {
     let format: String
     let credentialMetadata: CredentialMetadata?
+    let directDisplay: [CredentialDisplay]?
+    let directClaims: [String: ClaimDefinition]?
 
     var display: WorkspaceCredentialDisplay {
-        let display = credentialMetadata?.display?.first
+        let display = (directDisplay ?? credentialMetadata?.display)?.first
         return WorkspaceCredentialDisplay(
             name: display?.name ?? "Credential",
             locale: display?.locale,
             backgroundColor: display?.backgroundColor,
             textColor: display?.textColor,
             logoURL: display?.logo.flatMap { URL(string: $0.url) },
-            claims: credentialMetadata?.claims ?? []
+            claims: directClaims?.map { key, value in
+                WorkspaceCredentialClaim(
+                    id: key,
+                    path: [key],
+                    name: value.display?.first?.name ?? key,
+                    description: value.description
+                )
+            }.sorted { $0.id < $1.id } ?? credentialMetadata?.claims ?? []
         )
     }
 
     enum CodingKeys: String, CodingKey {
         case format
         case credentialMetadata = "credential_metadata"
+        case directDisplay = "display"
+        case directClaims = "claims"
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        format = try values.decode(String.self, forKey: .format)
+        credentialMetadata = try values.decodeIfPresent(CredentialMetadata.self, forKey: .credentialMetadata)
+        directDisplay = try values.decodeIfPresent([CredentialDisplay].self, forKey: .directDisplay)
+        directClaims = try values.decodeIfPresent([String: ClaimDefinition].self, forKey: .directClaims)
     }
 }
 
@@ -824,11 +984,30 @@ private struct CredentialDisplay: Decodable {
     }
 }
 
-private struct Logo: Decodable { let url: String }
+private struct ClaimDefinition: Decodable {
+    let display: [CredentialDisplay]?
+    let description: String?
+}
+
+private struct Logo: Decodable {
+    let url: String
+    enum CodingKeys: String, CodingKey { case url, uri }
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        url = try values.decodeIfPresent(String.self, forKey: .url)
+            ?? values.decode(String.self, forKey: .uri)
+    }
+}
 
 private struct AuthorizationMetadata: Decodable {
     let tokenEndpoint: String
-    enum CodingKeys: String, CodingKey { case tokenEndpoint = "token_endpoint" }
+    let dpopSigningAlgorithms: [String]?
+    let clientAttestationAlgorithms: [String]?
+    enum CodingKeys: String, CodingKey {
+        case tokenEndpoint = "token_endpoint"
+        case dpopSigningAlgorithms = "dpop_signing_alg_values_supported"
+        case clientAttestationAlgorithms = "client_attestation_signing_alg_values_supported"
+    }
 }
 
 private struct RemoteOAuthError: Decodable {
@@ -840,16 +1019,53 @@ private struct RemoteOAuthError: Decodable {
     }
 }
 
+private struct RemoteHTTPError: Decodable { let detail: String? }
+
 private struct TokenResponse: Decodable {
+    struct AuthorizationDetail: Decodable {
+        let credentialConfigurationID: String?
+        let credentialIdentifiers: [String]?
+        enum CodingKeys: String, CodingKey {
+            case credentialConfigurationID = "credential_configuration_id"
+            case credentialIdentifiers = "credential_identifiers"
+        }
+    }
     let accessToken: String
     let nonce: String?
-    enum CodingKeys: String, CodingKey { case accessToken = "access_token", nonce = "c_nonce" }
+    let authorizationDetails: [AuthorizationDetail]?
+    enum CodingKeys: String, CodingKey {
+        case accessToken = "access_token"
+        case nonce = "c_nonce"
+        case authorizationDetails = "authorization_details"
+    }
 }
 
 private struct CredentialRequest: Encodable {
-    let credentialConfigurationId: String
-    let proofs: [String: [String]]
-    enum CodingKeys: String, CodingKey { case credentialConfigurationId = "credential_configuration_id", proofs }
+    let credentialConfigurationId: String?
+    let credentialIdentifier: String?
+    let format: String?
+    let proof: ProofValue?
+    let proofs: [String: [String]]?
+    let credentialResponseEncryption: CredentialResponseEncryptionRequest?
+    enum CodingKeys: String, CodingKey {
+        case credentialConfigurationId = "credential_configuration_id"
+        case credentialIdentifier = "credential_identifier"
+        case format
+        case proof, proofs
+        case credentialResponseEncryption = "credential_response_encryption"
+    }
+}
+
+private struct CredentialResponseEncryptionRequest: Encodable {
+    let jwk: [String: String]
+    let alg: String
+    let enc: String
+}
+
+private struct ProofValue: Encodable {
+    let proofType: String
+    let jwt: String
+    enum CodingKeys: String, CodingKey { case proofType = "proof_type", jwt }
 }
 
 private struct CredentialResponse: Decodable {
@@ -860,14 +1076,19 @@ private struct CredentialResponse: Decodable {
     let format: String?
     let credential: String?
     let credentials: [Item]
+    let notificationID: String?
 
-    private enum CodingKeys: String, CodingKey { case format, credential, credentials }
+    private enum CodingKeys: String, CodingKey {
+        case format, credential, credentials
+        case notificationID = "notification_id"
+    }
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         format = try container.decodeIfPresent(String.self, forKey: .format)
         credential = try container.decodeIfPresent(String.self, forKey: .credential)
         let plural = try container.decodeIfPresent([Item].self, forKey: .credentials) ?? []
+        notificationID = try container.decodeIfPresent(String.self, forKey: .notificationID)
         if plural.isEmpty, let credential {
             credentials = [Item(credential: credential, format: format)]
         } else {

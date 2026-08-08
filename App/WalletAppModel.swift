@@ -184,13 +184,15 @@ final class WalletAppModel: ObservableObject {
                         }
                     }
                 }
+                if let w3cRoutingError {
+                    throw w3cRoutingError
+                }
                 do {
                     let offer = try await eudiWallet.resolveIssuanceOffer(uri: scanInput)
                     selectedIssuanceConfigurationIDs = Set(offer.documents.map(\.configurationID))
                     transactionCode = ""
                     eudiFlow = .issuanceReview(offer)
                 } catch {
-                    if let w3cRoutingError { throw w3cRoutingError }
                     guard let ebsiWallet else { throw error }
                     let interaction = try await ebsiWallet.resolveInteraction(uri: scanInput)
                     activeEbsiInteractionID = interaction.id
@@ -454,6 +456,7 @@ final class WalletAppModel: ObservableObject {
         if case let .configurationRequired(message) = eudiAvailability { return message }
         return "EUDI wallet services are not configured for this environment."
     }
+
     var preventsInteractiveFlowDismissal: Bool {
         switch eudiFlow {
         case .working, .presentationConsent: true
@@ -560,6 +563,11 @@ final class WalletAppModel: ObservableObject {
                     return "This credential offer has expired or was already redeemed. Scan a new offer from the issuer."
                 }
                 return detail.map { "The issuer returned \(code): \($0)" } ?? "The issuer returned \(code)."
+            case let .remoteHTTPError(status, detail):
+                return detail.map { "The issuer returned HTTP \(status): \($0)" }
+                    ?? "The issuer returned HTTP \(status)."
+            case .clientSecurityUnavailable:
+                return "The issuer requires DPoP, client attestation, or encrypted credential responses that are unavailable."
             }
         }
         if let error = error as? EbsiCredentialError {
