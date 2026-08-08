@@ -46,24 +46,25 @@ public struct EudiWalletKitBaseline: Equatable, Sendable {
         validationDate: Date = Date()
     ) throws -> EudiWalletKitAdapter {
         let trustAnchors = try trustSource.validatedAnchors(at: validationDate)
+        let developmentTrustWarning = operationalConfiguration?.allowUnregisteredDevelopmentCounterparties == true
         #if canImport(EudiEtsi1196x2)
         let trustConfiguration = TrustConfiguration(
             trustSource: .staticList(
                 StaticListTrustSource(rootCertificates: trustAnchors)
             ),
             fallbackTrustSource: nil,
-            defaultPolicy: .enforce,
-            requireSignedMetadata: true,
-            statusTrustPolicy: .enforce,
-            wrprcTrustPolicy: .enforce
+            defaultPolicy: developmentTrustWarning ? .warning : .enforce,
+            requireSignedMetadata: !developmentTrustWarning,
+            statusTrustPolicy: developmentTrustWarning ? .warning : .enforce,
+            wrprcTrustPolicy: developmentTrustWarning ? .warning : .enforce
         )
         #else
         let trustConfiguration = TrustConfiguration(
             rootIaca: [trustAnchors],
-            defaultPolicy: .enforce,
-            requireSignedMetadata: true,
-            statusTrustPolicy: .enforce,
-            wrprcTrustPolicy: .enforce
+            defaultPolicy: developmentTrustWarning ? .warning : .enforce,
+            requireSignedMetadata: !developmentTrustWarning,
+            statusTrustPolicy: developmentTrustWarning ? .warning : .enforce,
+            wrprcTrustPolicy: developmentTrustWarning ? .warning : .enforce
         )
         #endif
         do {
@@ -81,7 +82,7 @@ public struct EudiWalletKitBaseline: Equatable, Sendable {
                         parUsage: .required(authorizationCodeDPoPBinding: true),
                         requireDpop: true,
                         issuerMetadataPolicy: trustConfiguration.issuerMetadataPolicy,
-                        validateRegistrationCertificate: true,
+                         validateRegistrationCertificate: !developmentTrustWarning,
                         userAuthenticationRequired: true
                     ),
                 ]

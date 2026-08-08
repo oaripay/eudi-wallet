@@ -105,7 +105,7 @@ public actor OariWorkspaceW3CBackend {
     private let keyProvider: any KeyProvider
     private let credentialStore: any EbsiCredentialStore
     private let credentialValidator: any WorkspaceCredentialValidating
-    private let profile: EbsiCredentialProfile
+    private let profiles: [EbsiCredentialProfile]
     private let now: @Sendable () -> Date
     private var transactions: [UUID: Transaction] = [:]
     private var authorizationCodes: [UUID: String] = [:]
@@ -119,6 +119,7 @@ public actor OariWorkspaceW3CBackend {
         credentialStore: any EbsiCredentialStore,
         credentialValidator: any WorkspaceCredentialValidating,
         profile: EbsiCredentialProfile,
+        additionalProfiles: [EbsiCredentialProfile] = [],
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.transport = transport
@@ -126,7 +127,7 @@ public actor OariWorkspaceW3CBackend {
         self.keyProvider = keyProvider
         self.credentialStore = credentialStore
         self.credentialValidator = credentialValidator
-        self.profile = profile
+        self.profiles = [profile] + additionalProfiles
         self.now = now
     }
 
@@ -383,15 +384,16 @@ public actor OariWorkspaceW3CBackend {
             }
             for item in credentials.credentials {
                 let raw = Data(item.credential.utf8)
+                let selectedProfile = try selectProfile(format: credentials.format ?? item.format)
                 try await credentialValidator.validate(
                     rawCredential: raw,
-                    profile: profile,
+                    profile: selectedProfile,
                     expectedHolderDID: holderDID,
                     at: now()
                 )
                 let stored = StoredEbsiCredential(
-                    profileID: profile.id,
-                    representation: profile.representation,
+                    profileID: selectedProfile.id,
+                    representation: selectedProfile.representation,
                     rawCredential: raw,
                     holderKeyReference: key.id.rawValue.uuidString,
                     receivedAt: now()
@@ -408,6 +410,25 @@ public actor OariWorkspaceW3CBackend {
         authorizationCodes[id] = nil
         trustConsents.remove(id)
         return results
+    }
+
+    private func selectProfile(format: String?) throws -> EbsiCredentialProfile {
+        if format == "jwt_vc_json" || format == "jwt_vc_json-ld" {
+            guard let profile = profiles.first(where: { $0.dataModel == .v1_1 }) else {
+                throw EbsiCredentialError.unsupportedRepresentation
+            }
+            return profile
+        }
+        if format == "dc+sd-jwt" || format == "vcdm2_sd_jwt" {
+            guard let profile = profiles.first(where: {
+                $0.representation == .dcSdJwt || $0.representation == .vcdm2SdJwt
+            }) else { throw EbsiCredentialError.unsupportedRepresentation }
+            return profile
+        }
+        guard let profile = profiles.first(where: { $0.representation == .vcdm2Jwt }) else {
+            throw EbsiCredentialError.unsupportedRepresentation
+        }
+        return profile
     }
 
     public func cancel(id: UUID) {
@@ -652,8 +673,27 @@ private struct CredentialRequest: Encodable {
 }
 
 private struct CredentialResponse: Decodable {
-    struct Item: Decodable { let credential: String }
+    struct Item: Decodable {
+        let credential: String
+        let format: String?
+    }
+    let format: String?
+    let credential: String?
     let credentials: [Item]
+
+    private enum CodingKeys: String, CodingKey { case format, credential, credentials }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        format = try container.decodeIfPresent(String.self, forKey: .format)
+        credential = try container.decodeIfPresent(String.self, forKey: .credential)
+        let plural = try container.decodeIfPresent([Item].self, forKey: .credentials) ?? []
+        if plural.isEmpty, let credential {
+            credentials = [Item(credential: credential, format: format)]
+        } else {
+            credentials = plural
+        }
+    }
 }
 
 private extension Data {

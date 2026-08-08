@@ -68,6 +68,16 @@ public struct EbsiCredentialProfile: Codable, Equatable, Identifiable, Sendable 
             termsOfUseType: "IssuanceCertificate"
         )
     }
+
+    public static func vcdm11Jwt() throws -> EbsiCredentialProfile {
+        try EbsiCredentialProfile(
+            id: "ebsi-vcdm11-jwt-vc",
+            dataModel: .v1_1,
+            representation: .jwtVcJson,
+            allowedAlgorithms: [.es256, .es256K, .rs256],
+            context: "https://www.w3.org/2018/credentials/v1"
+        )
+    }
 }
 
 public enum EbsiCredentialError: Error, Equatable, Sendable {

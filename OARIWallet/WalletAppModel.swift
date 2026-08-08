@@ -164,10 +164,22 @@ final class WalletAppModel: ObservableObject {
             switch scanResult {
             case .issuance:
                 eudiFlow = .working("Checking the issuer and credential offer…")
-                let offer = try await eudiWallet.resolveIssuanceOffer(uri: scanInput)
-                selectedIssuanceConfigurationIDs = Set(offer.documents.map(\.configurationID))
-                transactionCode = ""
-                eudiFlow = .issuanceReview(offer)
+                do {
+                    let offer = try await eudiWallet.resolveIssuanceOffer(uri: scanInput)
+                    selectedIssuanceConfigurationIDs = Set(offer.documents.map(\.configurationID))
+                    transactionCode = ""
+                    eudiFlow = .issuanceReview(offer)
+                } catch {
+                    guard let ebsiWallet else { throw error }
+                    let interaction = try await ebsiWallet.resolveInteraction(uri: scanInput)
+                    activeEbsiInteractionID = interaction.id
+                    activeEbsiInteraction = interaction
+                    switch interaction.trustOutcome {
+                    case .allow: prepareEbsiInteraction(allowUntrusted: false)
+                    case let .requireExplicitWarning(warning): ebsiTrustWarning = warning; eudiFlow = .idle
+                    case .reject: throw error
+                    }
+                }
             case .presentation:
                 eudiFlow = .working("Checking the verifier and requested claims…")
                 activePendingIssuanceID = nil

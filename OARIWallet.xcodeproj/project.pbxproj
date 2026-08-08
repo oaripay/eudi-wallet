@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		170183FED99317C32B581BE0 /* WalletAppDependencies.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0395451A5539F884C27D41F6 /* WalletAppDependencies.swift */; };
 		1CE0565CAA32AE6AF15804D3 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E6EB7F18DFECA15C3F21B5B9 /* Assets.xcassets */; };
+		1D81153A6A6C8208669E2DB7 /* DevelopmentEudiConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFA52F186F7C3D3162422705 /* DevelopmentEudiConfiguration.swift */; };
 		231C32408B846010AF138B8C /* TestTrustAnchor.bin in Resources */ = {isa = PBXBuildFile; fileRef = DED46F5E7BC94486EFD7CC64 /* TestTrustAnchor.bin */; };
 		26284BAA246E5171DEFA5A51 /* WalletVault in Frameworks */ = {isa = PBXBuildFile; productRef = 1B5A99CFCF504F7FCE6A6B99 /* WalletVault */; };
 		353091C3A41439ABD24FDAC7 /* AppConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5CF2849E79084493655BF0B /* AppConfiguration.swift */; };
@@ -76,6 +77,7 @@
 		E5CF2849E79084493655BF0B /* AppConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfiguration.swift; sourceTree = "<group>"; };
 		E6EB7F18DFECA15C3F21B5B9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		E8CC54E8F1C533A5AE59F3A8 /* EudiFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EudiFlowView.swift; sourceTree = "<group>"; };
+		EFA52F186F7C3D3162422705 /* DevelopmentEudiConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevelopmentEudiConfiguration.swift; sourceTree = "<group>"; };
 		FCCFFBE7BDE16FED06107EF7 /* OARIWallet.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = OARIWallet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -130,6 +132,7 @@
 				31949355B1B8D2E8A779762C /* AppIcon.icon */,
 				E6EB7F18DFECA15C3F21B5B9 /* Assets.xcassets */,
 				4A220056806DA8DE0EFDBC06 /* CameraQRScannerView.swift */,
+				EFA52F186F7C3D3162422705 /* DevelopmentEudiConfiguration.swift */,
 				6E9D5561CB9EF409A0FAEBDA /* EbsiWalletService.swift */,
 				E8CC54E8F1C533A5AE59F3A8 /* EudiFlowView.swift */,
 				C5C0302D6E6519B8008541E9 /* EudiWalletService.swift */,
@@ -317,6 +320,7 @@
 			files = (
 				353091C3A41439ABD24FDAC7 /* AppConfiguration.swift in Sources */,
 				A0754F016378502A9272573A /* CameraQRScannerView.swift in Sources */,
+				1D81153A6A6C8208669E2DB7 /* DevelopmentEudiConfiguration.swift in Sources */,
 				754D11D66EC2CF6234C96441 /* EbsiWalletService.swift in Sources */,
 				6AF6FC66EC22DF0D8193E571 /* EudiFlowView.swift in Sources */,
 				EE8228163B0C5EF39B5E53E0 /* EudiWalletService.swift in Sources */,

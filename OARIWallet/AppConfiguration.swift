@@ -30,12 +30,10 @@ struct AppConfiguration: Sendable {
         let incomingURL: URL? = nil
         let fixtureHosts: Set<String> = []
 #endif
-        #if DEBUG
+        // This build is the dedicated EUDI/EBSI interoperability wallet. Keep the
+        // open development profile on by default so testers do not need to maintain
+        // issuer/verifier trust lists for every development counterparty.
         let ebsiDevelopmentEnabled = !arguments.contains("--disable-ebsi-development")
-        #else
-        let ebsiDevelopmentEnabled = arguments.contains("--enable-ebsi-development") &&
-            ProcessInfo.processInfo.environment["OARI_EBSI_DEVELOPMENT"] == "1"
-        #endif
         return AppConfiguration(
             allowedHosts: Set(["wallet.dev.oari.io"]).union(fixtureHosts),
             fixture: fixture,
