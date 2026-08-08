@@ -45,5 +45,13 @@ struct DevelopmentEudiStatusProvider: EudiCredentialStatusProviding {
 }
 
 enum DevelopmentEudiProfile {
-    static let trustAnchorDER = Data(base64Encoded: "MIIBxDCCAWmgAwIBAgIUYIufRa/bZP0KCYNahECDKZZ25PIwCgYIKoZIzj0EAwIwNzEmMCQGA1UEAwwdT0FSSSBEZXZlbG9wbWVudCBUcnVzdCBBbmNob3IxDTALBgNVBAoMBE9BUkkwHhcNMjYwODA3MjM1NDMwWhcNMzYwODA0MjM1NDMwWjA3MSYwJAYDVQQDDB1PQVJJIERldmVsb3BtZW50IFRydXN0IEFuY2hvcjENMAsGA1UECgwET0FSSTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABO9OOBrcxxOZR+QtuKSHgixXHM/Cdr/QxXjf10kAOw3Yi4O9ig1tCPcaflY8tX6PKnFnQ6QL2ZbhjFo++062YW6jUzBRMB0GA1UdDgQWBBSiHQ90UgRFQMp7VEYgHfnSFD6PHDAfBgNVHSMEGDAWgBSiHQ90UgRFQMp7VEYgHfnSFD6PHDAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0kAMEYCIQDisWb20SIHxnxszxUIkHsx3PebbIAzpjynSI7VLqBB+gIhALWPeUcT5Tc0GQcXsaw3Vl/fEOf7SIVF7vfls7+1Fyhv")!
+    static let trustAnchorDER: Data = {
+        guard let url = Bundle.main.url(
+            forResource: "DevelopmentTrustAnchor",
+            withExtension: "der"
+        ), let data = try? Data(contentsOf: url) else {
+            preconditionFailure("Missing bundled development trust anchor")
+        }
+        return data
+    }()
 }

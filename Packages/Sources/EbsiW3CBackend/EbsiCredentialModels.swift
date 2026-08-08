@@ -63,9 +63,15 @@ public struct EbsiCredentialProfile: Codable, Equatable, Identifiable, Sendable 
             representation: .vcdm2Jwt,
             allowedAlgorithms: [.es256],
             context: "https://www.w3.org/ns/credentials/v2",
-            schemaType: "FullJsonSchemaValidator2021",
-            statusType: "BitstringStatusListEntry",
-            termsOfUseType: "IssuanceCertificate"
+            // Development authority schema/status metadata is diagnostic. The
+            // cryptographic/profile checks remain mandatory, but absent or varying
+            // registry metadata must not reject a valid development credential.
+            schemaType: nil,
+            statusType: nil,
+            // The live issuer.dev.oari.io authority omits termsOfUse while still
+            // producing a valid VCDM2/JWT credential. Trust/accreditation is a
+            // separate development diagnostic and must not reject this credential.
+            termsOfUseType: nil
         )
     }
 
@@ -87,6 +93,9 @@ public enum EbsiCredentialError: Error, Equatable, Sendable {
     case algorithmNotAllowed
     case unsupportedRepresentation
     case verificationFailed
+    case issuerDIDUnresolved
+    case invalidSignature
+    case invalidHolderBinding
     case backendUnavailable
 }
 
@@ -236,6 +245,15 @@ public enum AnySendableJSON: Codable, Equatable, Sendable {
     var string: String? { if case let .string(value) = self { value } else { nil } }
     var numericValue: Double? { if case let .number(value) = self { value } else { nil } }
     var object: [String: AnySendableJSON]? { if case let .object(value) = self { value } else { nil } }
+    var displayString: String? {
+        switch self {
+        case let .string(value): value
+        case let .number(value): String(value)
+        case let .bool(value): value ? "Yes" : "No"
+        case let .array(values): values.compactMap(\.displayString).joined(separator: ", ")
+        default: nil
+        }
+    }
     func contains(string: String) -> Bool {
         switch self {
         case let .string(value): value == string

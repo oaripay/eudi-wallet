@@ -128,7 +128,7 @@ final class WalletAppModel: ObservableObject {
             }
             loadingState = .loaded
         } catch {
-            loadingState = .failed("Protected wallet storage is unavailable. No credential data was displayed.")
+            loadingState = .failed("Development wallet setup failed: \(Self.developmentErrorMessage(error))")
         }
     }
 
@@ -164,12 +164,33 @@ final class WalletAppModel: ObservableObject {
             switch scanResult {
             case .issuance:
                 eudiFlow = .working("Checking the issuer and credential offer…")
+                var w3cRoutingError: Error?
+                if let ebsiWallet {
+                    do {
+                        let interaction = try await ebsiWallet.resolveInteraction(uri: scanInput)
+                        activeEbsiInteractionID = interaction.id
+                        activeEbsiInteraction = interaction
+                        switch interaction.trustOutcome {
+                        case .allow: prepareEbsiInteraction(allowUntrusted: false)
+                        case let .requireExplicitWarning(warning): ebsiTrustWarning = warning; eudiFlow = .idle
+                        case .reject: throw WorkspaceBackendError.rejectedTrust
+                        }
+                        return
+                    } catch {
+                        if case WorkspaceBackendError.unsupportedGrant = error {
+                            // The offer advertises a non-W3C format; let Wallet Kit claim it.
+                        } else {
+                            w3cRoutingError = error
+                        }
+                    }
+                }
                 do {
                     let offer = try await eudiWallet.resolveIssuanceOffer(uri: scanInput)
                     selectedIssuanceConfigurationIDs = Set(offer.documents.map(\.configurationID))
                     transactionCode = ""
                     eudiFlow = .issuanceReview(offer)
                 } catch {
+                    if let w3cRoutingError { throw w3cRoutingError }
                     guard let ebsiWallet else { throw error }
                     let interaction = try await ebsiWallet.resolveInteraction(uri: scanInput)
                     activeEbsiInteractionID = interaction.id
@@ -191,6 +212,15 @@ final class WalletAppModel: ObservableObject {
             }
         } catch {
             eudiFlow = .failed(Self.safeMessage(error))
+        }
+    }
+
+    func redeemScannedRequest() async {
+        classifyScan()
+        if !isEudiOperational {
+            await reviewEbsiScannedRequest()
+        } else {
+            await reviewScannedRequest()
         }
     }
 
@@ -239,7 +269,10 @@ final class WalletAppModel: ObservableObject {
     }
 
     func issueReviewedEbsiCredential() async {
-        do { try await continueEbsiInteraction() }
+        do {
+            try await continueEbsiInteraction()
+            try await refreshWalletState()
+        }
         catch {
             if let id = activeEbsiInteractionID { await ebsiWallet?.cancelInteraction(id: id) }
             activeEbsiInteractionID = nil
@@ -509,8 +542,42 @@ final class WalletAppModel: ObservableObject {
     }
 
     private static func safeMessage(_ error: Error) -> String {
+        if let error = error as? WorkspaceBackendError {
+            switch error {
+            case .malformedOffer: return "The issuer offer is malformed or missing a credential offer payload."
+            case .unsafeEndpoint: return "The issuer endpoint is not an allowed HTTPS development endpoint."
+            case .unsupportedGrant: return "This issuer grant is not implemented by the development wallet yet."
+            case .invalidTransactionCode: return "The transaction code is invalid for this offer."
+            case .untrustedConsentRequired: return "Review the development trust warning before continuing."
+            case .rejectedTrust: return "The issuer request failed trust or signature validation."
+            case .invalidResponse: return "The issuer returned an invalid or incomplete OpenID4VCI response."
+            case .unknownTransaction: return "The issuer transaction expired or was already used."
+            case .presentationRequired: return "The issuer requires PID presentation before issuing this credential."
+            case .invalidPresentationResponse: return "The issuer rejected the PID presentation response."
+            case .authorizationFailed: return "The issuer authorization exchange failed."
+            case let .remoteOAuthError(code, detail):
+                if code == "invalid_grant" {
+                    return "This credential offer has expired or was already redeemed. Scan a new offer from the issuer."
+                }
+                return detail.map { "The issuer returned \(code): \($0)" } ?? "The issuer returned \(code)."
+            }
+        }
+        if let error = error as? EbsiCredentialError {
+            switch error {
+            case .invalidProfile: return "The issuer credential profile is invalid."
+            case .malformedCredential: return "The issuer returned a malformed credential."
+            case .profileMismatch: return "The credential does not match its advertised W3C profile."
+            case .algorithmNotAllowed: return "The credential uses an unsupported signing algorithm."
+            case .unsupportedRepresentation: return "The credential representation is not supported by this wallet."
+            case .verificationFailed: return "The credential signature, issuer DID, or holder binding could not be verified."
+            case .issuerDIDUnresolved: return "The issuer DID could not be resolved. Development trust override is required."
+            case .invalidSignature: return "The credential signature is invalid. This cannot be overridden."
+            case .invalidHolderBinding: return "The credential is not bound to this wallet. This cannot be overridden."
+            case .backendUnavailable: return "The W3C credential backend is unavailable."
+            }
+        }
         guard let error = error as? EudiWalletKitAdapterError else {
-            return "The wallet stopped this request because it could not be verified safely."
+            return "Development wallet error: \(String(describing: error))"
         }
         return switch error {
         case .unapprovedIssuer: "This issuer is not approved for the active wallet profile."
@@ -518,8 +585,19 @@ final class WalletAppModel: ObservableObject {
         case .invalidTransactionCode: "Check the transaction code and try again."
         case .requiredClaimMissing: "Required claims must remain selected."
         case .recoveryRequired: "Wallet recovery must finish before this action can continue."
-        default: "The wallet stopped this request because it could not be verified safely."
+        default: "Development EUDI Wallet Kit error: \(String(describing: error))"
         }
+    }
+
+
+    private static func developmentErrorMessage(_ error: Error) -> String {
+        if let error = error as? EudiWalletKitAdapterError {
+            return "EUDI Wallet Kit \(String(describing: error))"
+        }
+        if let error = error as? WorkspaceBackendError {
+            return "EBSI backend \(String(describing: error))"
+        }
+        return String(describing: error)
     }
 
     func setPrivacyCoverVisible(_ visible: Bool) {

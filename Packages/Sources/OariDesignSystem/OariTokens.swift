@@ -38,6 +38,18 @@ public enum OariColor {
     public static func border(_ scheme: ColorScheme) -> Color {
         textPrimary(scheme).opacity(scheme == .dark ? 0.10 : 0.18)
     }
+
+    public static func safeColor(_ value: String?, fallback: Color) -> Color {
+        guard var value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              value.hasPrefix("#") else { return fallback }
+        value.removeFirst()
+        guard value.count == 6, let rgb = UInt64(value, radix: 16) else { return fallback }
+        return Color(
+            red: Double((rgb >> 16) & 0xff) / 255,
+            green: Double((rgb >> 8) & 0xff) / 255,
+            blue: Double(rgb & 0xff) / 255
+        )
+    }
 }
 
 public enum OariSpacing {

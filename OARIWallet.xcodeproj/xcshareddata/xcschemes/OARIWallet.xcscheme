@@ -29,9 +29,9 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "40C225644F0733B5BABDA5FF"
-               BuildableName = "OARIWalletTests.xctest"
-               BlueprintName = "OARIWalletTests"
+               BlueprintIdentifier = "D8E498087CBB84456E909D47"
+               BuildableName = "WalletTests.xctest"
+               BlueprintName = "WalletTests"
                ReferencedContainer = "container:OARIWallet.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -43,9 +43,9 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "25260E0128D5512EBAF00E67"
-               BuildableName = "OARIWalletUITests.xctest"
-               BlueprintName = "OARIWalletUITests"
+               BlueprintIdentifier = "A53379B54DB2DDB626240375"
+               BuildableName = "WalletUITests.xctest"
+               BlueprintName = "WalletUITests"
                ReferencedContainer = "container:OARIWallet.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -74,9 +74,9 @@
             testExecutionOrdering = "random">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "40C225644F0733B5BABDA5FF"
-               BuildableName = "OARIWalletTests.xctest"
-               BlueprintName = "OARIWalletTests"
+               BlueprintIdentifier = "D8E498087CBB84456E909D47"
+               BuildableName = "WalletTests.xctest"
+               BlueprintName = "WalletTests"
                ReferencedContainer = "container:OARIWallet.xcodeproj">
             </BuildableReference>
          </TestableReference>
@@ -85,9 +85,9 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "25260E0128D5512EBAF00E67"
-               BuildableName = "OARIWalletUITests.xctest"
-               BlueprintName = "OARIWalletUITests"
+               BlueprintIdentifier = "A53379B54DB2DDB626240375"
+               BuildableName = "WalletUITests.xctest"
+               BlueprintName = "WalletUITests"
                ReferencedContainer = "container:OARIWallet.xcodeproj">
             </BuildableReference>
          </TestableReference>

@@ -5,44 +5,125 @@ import WalletDomain
 struct WalletVaultView: View {
     @Environment(\.colorScheme) private var scheme
     @ObservedObject var model: WalletAppModel
+    @State private var searchText = ""
+    @State private var filter: CredentialFilter = .all
+
+    private enum CredentialFilter: String, CaseIterable, Identifiable {
+        case all = "All"
+        case valid = "Valid"
+        case pending = "Pending"
+        case warnings = "Warnings"
+        var id: String { rawValue }
+    }
 
     var body: some View {
         NavigationStack {
-            OariScreen {
-                    Text(model.credentialCountDescription)
-                        .font(OariTypography.title)
-                        .accessibilityIdentifier("wallet.credential-count")
-                    if case let .failed(message) = model.loadingState {
-                        OariCard {
-                            OariStatusBadge("Wallet storage unavailable", kind: .invalid)
-                            Text(message)
-                                .font(OariTypography.body)
-                                .foregroundStyle(OariColor.textSecondary(scheme))
-                        }
-                        .accessibilityElement(children: .combine)
-                        .accessibilityIdentifier("wallet.storage-error")
+            List {
+                if case let .failed(message) = model.loadingState {
+                    Section {
+                        Label("Wallet services unavailable", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text(message).font(.caption).foregroundStyle(.secondary)
                     }
-                    if model.credentials.isEmpty {
-                        OariCard {
-                            Text("No credentials are stored. Scan an approved credential offer to begin.")
-                                .font(OariTypography.body)
-                                .foregroundStyle(OariColor.textSecondary(scheme))
-                        }
-                        .accessibilityElement(children: .combine)
-                    } else {
-                        ForEach(model.credentials) { credential in
+                    .accessibilityIdentifier("wallet.storage-error")
+                }
+                if model.credentials.isEmpty {
+                    ContentUnavailableView(
+                        "Your wallet is empty",
+                        systemImage: "wallet.pass",
+                        description: Text("Scan a credential offer to add your first credential.")
+                    )
+                    .listRowBackground(Color.clear)
+                } else {
+                    Section {
+                        ForEach(filteredCredentials) { credential in
                             Button { model.selectCredential(credential) } label: {
-                                CredentialTile(credential: credential)
+                                CredentialListRow(credential: credential)
                             }
                             .buttonStyle(.plain)
                         }
+                    } header: {
+                        HStack {
+                            Text("Credentials")
+                            Spacer()
+                            Text("\(filteredCredentials.count)").foregroundStyle(.secondary)
+                        }
                     }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .searchable(text: $searchText, prompt: "Search credentials")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Picker("Filter", selection: $filter) {
+                            ForEach(CredentialFilter.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                    } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
+                    .accessibilityLabel("Filter credentials")
+                }
             }
             .navigationTitle("Wallet")
         }
         .sheet(item: $model.selectedCredential) { credential in
             CredentialDetailView(model: model, credential: credential)
                 .presentationDetents([.medium, .large])
+        }
+    }
+
+    private var filteredCredentials: [CredentialRecord] {
+        model.credentials.filter { credential in
+            let matchesSearch = searchText.isEmpty || [credential.displayName, credential.issuerIdentifier, credential.profileID, credential.format.rawValue]
+                .contains { $0.localizedCaseInsensitiveContains(searchText) }
+            let matchesFilter: Bool
+            switch filter {
+            case .all: matchesFilter = true
+            case .valid: matchesFilter = credential.status == .valid
+            case .pending: matchesFilter = model.documentStatus(for: credential) == "pending" || model.documentStatus(for: credential) == "deferred"
+            case .warnings: matchesFilter = credential.issuerTrust != .trusted || credential.status == .indeterminate
+            }
+            return matchesSearch && matchesFilter
+        }
+    }
+}
+
+private struct CredentialListRow: View {
+    let credential: CredentialRecord
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: credential.format == .mdoc ? "person.text.rectangle.fill" : "doc.text.fill")
+                .font(.title3).foregroundStyle(.tint)
+                .frame(width: 38, height: 38)
+                .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(credential.displayName).font(.body.weight(.semibold)).lineLimit(1)
+                Text(credential.issuerIdentifier).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 6)
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(statusText).font(.caption.weight(.medium)).foregroundStyle(statusColor)
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.vertical, 5)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(credential.displayName), \(statusText)")
+        .accessibilityIdentifier("wallet.credential.row.\(credential.configurationID)")
+    }
+
+    private var statusText: String {
+        switch credential.issuerTrust {
+        case .trusted: credential.status == .valid ? "Valid" : credential.status.rawValue
+        case .untrusted: "Development warning"
+        default: credential.status.rawValue
+        }
+    }
+
+    private var statusColor: Color {
+        switch credential.issuerTrust {
+        case .trusted: .green
+        case .untrusted: .orange
+        default: .secondary
         }
     }
 }
@@ -55,33 +136,52 @@ private struct CredentialDetailView: View {
 
     var body: some View {
         NavigationStack {
-            OariScreen {
-                    Text(credential.displayName).font(OariTypography.title)
-                    HStack {
-                        OariBackendBadge(credential.backendID == "oari-workspace-w3c" ? "OARI Workspace W3C" : "EUDI Wallet Kit")
-                        OariStatusBadge(credential.format.rawValue, kind: .indeterminate)
-                    }
-                    OariCard {
-                        detail("Issuer", credential.issuerIdentifier)
-                        detail("Format", credential.format.rawValue)
-                        detail("Profile", credential.profileID)
-                        detail("Backend document", credential.backendDocumentID ?? credential.walletDocumentID ?? "Unavailable")
-                        detail("Document state", model.documentStatus(for: credential) ?? "Unavailable")
-                        detail("Credential status", credential.status.rawValue)
-                        detail("Issuer trust", credential.issuerTrust.rawValue)
-                        detail("Legal profile", credential.legalClassification.rawValue)
-                        if let issuedAt = credential.issuedAt { detail("Issued", issuedAt.formatted()) }
-                        if let expiresAt = credential.expiresAt { detail("Expires", expiresAt.formatted()) }
-                    }
-                    if model.documentStatus(for: credential) == "deferred" {
-                        Button("Check deferred issuance") {
-                            Task { await model.retrySelectedDeferredCredential() }
+            List {
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(credential.displayName).font(.title3.weight(.semibold))
+                        Text(credential.issuerIdentifier)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 6) {
+                            OariBackendBadge(credential.backendID == "oari-workspace-w3c" ? "Workspace W3C" : "EUDI Wallet Kit")
+                            OariStatusBadge(credential.format.rawValue, kind: .indeterminate)
                         }
-                        .buttonStyle(OariPrimaryButtonStyle())
+                    }
+                    .padding(.vertical, 4)
+                }
+                Section("Status") {
+                    detailRow("Current status", model.documentStatus(for: credential) ?? "Unavailable")
+                    detailRow("Credential status", credential.status.rawValue)
+                    detailRow("Issuer trust", credential.issuerTrust.rawValue)
+                    if let issuedAt = credential.issuedAt { detailRow("Issued", issuedAt.formatted(date: .abbreviated, time: .omitted)) }
+                    if let expiresAt = credential.expiresAt { detailRow("Expires", expiresAt.formatted(date: .abbreviated, time: .omitted)) }
+                }
+                Section("Credential") {
+                    detailRow("Format", credential.format.rawValue)
+                    detailRow("Profile", credential.profileID)
+                    detailRow("Legal profile", credential.legalClassification.rawValue)
+                    NavigationLink("Technical details") {
+                        technicalDetails
+                    }
+                }
+                if !credential.displayClaims.isEmpty {
+                    Section("Claims") {
+                        ForEach(credential.displayClaims) { claim in
+                            LabeledContent(claim.label, value: claim.value)
+                        }
+                    }
+                }
+                Section("Actions") {
+                    if model.documentStatus(for: credential) == "deferred" {
+                        Button {
+                            Task { await model.retrySelectedDeferredCredential() }
+                        } label: {
+                            Label("Check deferred issuance", systemImage: "arrow.clockwise")
+                        }
                         .disabled(model.credentialActionIsWorking || !model.isEudiOperational)
                     }
                     Button("Remove credential", role: .destructive) { confirmsDeletion = true }
-                        .frame(maxWidth: .infinity)
                         .disabled(model.credentialActionIsWorking || !model.isEudiOperational)
                     if !model.isEudiOperational {
                         Label("Install an approved EUDI profile to manage this credential.", systemImage: "lock.shield")
@@ -89,8 +189,12 @@ private struct CredentialDetailView: View {
                             .foregroundStyle(OariColor.textSecondary(scheme))
                             .accessibilityIdentifier("credential.operationsUnavailable")
                     }
-                    actionStatus
+                }
+                if model.credentialActionState != .idle {
+                    Section { actionStatus }
+                }
             }
+            .listStyle(.insetGrouped)
             .navigationTitle("Credential details")
             .navigationBarTitleDisplayMode(.inline)
         }
@@ -106,12 +210,24 @@ private struct CredentialDetailView: View {
         }
     }
 
-    private func detail(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: OariSpacing.x1) {
-            Text(label).font(.caption).foregroundStyle(OariColor.textSecondary(scheme))
-            Text(value).font(OariTypography.body).textSelection(.enabled)
+    private func detailRow(_ label: String, _ value: String) -> some View {
+        LabeledContent(label) { Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing) }
+    }
+
+    private var technicalDetails: some View {
+        List {
+            Section("Identifiers") {
+                detailRow("Issuer", credential.issuerIdentifier)
+                detailRow("Backend document", credential.backendDocumentID ?? credential.walletDocumentID ?? "Unavailable")
+                detailRow("Wallet document", credential.walletDocumentID ?? "Unavailable")
+            }
+            Section("Processing") {
+                detailRow("Backend", credential.backendID ?? "EUDI Wallet Kit")
+                detailRow("Configuration", credential.configurationID)
+            }
         }
-        .padding(.vertical, OariSpacing.x1)
+        .listStyle(.insetGrouped)
+        .navigationTitle("Technical details")
     }
 
     @ViewBuilder
@@ -173,6 +289,7 @@ struct WalletScannerView: View {
     @Environment(\.colorScheme) private var scheme
     @ObservedObject var model: WalletAppModel
     @State private var isCameraPresented = false
+    @FocusState private var inputFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -189,29 +306,23 @@ struct WalletScannerView: View {
                             .clipShape(RoundedRectangle(cornerRadius: OariRadius.medium))
                             .accessibilityLabel("Wallet code")
                             .accessibilityIdentifier("scanner.input")
-                        Button("Review code") {
-                            if model.isEudiOperational {
-                                Task { await model.reviewScannedRequest() }
-                            } else {
-                                model.classifyScan()
-                            }
+                            .focused($inputFocused)
+                            .submitLabel(.done)
+                            .onSubmit { inputFocused = false }
+                        Button("Redeem") {
+                            inputFocused = false
+                            Task { await model.redeemScannedRequest() }
                         }
                         .buttonStyle(OariPrimaryButtonStyle())
                         .disabled(model.scanInput.isEmpty)
-                        .accessibilityIdentifier("scanner.review")
-                        if model.isEbsiDevelopmentAvailable {
-                        Button("Review as EBSI development") {
-                            Task { await model.reviewEbsiScannedRequest() }
-                        }
-                            .buttonStyle(OariSecondaryButtonStyle())
-                            .accessibilityIdentifier("scanner.ebsiReview")
-                        }
+                        .accessibilityIdentifier("scanner.redeem")
                         Button {
                             isCameraPresented = true
                         } label: {
-                            Label("Scan with camera", systemImage: "camera.fill")
+                            Label("Scan QR code", systemImage: "qrcode.viewfinder")
                                 .frame(maxWidth: .infinity)
                         }
+                        .buttonStyle(OariSecondaryButtonStyle())
                         .accessibilityIdentifier("scanner.camera")
                     }
                 }
@@ -244,6 +355,12 @@ struct WalletScannerView: View {
                     .accessibilityIdentifier("scanner.pendingCredential")
                 }
                 ScanResultView(result: model.scanResult, input: model.scanInput)
+            }
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { inputFocused = false }
+                }
             }
             .navigationTitle("Scan")
             .fullScreenCover(isPresented: $isCameraPresented) {

@@ -14,8 +14,12 @@ struct EbsiResolvedInteraction: Equatable, Identifiable, Sendable {
     let displayName: String?
     let trustOutcome: EbsiTrustGateOutcome
     let transactionCodeRequired: Bool
+    let transactionCodeLength: Int?
+    let transactionCodeDescription: String?
     let configurationIDs: [String]
     let authorizationRequired: Bool
+    let representations: [String]
+    let credentialDisplay: [String: WorkspaceCredentialDisplay]
 }
 
 enum EbsiInteractionCompletion: Equatable, Sendable {
@@ -64,8 +68,12 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
             displayName: offer.displayName,
             trustOutcome: offer.trustOutcome,
             transactionCodeRequired: offer.transactionCodeRequired,
+            transactionCodeLength: offer.transactionCodeLength,
+            transactionCodeDescription: offer.transactionCodeDescription,
             configurationIDs: offer.configurationIDs
-            , authorizationRequired: offer.authorizationRequired
+            , authorizationRequired: offer.authorizationRequired,
+            representations: offer.representations
+            , credentialDisplay: offer.credentialDisplay
         )
     }
 
@@ -95,13 +103,14 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
                 backendDocumentID: credential.id.uuidString,
                 displayName: "EBSI W3C Credential",
                 format: .jwtVC,
-                profileID: credential.profileID,
-                issuerIdentifier: issuer,
-                cryptographicValidity: .valid,
+                 profileID: credential.profileID,
+                 issuerIdentifier: issuer,
+                 cryptographicValidity: .valid,
                 issuerTrust: allowUntrusted ? .untrusted : .trusted,
                 status: .notEvaluated,
                 legalClassification: .oariProvisional,
-                createdAt: Date()
+                 createdAt: Date(),
+                 displayClaims: credential.displayClaims
             )
             try await metadata.saveMetadata(record)
             credentialIDs.append(record.id)

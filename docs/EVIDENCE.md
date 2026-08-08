@@ -488,8 +488,8 @@ These are absence-of-implementation failures, not regressions.
   -configuration ReleaseTesting -skipMacroValidation -derivedDataPath
   /Users/mika/Library/Developer/Xcode/DerivedData/OARIWallet-enegewkjsnafdmbnaywknlvsmotw
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
-  -only-testing:OARIWalletTests/WalletKitIOSIntegrationTests
-  -only-testing:OARIWalletTests/WalletAppModelTests test`; result `TEST SUCCEEDED` on
+  -only-testing:WalletTests/WalletKitIOSIntegrationTests
+  -only-testing:WalletTests/WalletAppModelTests test`; result `TEST SUCCEEDED` on
   the iOS 26.5 iPhone 17 Pro simulator. CI now enforces both ReleaseTesting suites.
 - Commits: `8857044` (`feat: add wallet onboarding and profile status`), `3f2d430`
   (`test: verify unavailable wallet guidance`) and `1a061bc` (`ci: verify eudi

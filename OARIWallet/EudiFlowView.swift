@@ -1,9 +1,13 @@
 import OariDesignSystem
 import SwiftUI
+import EudiWalletKitAdapter
 
 struct EudiFlowView: View {
     @ObservedObject var model: WalletAppModel
     @Environment(\.colorScheme) private var scheme
+    @FocusState private var focusedField: Field?
+
+    private enum Field { case transactionCode, ebsiPIN }
 
     var body: some View {
         NavigationStack {
@@ -46,8 +50,11 @@ struct EudiFlowView: View {
                     .textContentType(.oneTimeCode)
                     .keyboardType(offer.transactionCode?.inputMode == "numeric" ? .numberPad : .asciiCapable)
                     .textFieldStyle(.roundedBorder)
+                    .focused($focusedField, equals: .transactionCode)
+                    .submitLabel(.done)
             }
-            primaryButton("Add to wallet", icon: "plus.circle.fill") {
+            primaryButton("Add to wallet", icon: "plus.circle.fill", disabled: !validTransactionCode(offer.transactionCode)) {
+                focusedField = nil
                 await model.acceptIssuance()
             }
 
@@ -56,14 +63,46 @@ struct EudiFlowView: View {
                 .font(OariTypography.heading)
             Text(interaction.displayName ?? interaction.counterpartyIdentifier)
                 .foregroundStyle(OariColor.textSecondary(scheme))
-            ForEach(interaction.configurationIDs, id: \.self) { Text($0).font(.caption) }
+            ForEach(interaction.configurationIDs, id: \.self) { configurationID in
+                if let display = interaction.credentialDisplay[configurationID] {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let logoURL = display.logoURL {
+                            AsyncImage(url: logoURL) { image in
+                                image.resizable().scaledToFit()
+                            } placeholder: { ProgressView() }
+                            .frame(width: 42, height: 42)
+                        }
+                        Text(display.name).font(.headline)
+                        if let description = display.claims.first?.description {
+                            Text(description).font(.caption)
+                        }
+                        Text("Claims: \(display.claims.map { $0.name ?? $0.path.joined(separator: ".") }.joined(separator: ", "))")
+                            .font(.caption)
+                    }
+                    .foregroundStyle(OariColor.safeColor(display.textColor, fallback: scheme == .dark ? .white : .black))
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(OariColor.safeColor(display.backgroundColor, fallback: OariColor.surface(scheme)), in: RoundedRectangle(cornerRadius: 14))
+                }
+            }
             if interaction.transactionCodeRequired {
-                SecureField("Transaction code", text: $model.ebsiTransactionCode)
+                Text(interaction.transactionCodeDescription ?? "Enter the PIN supplied by the issuer.")
+                    .font(.caption).foregroundStyle(.secondary)
+                SecureField("PIN / transaction code", text: $model.ebsiTransactionCode)
                     .textContentType(.oneTimeCode)
                     .keyboardType(.numberPad)
                     .textFieldStyle(.roundedBorder)
+                    .focused($focusedField, equals: .ebsiPIN)
+                    .submitLabel(.done)
+                    .onChange(of: model.ebsiTransactionCode) { _, value in
+                        if let length = interaction.transactionCodeLength,
+                           value.count > length {
+                            model.ebsiTransactionCode = String(value.prefix(length))
+                        }
+                    }
             }
-            primaryButton("Issue and store credential", icon: "plus.circle.fill") {
+            primaryButton("Issue and store credential", icon: "plus.circle.fill", disabled: !validPIN(interaction)) {
+                focusedField = nil
                 await model.issueReviewedEbsiCredential()
             }
             Button("Cancel") { Task { await model.cancelEbsiTrustWarning() } }
@@ -151,6 +190,7 @@ struct EudiFlowView: View {
     private func primaryButton(
         _ title: String,
         icon: String,
+        disabled: Bool = false,
         action: @escaping @MainActor () async -> Void
     ) -> some View {
         Button {
@@ -159,5 +199,27 @@ struct EudiFlowView: View {
             Label(title, systemImage: icon).frame(maxWidth: .infinity)
         }
         .buttonStyle(OariPrimaryButtonStyle())
+        .disabled(disabled)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { focusedField = nil }
+            }
+        }
+    }
+
+    private func validTransactionCode(_ requirement: EudiTransactionCodeRequirement?) -> Bool {
+        guard let requirement else { return true }
+        let value = model.transactionCode
+        guard !value.isEmpty, value.count == requirement.length else { return false }
+        return requirement.inputMode != "numeric" || value.unicodeScalars.allSatisfy { $0.value >= 48 && $0.value <= 57 }
+    }
+
+    private func validPIN(_ interaction: EbsiResolvedInteraction) -> Bool {
+        guard interaction.transactionCodeRequired else { return true }
+        let value = model.ebsiTransactionCode
+        guard !value.isEmpty else { return false }
+        if let length = interaction.transactionCodeLength, value.count != length { return false }
+        return value.unicodeScalars.allSatisfy { $0.value >= 48 && $0.value <= 57 }
     }
 }

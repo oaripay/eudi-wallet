@@ -56,6 +56,20 @@ public enum IdentifierMethod: String, Codable, Sendable {
     case coseKey = "cose_key"
 }
 
+public struct CredentialDisplayClaim: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let label: String
+    public let value: String
+    public let isSensitive: Bool
+
+    public init(id: String, label: String, value: String, isSensitive: Bool = false) {
+        self.id = id
+        self.label = label
+        self.value = value
+        self.isSensitive = isSensitive
+    }
+}
+
 public struct HolderBinding: Codable, Equatable, Sendable {
     public let method: IdentifierMethod
     public let publicIdentifier: String
@@ -87,6 +101,7 @@ public struct CredentialRecord: Codable, Equatable, Identifiable, Sendable {
     public let issuedAt: Date?
     public let expiresAt: Date?
     public let createdAt: Date
+    public let displayClaims: [CredentialDisplayClaim]
 
     public init(
         id: CredentialID = CredentialID(),
@@ -106,7 +121,8 @@ public struct CredentialRecord: Codable, Equatable, Identifiable, Sendable {
         legalClassification: LegalClassification = .unclassified,
         issuedAt: Date? = nil,
         expiresAt: Date? = nil,
-        createdAt: Date
+        createdAt: Date,
+        displayClaims: [CredentialDisplayClaim] = []
     ) {
         self.id = id
         self.configurationID = configurationID
@@ -126,5 +142,6 @@ public struct CredentialRecord: Codable, Equatable, Identifiable, Sendable {
         self.issuedAt = issuedAt
         self.expiresAt = expiresAt
         self.createdAt = createdAt
+        self.displayClaims = displayClaims
     }
 }

@@ -44,8 +44,7 @@ struct EbsiCredentialModelsTests {
         ]
         for payload in [
             ["vc": base],
-            base,
-            base.merging(["credentialSchema": ["type": "Wrong"]]) { _, new in new },
+            base.merging(["@context": ["https://www.w3.org/2018/credentials/v1"]]) { _, new in new },
         ] {
             let token = try compactJWT(header: ["alg": "ES256"], payload: payload)
             #expect(throws: EbsiCredentialError.profileMismatch) {

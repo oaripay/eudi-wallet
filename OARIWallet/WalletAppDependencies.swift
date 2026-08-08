@@ -43,35 +43,50 @@ struct WalletAppDependencies: Sendable {
                 directory: root.appendingPathComponent("audit", isDirectory: true),
                 keyStore: keyStore
             )
-            let eudiTrustSource = try EudiTrustAnchorSource(
-                profileID: "oari-development-eudi",
-                anchors: [DevelopmentEudiProfile.trustAnchorDER],
-                approvedSHA256Digests: [EudiTrustAnchorSource.sha256Digest(of: DevelopmentEudiProfile.trustAnchorDER)]
-            )
-            let eudiConfiguration = try EudiOperationalConfiguration(
-                clientID: "oari-development-wallet",
-                authorizationRedirectURI: URL(string: "https://oari.io/oauth/callback")!,
-                attestationProvider: DevelopmentEudiAttestationProvider(),
-                auditRepository: auditRepository,
-                auditPolicy: .development,
-                auditPolicyVersion: AuditPolicyVersion(rawValue: 1),
-                metadataRepository: metadataRepository,
-                recoveryStore: try EncryptedWalletOperationRecoveryStore(
-                    directory: root.appendingPathComponent("operation-recovery", isDirectory: true),
-                    keyStore: keyStore
-                ),
-                statusProvider: DevelopmentEudiStatusProvider(),
-                allowedIssuerOrigins: ["https://issuer.example"],
-                allowedVerifierOrigins: ["https://verifier.example"],
-                allowedApplicationRedirectOrigins: ["https://oari.io"],
-                allowUnregisteredDevelopmentCounterparties: configuration.ebsiDevelopmentEnabled
-            )
-            let eudiAdapter = try EudiWalletKitBaseline(
-                serviceName: "io.oari.wallet.development-eudi"
-            ).makeWallet(
-                trustSource: eudiTrustSource,
-                operationalConfiguration: eudiConfiguration
-            )
+            let eudiWallet: (any EudiWalletOperating)?
+            let eudiAvailability: EudiWalletAvailability
+            do {
+                let eudiTrustSource = try EudiTrustAnchorSource(
+                    profileID: "oari-development-eudi",
+                    anchors: [DevelopmentEudiProfile.trustAnchorDER],
+                    approvedSHA256Digests: [EudiTrustAnchorSource.sha256Digest(of: DevelopmentEudiProfile.trustAnchorDER)]
+                )
+                let eudiConfiguration = try EudiOperationalConfiguration(
+                    clientID: "oari-development-wallet",
+                    authorizationRedirectURI: URL(string: "https://oari.io/oauth/callback")!,
+                    attestationProvider: DevelopmentEudiAttestationProvider(),
+                    auditRepository: auditRepository,
+                    auditPolicy: .development,
+                    auditPolicyVersion: AuditPolicyVersion(rawValue: 1),
+                    metadataRepository: metadataRepository,
+                    recoveryStore: try EncryptedWalletOperationRecoveryStore(
+                        directory: root.appendingPathComponent("operation-recovery", isDirectory: true),
+                        keyStore: keyStore
+                    ),
+                    statusProvider: DevelopmentEudiStatusProvider(),
+                    allowedIssuerOrigins: ["https://issuer.example"],
+                    allowedVerifierOrigins: ["https://verifier.example"],
+                    allowedApplicationRedirectOrigins: ["https://oari.io"],
+                    allowUnregisteredDevelopmentCounterparties: configuration.ebsiDevelopmentEnabled
+                )
+                let eudiAdapter = try EudiWalletKitBaseline(
+                    serviceName: "io.oari.wallet.development-eudi"
+                ).makeWallet(
+                    trustSource: eudiTrustSource,
+                    operationalConfiguration: eudiConfiguration
+                )
+                eudiWallet = configuration.ebsiDevelopmentEnabled
+                    ? LiveEudiWalletService(adapter: eudiAdapter)
+                    : nil
+                eudiAvailability = configuration.ebsiDevelopmentEnabled
+                    ? .available
+                    : .configurationRequired("Install an approved staging or production EUDI trust profile to enable wallet operations.")
+            } catch {
+                eudiWallet = nil
+                eudiAvailability = .configurationRequired(
+                    "EUDI Wallet Kit development profile could not be initialized: \(Self.safeDevelopmentError(error))"
+                )
+            }
             let ebsiWallet: (any EbsiW3COperating)?
             if configuration.ebsiDevelopmentEnabled {
                 let ebsiEndpoint = try configuration.ebsiLocalAuthorityEnabled
@@ -123,12 +138,21 @@ struct WalletAppDependencies: Sendable {
                 credentials: metadataRepository,
                 audit: auditRepository,
                 localAuthenticator: SystemLocalAuthenticator(),
-                eudiWallet: configuration.ebsiDevelopmentEnabled ? LiveEudiWalletService(adapter: eudiAdapter) : nil,
-                eudiAvailability: configuration.ebsiDevelopmentEnabled
-                    ? .available
-                    : .configurationRequired("Install an approved staging or production EUDI trust profile to enable wallet operations."),
+                eudiWallet: eudiWallet,
+                eudiAvailability: eudiAvailability,
                 ebsiWallet: ebsiWallet
             )
+        }
+    }
+
+    private static func safeDevelopmentError(_ error: Error) -> String {
+        switch error {
+        case EudiWalletKitAdapterError.initializationFailed:
+            return "Wallet Kit initialization failed"
+        case EudiWalletKitAdapterError.invalidTrustAnchor:
+            return "development trust anchor is invalid"
+        default:
+            return "Wallet Kit configuration is invalid"
         }
     }
 

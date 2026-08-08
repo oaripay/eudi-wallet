@@ -426,7 +426,7 @@ struct EudiWalletKitAdapterTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         return try Data(contentsOf: repositoryRoot
-            .appendingPathComponent("OARIWalletTests/Resources/TestTrustAnchor.bin"))
+            .appendingPathComponent("Tests/Resources/TestTrustAnchor.bin"))
     }
 
     private static let nonCABase64 = """

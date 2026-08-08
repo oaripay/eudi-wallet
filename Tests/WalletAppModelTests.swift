@@ -403,7 +403,10 @@ private actor FixtureEbsiWallet: EbsiW3COperating {
             counterpartyIdentifier: "did:ebsi:unregistered-issuer",
             displayName: "Development issuer", trustOutcome: outcome,
             transactionCodeRequired: true,
-            configurationIDs: ["oari-v2"], authorizationRequired: true
+            transactionCodeLength: 6,
+            transactionCodeDescription: "Enter test PIN",
+            configurationIDs: ["oari-v2"], authorizationRequired: true,
+            representations: ["application/vc+jwt"], credentialDisplay: [:]
         )
     }
     func continueInteraction(

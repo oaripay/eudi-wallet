@@ -1,7 +1,7 @@
 import XCTest
 
 @MainActor
-final class OARIWalletUITests: XCTestCase {
+final class WalletUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
@@ -61,7 +61,7 @@ final class OARIWalletUITests: XCTestCase {
 
         input.tap()
         input.typeText("https://evil.example/present?request=x")
-        app.buttons["scanner.review"].tap()
+        app.buttons["scanner.redeem"].tap()
         XCTAssertTrue(element(app, "scanner.result.rejected").waitForExistence(timeout: 2))
 
         app.terminate()

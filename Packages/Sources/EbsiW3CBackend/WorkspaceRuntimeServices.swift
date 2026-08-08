@@ -171,7 +171,12 @@ public struct NativeWorkspaceCredentialValidator: WorkspaceCredentialValidating,
         let compact = String(decoding: rawCredential, as: UTF8.self)
         let credential = try EbsiCredentialInspector().inspectCompactJWT(compact, profile: profile)
         let issuer = try Self.issuer(from: credential)
-        let document = try await resolver.resolve(issuer)
+        let document: DIDDocument
+        do {
+            document = try await resolver.resolve(issuer)
+        } catch {
+            throw EbsiCredentialError.issuerDIDUnresolved
+        }
         let methods = try document.verificationMethod.map { method in
             let x = try Self.decodeBase64URL(method.publicKeyJwk.x)
             guard let encodedY = method.publicKeyJwk.y else {
@@ -193,19 +198,24 @@ public struct NativeWorkspaceCredentialValidator: WorkspaceCredentialValidating,
                 relationships: relationships
             )
         }
-        _ = try EbsiJWSVerifier().verify(
-            compactJWS: compact,
-            methods: methods,
-            requirements: EbsiJWSRequirements(
-                allowedAlgorithms: profile.allowedAlgorithms,
-                requiredRelationship: .assertionMethod,
-                expectedController: issuer,
-                expectedIssuer: issuer,
-                validationDate: date
+        do {
+            _ = try EbsiJWSVerifier().verify(
+                compactJWS: compact,
+                methods: methods,
+                requirements: EbsiJWSRequirements(
+                    allowedAlgorithms: profile.allowedAlgorithms,
+                    requiredRelationship: .assertionMethod,
+                    expectedController: issuer,
+                    // W3C JWT VC uses the VC `issuer` claim. `iss` is required
+                    // for protocol JWTs, not universally for credential payloads.
+                    expectedIssuer: nil,
+                    validationDate: date
+                )
             )
-        )
+        } catch EbsiCredentialError.algorithmNotAllowed { throw EbsiCredentialError.algorithmNotAllowed }
+        catch { throw EbsiCredentialError.invalidSignature }
         guard Self.subjectID(from: credential) == expectedHolderDID else {
-            throw EbsiCredentialError.verificationFailed
+            throw EbsiCredentialError.invalidHolderBinding
         }
     }
 

@@ -828,7 +828,8 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
     }
 
     public func requireOperationalRuntime() throws {
-        guard !_isDebugAssertConfiguration() else {
+        guard !_isDebugAssertConfiguration() ||
+                operationalConfiguration?.allowUnregisteredDevelopmentCounterparties == true else {
             throw EudiWalletKitAdapterError.unsafeDebugLogging
         }
     }

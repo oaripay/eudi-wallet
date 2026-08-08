@@ -43,9 +43,39 @@ public struct WorkspaceResolvedOffer: Equatable, Identifiable, Sendable {
     public let displayName: String?
     public let configurationIDs: [String]
     public let transactionCodeRequired: Bool
+    public let transactionCodeLength: Int?
+    public let transactionCodeDescription: String?
     public let trustOutcome: EbsiTrustGateOutcome
     public let authorizationRequired: Bool
     public let issuerState: String?
+    public let representations: [String]
+    public let credentialDisplay: [String: WorkspaceCredentialDisplay]
+}
+
+public struct WorkspaceCredentialDisplay: Codable, Equatable, Sendable {
+    public let name: String
+    public let locale: String?
+    public let backgroundColor: String?
+    public let textColor: String?
+    public let logoURL: URL?
+    public let claims: [WorkspaceCredentialClaim]
+}
+
+public struct WorkspaceCredentialClaim: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let path: [String]
+    public let name: String?
+    public let description: String?
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        path = try values.decodeIfPresent([String].self, forKey: .path) ?? []
+        name = try values.decodeIfPresent(String.self, forKey: .name)
+        description = try values.decodeIfPresent(String.self, forKey: .description)
+        id = path.joined(separator: ".")
+    }
+
+    private enum CodingKeys: String, CodingKey { case path, name, description }
 }
 
 public struct WorkspacePresentationChallenge: Equatable, Identifiable, Sendable {
@@ -65,6 +95,7 @@ public struct WorkspaceIssuedCredential: Equatable, Sendable {
     public let id: UUID
     public let profileID: String
     public let representation: EbsiCredentialRepresentation
+    public let displayClaims: [CredentialDisplayClaim]
 }
 
 public enum WorkspaceBackendError: Error, Equatable, Sendable {
@@ -79,6 +110,7 @@ public enum WorkspaceBackendError: Error, Equatable, Sendable {
     case presentationRequired
     case invalidPresentationResponse
     case authorizationFailed
+    case remoteOAuthError(code: String, detail: String?)
 }
 
 public actor OariWorkspaceW3CBackend {
@@ -98,6 +130,7 @@ public actor OariWorkspaceW3CBackend {
     struct TxCode: Sendable {
         let length: Int?
         let numeric: Bool
+        let description: String?
     }
 
     private let transport: any WorkspaceHTTPTransport
@@ -146,6 +179,13 @@ public actor OariWorkspaceW3CBackend {
                 referenceURL,
                 allowedOrigins: [try Self.origin(of: referenceURL)]
             )
+        } else if components.scheme?.lowercased() == "https" ||
+                    (components.scheme?.lowercased() == "http" && components.host == "127.0.0.1") {
+            try Self.validateHTTPS(url)
+            data = try await successfulGET(
+                url,
+                allowedOrigins: [try Self.origin(of: url)]
+            )
         } else {
             throw WorkspaceBackendError.malformedOffer
         }
@@ -156,7 +196,9 @@ public actor OariWorkspaceW3CBackend {
         if let preauthorized = offer.grants?.preauthorized {
             grant = .preAuthorized(
                 code: preauthorized.code,
-                txCode: preauthorized.txCode.map { TxCode(length: $0.length, numeric: $0.inputMode == "numeric") }
+                txCode: preauthorized.txCode.map {
+                    TxCode(length: $0.length, numeric: $0.inputMode == "numeric", description: $0.description)
+                }
             )
         } else if let authorization = offer.grants?.authorizationCode,
                   let issuerState = authorization.issuerState {
@@ -172,6 +214,10 @@ public actor OariWorkspaceW3CBackend {
                 allowedOrigins: [try Self.origin(of: issuer)]
             )
         )
+        let representations = issuerMetadata.credentialConfigurations.values.map(\.format)
+        guard representations.allSatisfy(Self.supportedRepresentation) else {
+            throw WorkspaceBackendError.unsupportedGrant
+        }
         let verdict = await trustEvaluator.evaluate(issuer: offer.credentialIssuer, at: now())
         let outcome = EbsiTrustGate().evaluate(
             verdict: verdict,
@@ -193,9 +239,13 @@ public actor OariWorkspaceW3CBackend {
             displayName: issuerMetadata.display?.first?.name,
             configurationIDs: offer.credentialConfigurationIds,
             transactionCodeRequired: ifCasePreAuthorizedTxCode(grant),
+            transactionCodeLength: transactionCodeLength(grant),
+            transactionCodeDescription: transactionCodeDescription(grant),
             trustOutcome: outcome,
             authorizationRequired: ifCaseAuthorization(grant),
-            issuerState: ifCaseIssuerState(grant)
+            issuerState: ifCaseIssuerState(grant),
+            representations: representations
+            , credentialDisplay: issuerMetadata.credentialConfigurations.mapValues(\.display)
         )
     }
 
@@ -384,7 +434,10 @@ public actor OariWorkspaceW3CBackend {
             }
             for item in credentials.credentials {
                 let raw = Data(item.credential.utf8)
-                let selectedProfile = try selectProfile(format: credentials.format ?? item.format)
+                let selectedProfile = try selectProfile(
+                    format: credentials.format ?? item.format,
+                    rawCredential: raw
+                )
                 try await credentialValidator.validate(
                     rawCredential: raw,
                     profile: selectedProfile,
@@ -402,7 +455,10 @@ public actor OariWorkspaceW3CBackend {
                 results.append(WorkspaceIssuedCredential(
                     id: stored.id,
                     profileID: stored.profileID,
-                    representation: stored.representation
+                    representation: stored.representation,
+                    displayClaims: Self.displayClaims(from: try? EbsiCredentialInspector().inspectCompactJWT(
+                        String(decoding: raw, as: UTF8.self), profile: selectedProfile
+                    ))
                 ))
             }
         }
@@ -412,7 +468,16 @@ public actor OariWorkspaceW3CBackend {
         return results
     }
 
-    private func selectProfile(format: String?) throws -> EbsiCredentialProfile {
+    private func selectProfile(format: String?, rawCredential: Data) throws -> EbsiCredentialProfile {
+        let context = Self.jwtContext(rawCredential)
+        if context == "https://www.w3.org/ns/credentials/v2",
+           let profile = profiles.first(where: { $0.dataModel == .v2_0 }) {
+            return profile
+        }
+        if context == "https://www.w3.org/2018/credentials/v1",
+           let profile = profiles.first(where: { $0.dataModel == .v1_1 }) {
+            return profile
+        }
         if format == "jwt_vc_json" || format == "jwt_vc_json-ld" {
             guard let profile = profiles.first(where: { $0.dataModel == .v1_1 }) else {
                 throw EbsiCredentialError.unsupportedRepresentation
@@ -429,6 +494,38 @@ public actor OariWorkspaceW3CBackend {
             throw EbsiCredentialError.unsupportedRepresentation
         }
         return profile
+    }
+
+    private static func jwtContext(_ raw: Data) -> String? {
+        let parts = String(decoding: raw, as: UTF8.self).split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        var value = String(parts[1]).replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        value += String(repeating: "=", count: (4 - value.count % 4) % 4)
+        guard let data = Data(base64Encoded: value),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let contexts = object["@context"] as? [String] { return contexts.first }
+        return object["@context"] as? String
+    }
+
+    private static func supportedRepresentation(_ format: String) -> Bool {
+        ["jwt_vc_json", "jwt_vc_json-ld", "dc+sd-jwt", "vcdm2_sd_jwt", "application/vc+jwt"]
+            .contains(format)
+    }
+
+    private static func displayClaims(from credential: [String: AnySendableJSON]?) -> [CredentialDisplayClaim] {
+        guard let subject = credential?["credentialSubject"]?.object else { return [] }
+        return subject.compactMap { key, value in
+            guard let string = value.displayString else { return nil }
+            return CredentialDisplayClaim(
+                id: key,
+                label: key.replacingOccurrences(of: "_", with: " ").capitalized,
+                value: string,
+                isSensitive: key.lowercased().contains("id") || key.lowercased().contains("name")
+            )
+        }.sorted { $0.label < $1.label }
     }
 
     public func cancel(id: UUID) {
@@ -501,7 +598,13 @@ public actor OariWorkspaceW3CBackend {
             throw WorkspaceBackendError.unsafeEndpoint
         }
         let response = try await transport.send(url: url, method: method, headers: headers, body: body)
-        guard (200..<300).contains(response.statusCode), response.body.count <= 1_048_576 else {
+        guard response.body.count <= 1_048_576 else {
+            throw WorkspaceBackendError.invalidResponse
+        }
+        guard (200..<300).contains(response.statusCode) else {
+            if let error = try? JSONDecoder().decode(RemoteOAuthError.self, from: response.body) {
+                throw WorkspaceBackendError.remoteOAuthError(code: error.error, detail: error.errorDetail)
+            }
             throw WorkspaceBackendError.invalidResponse
         }
         return response.body
@@ -618,6 +721,16 @@ private func ifCasePreAuthorizedTxCode(_ grant: OariWorkspaceW3CBackend.Grant) -
     return false
 }
 
+private func transactionCodeLength(_ grant: OariWorkspaceW3CBackend.Grant) -> Int? {
+    if case let .preAuthorized(_, requirement) = grant { return requirement?.length }
+    return nil
+}
+
+private func transactionCodeDescription(_ grant: OariWorkspaceW3CBackend.Grant) -> String? {
+    if case let .preAuthorized(_, requirement) = grant { return requirement?.description }
+    return nil
+}
+
 private func ifCaseAuthorization(_ grant: OariWorkspaceW3CBackend.Grant) -> Bool {
     if case .authorizationCode = grant { return true }
     return false
@@ -640,7 +753,8 @@ private struct PreauthorizedGrant: Decodable {
 private struct TxCodeDefinition: Decodable {
     let inputMode: String?
     let length: Int?
-    enum CodingKeys: String, CodingKey { case inputMode = "input_mode", length }
+    let description: String?
+    enum CodingKeys: String, CodingKey { case inputMode = "input_mode", length, description }
 }
 
 private struct IssuerMetadata: Decodable {
@@ -648,16 +762,82 @@ private struct IssuerMetadata: Decodable {
     let credentialEndpoint: String
     let authorizationServers: [String]?
     let display: [Display]?
+    let credentialConfigurations: [String: SupportedConfiguration]
     enum CodingKeys: String, CodingKey {
         case credentialEndpoint = "credential_endpoint"
         case authorizationServers = "authorization_servers"
         case display
+        case credentialConfigurations = "credential_configurations_supported"
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        credentialEndpoint = try values.decode(String.self, forKey: .credentialEndpoint)
+        authorizationServers = try values.decodeIfPresent([String].self, forKey: .authorizationServers)
+        display = try values.decodeIfPresent([Display].self, forKey: .display)
+        credentialConfigurations = try values.decodeIfPresent(
+            [String: SupportedConfiguration].self,
+            forKey: .credentialConfigurations
+        ) ?? [:]
     }
 }
+
+private struct SupportedConfiguration: Decodable {
+    let format: String
+    let credentialMetadata: CredentialMetadata?
+
+    var display: WorkspaceCredentialDisplay {
+        let display = credentialMetadata?.display?.first
+        return WorkspaceCredentialDisplay(
+            name: display?.name ?? "Credential",
+            locale: display?.locale,
+            backgroundColor: display?.backgroundColor,
+            textColor: display?.textColor,
+            logoURL: display?.logo.flatMap { URL(string: $0.url) },
+            claims: credentialMetadata?.claims ?? []
+        )
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case format
+        case credentialMetadata = "credential_metadata"
+    }
+}
+
+private struct CredentialMetadata: Decodable {
+    let display: [CredentialDisplay]?
+    let claims: [WorkspaceCredentialClaim]?
+}
+
+private struct CredentialDisplay: Decodable {
+    let name: String
+    let locale: String?
+    let backgroundColor: String?
+    let textColor: String?
+    let logo: Logo?
+
+    enum CodingKeys: String, CodingKey {
+        case name, locale
+        case backgroundColor = "background_color"
+        case textColor = "text_color"
+        case logo
+    }
+}
+
+private struct Logo: Decodable { let url: String }
 
 private struct AuthorizationMetadata: Decodable {
     let tokenEndpoint: String
     enum CodingKeys: String, CodingKey { case tokenEndpoint = "token_endpoint" }
+}
+
+private struct RemoteOAuthError: Decodable {
+    let error: String
+    let errorDetail: String?
+    enum CodingKeys: String, CodingKey {
+        case error
+        case errorDetail = "error_detail"
+    }
 }
 
 private struct TokenResponse: Decodable {

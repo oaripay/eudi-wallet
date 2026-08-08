@@ -41,6 +41,8 @@ targets:
     platform: iOS
     sources:
       - path: OARIWallet
+    resources:
+      - path: OARIWallet/Resources
     dependencies:
       - package: OARIWalletModules
         product: WalletDomain
@@ -57,7 +59,7 @@ targets:
     info:
       path: OARIWallet/Info.plist
       properties:
-        CFBundleDisplayName: OARI Wallet
+        CFBundleDisplayName: Oari Wallet
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         UILaunchScreen: {}
@@ -89,11 +91,11 @@ targets:
         ReleaseTesting:
           ENABLE_TESTABILITY: YES
 
-  OARIWalletTests:
+  WalletTests:
     type: bundle.unit-test
     platform: iOS
     sources:
-      - path: OARIWalletTests
+       - path: Tests
     dependencies:
       - target: OARIWallet
     settings:
@@ -103,11 +105,11 @@ targets:
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/OARIWallet.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OARIWallet"
         BUNDLE_LOADER: "$(TEST_HOST)"
 
-  OARIWalletUITests:
+  WalletUITests:
     type: bundle.ui-testing
     platform: iOS
     sources:
-      - path: OARIWalletUITests
+       - path: UITests
     dependencies:
       - target: OARIWallet
     settings:
@@ -121,17 +123,17 @@ schemes:
     build:
       targets:
         OARIWallet: all
-        OARIWalletTests: [test]
-        OARIWalletUITests: [test]
+        WalletTests: [test]
+        WalletUITests: [test]
     test:
       gatherCoverageData: true
       coverageTargets:
         - OARIWallet
       targets:
-        - name: OARIWalletTests
+        - name: WalletTests
           parallelizable: true
           randomExecutionOrder: true
-        - name: OARIWalletUITests
+        - name: WalletUITests
           parallelizable: false
           randomExecutionOrder: false
     run:
