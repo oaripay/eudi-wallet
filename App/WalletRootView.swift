@@ -50,12 +50,6 @@ struct WalletRootView: View {
             // Keep the 60pt action clear of the 49pt tab bar and home indicator.
             .padding(.bottom, 92)
         }
-        .overlay {
-            if model.isPrivacyCoverVisible {
-                WalletPrivacyCover()
-                    .accessibilityIdentifier("privacy.cover")
-            }
-        }
         .fullScreenCover(isPresented: $isCameraPresented) {
             CameraQRScannerSheet(onCode: model.handleScannedCode)
         }
@@ -90,20 +84,65 @@ struct WalletRootView: View {
     }
 }
 
-private struct WalletPrivacyCover: View {
+struct WalletPrivacyCover: View {
     @Environment(\.colorScheme) private var scheme
+    @ObservedObject var model: WalletAppModel
 
     var body: some View {
         ZStack {
             OariColor.background(scheme).ignoresSafeArea()
-            VStack(spacing: OariSpacing.x4) {
+            VStack(spacing: OariSpacing.x5) {
+                Image("OariMark")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 120, height: 120)
                 Image(systemName: "lock.shield.fill")
                     .font(.largeTitle)
                 Text("OARI Wallet locked")
                     .font(OariTypography.heading)
+                switch model.appLockState {
+                case .authenticating:
+                    ProgressView("Authenticating…")
+                case let .locked(message):
+                    if let message {
+                        Text(message)
+                            .font(.caption)
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(OariColor.textSecondary(scheme))
+                    }
+                    Text("Tap to try again")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(OariColor.action)
+                case let .unavailable(message):
+                    Text(message)
+                        .font(.caption)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.red)
+                case .disabled, .unlocked:
+                    EmptyView()
+                }
             }
+            .padding(OariSpacing.x6)
             .foregroundStyle(OariColor.textPrimary(scheme))
-            .accessibilityElement(children: .combine)
         }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard case .locked = model.appLockState else { return }
+            Task { await model.unlockApp() }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Oari Wallet locked")
+        .accessibilityHint(retryHint)
+        .accessibilityAddTraits(isRetryAvailable ? .isButton : [])
+        .accessibilityIdentifier("privacy.cover")
+    }
+
+    private var isRetryAvailable: Bool {
+        if case .locked = model.appLockState { return true }
+        return false
+    }
+
+    private var retryHint: String {
+        isRetryAvailable ? "Double tap to authenticate" : "Wallet content is hidden"
     }
 }

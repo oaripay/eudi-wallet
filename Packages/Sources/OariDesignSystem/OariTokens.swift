@@ -98,9 +98,16 @@ public enum OariMotion {
 }
 
 public enum OariTheme: String, CaseIterable, Identifiable, Sendable {
-    case dark
+    case system
     case light
+    case dark
 
     public var id: String { rawValue }
-    public var colorScheme: ColorScheme { self == .dark ? .dark : .light }
+    public var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .dark: .dark
+        case .light: .light
+        }
+    }
 }

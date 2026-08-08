@@ -2,6 +2,16 @@ import Testing
 @testable import WalletVault
 
 struct SystemLocalAuthenticatorTests {
+    @Test("App lock exposes device authentication capability")
+    func appLockCapability() async throws {
+        let authenticator = SystemLocalAuthenticator(
+            evaluator: { _ in true },
+            availability: { .faceID }
+        )
+        #expect(authenticator.availability() == .faceID)
+        try await authenticator.authenticateAppLock(reason: "Unlock Oari Wallet")
+    }
+
     @Test("Authentication requires a transaction-specific reason")
     func reasonRequired() async {
         let authenticator = SystemLocalAuthenticator(evaluator: { _ in true })

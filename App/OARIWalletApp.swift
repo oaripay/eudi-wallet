@@ -22,39 +22,40 @@ struct OariWalletApp: App {
     var body: some Scene {
         WindowGroup {
             ZStack {
-                WalletRootView(model: model)
                 if showsStartupSplash {
+                    // Do not build the tab hierarchy while the launch screen is still
+                    // visible. SwiftUI evaluates every child of a ZStack, including
+                    // views hidden by an opaque overlay, which delayed the first app
+                    // frame and therefore prolonged the system launch screen.
                     WalletStartupSplash()
+                        .task {
+                            // Start bootstrap from the splash itself so the first
+                            // lightweight frame is committed before any wallet
+                            // dependencies are created.
+                            await bootstrapWallet()
+                        }
                         .transition(.opacity)
                         .zIndex(10)
+                } else {
+                    WalletRootView(model: model)
                 }
             }
                 .preferredColorScheme(model.theme.colorScheme)
-                .task {
-                    // Let SwiftUI display the branded startup view before Wallet Kit setup begins.
-                    await Task.yield()
-                    let bootstrap = await Task.detached(priority: .userInitiated) {
-                        switch WalletAppDependencies.make(configuration: configuration) {
-                        case let .success(dependencies):
-                            WalletBootstrapResult.success(dependencies)
-                        case let .failure(error):
-                            WalletBootstrapResult.failure(
-                                WalletBootstrapError(message: String(describing: error))
-                            )
-                        }
-                    }.value
-                    let dependencies: Result<WalletAppDependencies, Error> = switch bootstrap {
-                    case let .success(value): .success(value)
-                    case let .failure(error): .failure(error)
-                    }
-                    await model.load(dependencies)
-                    if let incomingURL = configuration.incomingURL {
-                        model.handleIncomingURL(incomingURL)
-                    }
-                }
                 .onOpenURL(perform: model.handleIncomingURL)
+                .fullScreenCover(isPresented: Binding(
+                    get: { model.isPrivacyCoverVisible || model.isAppLockBlocking },
+                    set: { _ in }
+                )) {
+                    WalletPrivacyCover(model: model)
+                        .interactiveDismissDisabled()
+                }
+                .sheet(isPresented: $model.showsAppLockSetup) {
+                    WalletAppLockSetupView(model: model, allowsDismissal: false)
+                        .interactiveDismissDisabled()
+                        .presentationDetents([.medium])
+                }
                 .onChange(of: scenePhase) { _, phase in
-                    model.setPrivacyCoverVisible(phase != .active)
+                    Task { await model.handleScenePhase(appLifecyclePhase(phase)) }
                 }
                 .transaction { transaction in
                     if configuration.disablesAnimations {
@@ -71,6 +72,41 @@ struct OariWalletApp: App {
         case .loaded, .failed: false
         }
     }
+
+    private func bootstrapWallet() async {
+        // Let SwiftUI commit the branded startup view before Wallet Kit setup begins.
+        await Task.yield()
+
+        let bootstrap = await Task.detached(priority: .userInitiated) {
+            switch WalletAppDependencies.make(configuration: configuration) {
+            case let .success(dependencies):
+                WalletBootstrapResult.success(dependencies)
+            case let .failure(error):
+                WalletBootstrapResult.failure(
+                    WalletBootstrapError(message: String(describing: error))
+                )
+            }
+        }.value
+        let dependencies: Result<WalletAppDependencies, Error> = switch bootstrap {
+        case let .success(value): .success(value)
+        case let .failure(error): .failure(error)
+        }
+
+        await model.handleScenePhase(appLifecyclePhase(scenePhase))
+        await model.load(dependencies)
+        if let incomingURL = configuration.incomingURL {
+            model.handleIncomingURL(incomingURL)
+        }
+    }
+
+    private func appLifecyclePhase(_ phase: ScenePhase) -> WalletAppModel.AppLifecyclePhase {
+        switch phase {
+        case .active: .active
+        case .inactive: .inactive
+        case .background: .background
+        @unknown default: .inactive
+        }
+    }
 }
 
 private enum WalletBootstrapResult: Sendable {
@@ -84,55 +120,28 @@ private struct WalletBootstrapError: LocalizedError, Sendable {
 }
 
 private struct WalletStartupSplash: View {
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var breathes = false
+    @State private var rotation: Double = 0
 
     var body: some View {
         ZStack {
-            OariColor.background(scheme).ignoresSafeArea()
-            Circle()
-                .fill(OariColor.action.opacity(scheme == .dark ? 0.12 : 0.08))
-                .frame(width: 320, height: 320)
-                .blur(radius: 70)
-
-            VStack(spacing: OariSpacing.x5) {
-                Spacer()
-                Image("OariMark")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 156, height: 156)
-                    .scaleEffect(reduceMotion ? 1 : (breathes ? 1.035 : 0.97))
-                    .shadow(color: OariColor.action.opacity(0.2), radius: 28)
-
-                VStack(spacing: OariSpacing.x2) {
-                    Text("OARI")
-                        .font(.system(size: 34, weight: .black, design: .rounded))
-                        .tracking(5)
-                    Text("Wallet")
-                        .font(.headline.weight(.medium))
-                        .foregroundStyle(OariColor.textSecondary(scheme))
-                }
-
-                ProgressView()
-                    .tint(OariColor.action)
-                    .controlSize(.regular)
-                    .accessibilityLabel("Preparing wallet")
-
-                Spacer()
-                Label("Keys stay on this device", systemImage: "lock.shield.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(OariColor.textSecondary(scheme))
-                    .padding(.bottom, OariSpacing.x7)
-            }
-            .foregroundStyle(OariColor.textPrimary(scheme))
+            // Match the system launch screen exactly: the same background and
+            // mark, with rotation added only after SwiftUI takes over.
+            Color("LaunchBackground").ignoresSafeArea()
+            Image("OariMark")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 180, height: 180)
+                // Keep the mark in a flat, 2D rotation rather than showing a
+                // separate system loading indicator.
+                .rotationEffect(.degrees(rotation))
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Oari Wallet is preparing your secure wallet")
         .onAppear {
             guard !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
-                breathes = true
+            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
+                rotation = 360
             }
         }
     }

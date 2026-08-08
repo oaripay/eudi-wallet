@@ -4,6 +4,7 @@ import EbsiW3CBackend
 import ProtocolEngine
 import SwiftUI
 import WalletDomain
+import WalletVault
 import OariDesignSystem
 
 @MainActor
@@ -19,11 +20,17 @@ final class WalletAppModel: ObservableObject {
     @Published private(set) var auditEvents: [AuditEvent] = []
     @Published private(set) var isAuditHistoryLoading = false
     @Published private(set) var hasLoadedAuditHistory = false
-    @Published var theme: OariTheme = .dark
+    @Published var theme: OariTheme {
+        didSet { userDefaults.set(theme.rawValue, forKey: Self.themePreferenceKey) }
+    }
     @Published var scanInput = ""
     @Published private(set) var scanResult: ScanResult = .idle
     @Published private(set) var loadingState: LoadingState = .idle
-    @Published private(set) var isPrivacyCoverVisible = false
+    @Published private(set) var appLockState: AppLockState
+    @Published private(set) var lifecyclePhase: AppLifecyclePhase = .active
+    @Published private(set) var appLockAuthenticationKind: DeviceAuthenticationKind = .unavailable
+    @Published private(set) var appLockSetupError: String?
+    @Published var showsAppLockSetup = false
     @Published var selectedTab: Tab = .wallet
     @Published private(set) var eudiFlow: EudiFlow = .idle
     @Published var selectedIssuanceConfigurationIDs: Set<String> = []
@@ -47,13 +54,40 @@ final class WalletAppModel: ObservableObject {
     private var activePendingIssuanceID: UUID?
     private var activePendingIssuance: EudiPendingIssuance?
     private var activeWorkspacePresentation = false
+    private var appLockAuthenticator: (any AppLockAuthenticating)?
+    private var backgroundGeneration = 0
+    private var activeAuthenticationID: UUID?
+    private let userDefaults: UserDefaults
+
+    private static let themePreferenceKey = "oari.appearance.theme"
+    private static let appLockEnabledKey = "oari.security.app-lock.enabled"
+    private static let appLockSetupCompletedKey = "oari.security.app-lock.setup-completed"
 
     init(
         allowedHosts: Set<String> = ["wallet.dev.oari.io"],
-        showsOnboarding: Bool = false
+        showsOnboarding: Bool = false,
+        userDefaults: UserDefaults = .standard
     ) {
+        self.userDefaults = userDefaults
+        appLockState = userDefaults.bool(forKey: Self.appLockEnabledKey) ? .locked(nil) : .disabled
+        theme = userDefaults.string(forKey: Self.themePreferenceKey)
+            .flatMap(OariTheme.init(rawValue:)) ?? .system
         self.allowedHosts = allowedHosts
         self.showsOnboarding = showsOnboarding
+    }
+
+    enum AppLockState: Equatable {
+        case disabled
+        case locked(String?)
+        case authenticating
+        case unlocked
+        case unavailable(String)
+    }
+
+    enum AppLifecyclePhase: Equatable {
+        case active
+        case inactive
+        case background
     }
 
     enum LoadingState: Equatable {
@@ -61,6 +95,26 @@ final class WalletAppModel: ObservableObject {
         case loading
         case loaded
         case failed(String)
+    }
+
+    var isAppLockEnabled: Bool { userDefaults.bool(forKey: Self.appLockEnabledKey) }
+    var hasCompletedAppLockSetup: Bool { userDefaults.bool(forKey: Self.appLockSetupCompletedKey) }
+    var appLockAuthenticationName: String { appLockAuthenticationKind.displayName }
+    var appLockAuthenticationIcon: String {
+        switch appLockAuthenticationKind {
+        case .faceID: "faceid"
+        case .touchID: "touchid"
+        case .devicePasscode, .unavailable: "lock.shield.fill"
+        }
+    }
+    var isAppLockBlocking: Bool {
+        switch appLockState {
+        case .locked, .authenticating, .unavailable: true
+        case .disabled, .unlocked: false
+        }
+    }
+    var isPrivacyCoverVisible: Bool {
+        lifecyclePhase == .background
     }
 
     enum ScanResult: Equatable {
@@ -115,6 +169,8 @@ final class WalletAppModel: ObservableObject {
             eudiWallet = dependencies.eudiWallet
             eudiAvailability = dependencies.eudiAvailability
             ebsiWallet = dependencies.ebsiWallet
+            appLockAuthenticator = dependencies.appLockAuthenticator
+            appLockAuthenticationKind = dependencies.appLockAuthenticator.availability()
             repositories = (dependencies.credentials, dependencies.audit)
             if isEudiOperational, let eudiWallet {
                 let snapshot = try await eudiWallet.loadStartupSnapshot()
@@ -135,9 +191,132 @@ final class WalletAppModel: ObservableObject {
                     eudiFlow = .configurationRequired(message)
                 }
             }
+            if isAppLockEnabled {
+                await unlockApp()
+            } else if !showsOnboarding && !hasCompletedAppLockSetup {
+                showsAppLockSetup = true
+            }
             loadingState = .loaded
         } catch {
             loadingState = .failed("Development wallet setup failed: \(Self.developmentErrorMessage(error))")
+        }
+    }
+
+    func configureAppLock(enabled: Bool) async {
+        guard let appLockAuthenticator else { return }
+        if enabled {
+            appLockSetupError = nil
+            appLockState = .authenticating
+            let requestID = UUID()
+            let generation = backgroundGeneration
+            activeAuthenticationID = requestID
+            do {
+                try await appLockAuthenticator.authenticateAppLock(
+                    reason: "Enable \(appLockAuthenticationName) to protect Oari Wallet"
+                )
+                guard activeAuthenticationID == requestID,
+                      backgroundGeneration == generation,
+                      lifecyclePhase != .background else { return }
+                activeAuthenticationID = nil
+                userDefaults.set(true, forKey: Self.appLockEnabledKey)
+                userDefaults.set(true, forKey: Self.appLockSetupCompletedKey)
+                appLockState = .unlocked
+                showsAppLockSetup = false
+            } catch {
+                guard activeAuthenticationID == requestID else { return }
+                activeAuthenticationID = nil
+                appLockState = .disabled
+                appLockSetupError = "Authentication was cancelled or failed. Try again to enable app lock."
+            }
+        } else if isAppLockEnabled {
+            appLockState = .authenticating
+            let requestID = UUID()
+            let generation = backgroundGeneration
+            activeAuthenticationID = requestID
+            do {
+                try await appLockAuthenticator.authenticateAppLock(
+                    reason: "Authenticate to disable Oari Wallet app lock"
+                )
+                guard activeAuthenticationID == requestID,
+                      backgroundGeneration == generation,
+                      lifecyclePhase != .background else { return }
+                activeAuthenticationID = nil
+                userDefaults.set(false, forKey: Self.appLockEnabledKey)
+                userDefaults.set(true, forKey: Self.appLockSetupCompletedKey)
+                appLockState = .disabled
+            } catch {
+                guard activeAuthenticationID == requestID else { return }
+                activeAuthenticationID = nil
+                appLockState = .locked("Authentication is required to change app lock.")
+            }
+        }
+    }
+
+    func declineAppLockSetup() {
+        userDefaults.set(false, forKey: Self.appLockEnabledKey)
+        userDefaults.set(true, forKey: Self.appLockSetupCompletedKey)
+        appLockState = .disabled
+        appLockSetupError = nil
+        showsAppLockSetup = false
+    }
+
+    func unlockApp() async {
+        guard isAppLockEnabled else {
+            appLockState = .disabled
+            return
+        }
+        guard let appLockAuthenticator else {
+            appLockState = .locked(nil)
+            return
+        }
+        guard appLockState != .authenticating else { return }
+        guard lifecyclePhase != .background else {
+            appLockState = .locked(nil)
+            return
+        }
+        appLockAuthenticationKind = appLockAuthenticator.availability()
+        guard appLockAuthenticationKind != .unavailable else {
+            appLockState = .unavailable("Set a device passcode to unlock Oari Wallet.")
+            return
+        }
+        let requestID = UUID()
+        let generation = backgroundGeneration
+        activeAuthenticationID = requestID
+        appLockState = .authenticating
+        do {
+            try await appLockAuthenticator.authenticateAppLock(reason: "Unlock Oari Wallet")
+            guard activeAuthenticationID == requestID,
+                  backgroundGeneration == generation,
+                  lifecyclePhase != .background,
+                  isAppLockEnabled else { return }
+            activeAuthenticationID = nil
+            appLockState = .unlocked
+        } catch {
+            guard activeAuthenticationID == requestID else { return }
+            activeAuthenticationID = nil
+            appLockState = .locked("Authentication was cancelled or failed.")
+        }
+    }
+
+    func handleScenePhase(_ phase: AppLifecyclePhase) async {
+        guard phase != lifecyclePhase else { return }
+        lifecyclePhase = phase
+        switch phase {
+        case .inactive:
+            // System authentication and permissions temporarily make the scene inactive.
+            // Cover the snapshot, but do not create a new lock boundary.
+            return
+        case .background:
+            backgroundGeneration += 1
+            activeAuthenticationID = nil
+            appLockState = isAppLockEnabled ? .locked(nil) : .disabled
+        case .active:
+            guard isAppLockEnabled else {
+                appLockState = .disabled
+                return
+            }
+            guard appLockState != .unlocked, appLockState != .authenticating else { return }
+            await unlockApp()
         }
     }
 
@@ -558,21 +737,67 @@ final class WalletAppModel: ObservableObject {
     }
 
     func deleteSelectedCredential() async {
-        guard isEudiOperational, !credentialActionIsWorking,
-              let credential = selectedCredential,
-              let documentID = credential.walletDocumentID,
-              let eudiWallet else { return }
-        credentialActionState = .working("Removing credential…")
+        guard !credentialActionIsWorking, let credential = selectedCredential else { return }
+        enum DeletionTarget {
+            case eudi(documentID: String, service: any EudiWalletOperating)
+            case w3c(backendID: UUID, service: any EbsiW3COperating)
+        }
+        let target: DeletionTarget
+        if credential.backendID == "oari-workspace-w3c" {
+            guard let backendID = credential.backendDocumentID.flatMap(UUID.init(uuidString:)),
+                  let ebsiWallet else {
+                credentialActionState = .failed("This W3C credential has no valid backend reference.")
+                return
+            }
+            target = .w3c(backendID: backendID, service: ebsiWallet)
+        } else {
+            guard isEudiOperational, let documentID = credential.walletDocumentID, let eudiWallet else {
+                credentialActionState = .failed("Wallet Kit is unavailable or the credential document reference is missing.")
+                return
+            }
+            target = .eudi(documentID: documentID, service: eudiWallet)
+        }
+        guard let appLockAuthenticator,
+              appLockAuthenticator.availability() != .unavailable else {
+            credentialActionState = .failed("Device authentication is required to remove this credential.")
+            return
+        }
+        credentialActionState = .working("Authenticating…")
         do {
-            try await eudiWallet.deleteDocument(
-                id: documentID,
-                status: walletDocumentSummaries[documentID]?.status ?? "issued"
+            try await appLockAuthenticator.authenticateAppLock(
+                reason: "Remove this credential from Oari Wallet"
             )
+            credentialActionState = .working("Removing credential…")
+            switch target {
+            case let .eudi(documentID, service):
+                try await service.deleteDocument(
+                    id: documentID,
+                    status: walletDocumentSummaries[documentID]?.status ?? "issued"
+                )
+            case let .w3c(backendID, service):
+                try await service.deleteCredential(
+                    backendID: backendID,
+                    metadataID: credential.id,
+                    issuerIdentifier: credential.issuerIdentifier
+                )
+            }
             try await refreshWalletState()
+            selectedCredential = nil
             credentialActionState = .completed("Credential removed.")
         } catch {
-            credentialActionState = .failed(Self.safeMessage(error))
+            if credentialActionState == .working("Authenticating…") {
+                credentialActionState = .failed("Authentication is required to remove this credential.")
+            } else {
+                credentialActionState = .failed(Self.safeMessage(error))
+            }
         }
+    }
+
+    func canDeleteCredential(_ credential: CredentialRecord) -> Bool {
+        if credential.backendID == "oari-workspace-w3c" {
+            return ebsiWallet != nil && credential.backendDocumentID.flatMap(UUID.init(uuidString:)) != nil
+        }
+        return isEudiOperational && credential.walletDocumentID != nil
     }
 
     func retrySelectedDeferredCredential() async {
@@ -614,7 +839,8 @@ final class WalletAppModel: ObservableObject {
     }
 
     func completeOnboarding() {
-        UserDefaults.standard.set(true, forKey: "oari.onboarding.completed")
+        guard hasCompletedAppLockSetup else { return }
+        userDefaults.set(true, forKey: "oari.onboarding.completed")
         showsOnboarding = false
     }
 
@@ -764,7 +990,4 @@ final class WalletAppModel: ObservableObject {
         }
     }
 
-    func setPrivacyCoverVisible(_ visible: Bool) {
-        isPrivacyCoverVisible = visible
-    }
 }

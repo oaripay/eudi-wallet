@@ -45,6 +45,11 @@ protocol EbsiW3COperating: Sendable {
     ) async throws -> EbsiInteractionCompletion
     func submitPIDPresentation(id: UUID, vpToken: String) async throws -> EbsiInteractionCompletion
     func completeAuthorization(id: UUID, code: String) async throws -> EbsiInteractionCompletion
+    func deleteCredential(
+        backendID: UUID,
+        metadataID: CredentialID,
+        issuerIdentifier: String
+    ) async throws
 }
 
 actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
@@ -199,5 +204,23 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
         try await backend.acceptAuthorizationCode(id: id, code: code)
         authorizationRequired.remove(id)
         return try await continueInteraction(id: id, allowUntrusted: true, transactionCode: nil)
+    }
+
+    func deleteCredential(
+        backendID: UUID,
+        metadataID: CredentialID,
+        issuerIdentifier: String
+    ) async throws {
+        try await backend.deleteStoredCredential(id: backendID)
+        try await metadata.deleteMetadata(id: metadataID)
+        try await audit.append(AuditEvent(
+            operation: .credentialDeletion,
+            outcome: .completed,
+            occurredAt: Date(),
+            counterpartyIdentifierDigest: .sha256(issuerIdentifier),
+            credentialIDs: [metadataID],
+            policy: .development,
+            policyVersion: AuditPolicyVersion(rawValue: 1)
+        ))
     }
 }

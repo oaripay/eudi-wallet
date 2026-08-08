@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.0.0</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -39,8 +39,12 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan credential offers and presentation requests.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>OARI Wallet uses Bluetooth to securely exchange mobile documents with nearby devices during wallet presentations.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Authenticate before sharing credentials or approving sensitive wallet actions.</string>
 	<key>UIApplicationSceneManifest</key>

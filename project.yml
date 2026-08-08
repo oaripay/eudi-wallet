@@ -70,9 +70,10 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
-        NSFaceIDUsageDescription: Authenticate before sharing credentials or approving sensitive wallet actions.
-        NSCameraUsageDescription: Scan credential offers and presentation requests.
-        CFBundleURLTypes:
+         NSFaceIDUsageDescription: Authenticate before sharing credentials or approving sensitive wallet actions.
+         NSCameraUsageDescription: Scan credential offers and presentation requests.
+         NSBluetoothAlwaysUsageDescription: OARI Wallet uses Bluetooth to securely exchange mobile documents with nearby devices during wallet presentations.
+         CFBundleURLTypes:
           - CFBundleURLName: io.oari.wallet.openid4vp
             CFBundleURLSchemes:
               - openid4vp

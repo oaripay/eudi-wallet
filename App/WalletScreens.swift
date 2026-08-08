@@ -231,9 +231,9 @@ private struct CredentialDetailView: View {
                         .disabled(model.credentialActionIsWorking || !model.isEudiOperational)
                     }
                     Button("Remove credential", role: .destructive) { confirmsDeletion = true }
-                        .disabled(model.credentialActionIsWorking || !model.isEudiOperational)
-                    if !model.isEudiOperational {
-                        Label("Install an approved EUDI profile to manage this credential.", systemImage: "lock.shield")
+                        .disabled(model.credentialActionIsWorking || !model.canDeleteCredential(credential))
+                    if !model.canDeleteCredential(credential) {
+                        Label(deletionUnavailableMessage, systemImage: "lock.shield")
                             .font(.caption)
                             .foregroundStyle(OariColor.textSecondary(scheme))
                             .accessibilityIdentifier("credential.operationsUnavailable")
@@ -247,16 +247,27 @@ private struct CredentialDetailView: View {
             .navigationTitle("Credential details")
             .navigationBarTitleDisplayMode(.inline)
         }
-        .confirmationDialog(
-            "Remove this credential from Wallet Kit and OARI metadata?",
-            isPresented: $confirmsDeletion,
-            titleVisibility: .visible
-        ) {
+        .alert("Remove credential?", isPresented: $confirmsDeletion) {
             Button("Remove credential", role: .destructive) {
                 Task { await model.deleteSelectedCredential() }
             }
             Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(deletionConfirmationMessage)
         }
+    }
+
+    private var deletionConfirmationMessage: String {
+        if credential.backendID == "oari-workspace-w3c" {
+            return "This removes the credential from encrypted W3C storage and Oari Wallet. Face ID or your device passcode will be required."
+        }
+        return "This removes the credential from Wallet Kit and Oari Wallet. Face ID or your device passcode will be required."
+    }
+
+    private var deletionUnavailableMessage: String {
+        credential.backendID == "oari-workspace-w3c"
+            ? "The encrypted W3C credential reference is unavailable."
+            : "Install an approved EUDI profile to manage this credential."
     }
 
     private func detailRow(_ label: String, _ value: String) -> some View {
@@ -482,13 +493,13 @@ struct WalletScannerView: View {
                         TextField("Credential offer or presentation URL", text: $model.scanInput, axis: .vertical)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
+                            .keyboardType(.URL)
                             .padding(OariSpacing.x4)
                             .background(OariColor.surfaceInset(scheme))
                             .clipShape(RoundedRectangle(cornerRadius: OariRadius.medium))
                             .accessibilityLabel("Wallet code")
                             .accessibilityIdentifier("scanner.input")
                             .focused($inputFocused)
-                            .submitLabel(.done)
                             .onSubmit { inputFocused = false }
                         Button("Redeem") {
                             inputFocused = false
@@ -498,6 +509,7 @@ struct WalletScannerView: View {
                         .disabled(model.scanInput.isEmpty)
                         .accessibilityIdentifier("scanner.redeem")
                         Button {
+                            inputFocused = false
                             isCameraPresented = true
                         } label: {
                             Label("Scan QR code", systemImage: "qrcode.viewfinder")
@@ -507,6 +519,7 @@ struct WalletScannerView: View {
                         .accessibilityIdentifier("scanner.camera")
                     }
                 }
+                .onTapGesture { inputFocused = false }
                 if case let .configurationRequired(message) = model.eudiFlow {
                     OariCard {
                         VStack(alignment: .leading, spacing: OariSpacing.x3) {
@@ -537,12 +550,7 @@ struct WalletScannerView: View {
                 }
                 ScanResultView(result: model.scanResult, input: model.scanInput)
             }
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { inputFocused = false }
-                }
-            }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Scan")
             .fullScreenCover(isPresented: $isCameraPresented) {
                 CameraQRScannerSheet(onCode: model.handleScannedCode)
@@ -674,6 +682,17 @@ struct WalletSettingsView: View {
                     .accessibilityIdentifier("settings.theme")
                 }
                 Section("Security") {
+                    Toggle("App Lock", isOn: Binding(
+                        get: { model.isAppLockEnabled },
+                        set: { value in Task { await model.configureAppLock(enabled: value) } }
+                    ))
+                    .disabled(model.appLockState == .authenticating)
+                    LabeledContent("Authentication", value: model.appLockAuthenticationName)
+                    if model.isAppLockEnabled {
+                        Text("Required every time Oari Wallet returns to the foreground. Device passcode is available as a fallback.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     Label("Private keys stay on this device", systemImage: "lock.shield")
                     Label("Credentials are excluded from backup", systemImage: "externaldrive.badge.xmark")
                     Label("Development build, not certified", systemImage: "exclamationmark.triangle")
@@ -707,36 +726,159 @@ struct WalletOnboardingView: View {
     var body: some View {
         NavigationStack {
             OariScreen {
-                    Image(systemName: "wallet.pass.fill")
-                        .font(.system(size: 56)).foregroundStyle(OariColor.action)
-                    Text("Your EUDI wallet").font(OariTypography.title)
-                    Text("OARI uses the EUDI Wallet Kit for PID, SD-JWT, mdoc, issuance, presentation and device-bound keys.")
-                        .font(OariTypography.body)
-                    onboardingRow("You approve every disclosure", icon: "checkmark.shield")
-                    onboardingRow("Private keys stay under Wallet Kit secure storage", icon: "key.fill")
-                    onboardingRow("Only approved issuer and verifier profiles can connect", icon: "network.badge.shield.half.filled")
+                VStack(spacing: OariSpacing.x4) {
+                    Image("OariMark")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 92, height: 92)
+                        .accessibilityHidden(true)
+
+                    VStack(spacing: OariSpacing.x2) {
+                        Text("Your identity. In your hands.")
+                            .font(OariTypography.title)
+                            .multilineTextAlignment(.center)
+                        Text("Store and share digital credentials with clear consent every time.")
+                            .font(OariTypography.body)
+                            .foregroundStyle(OariColor.textSecondary(scheme))
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, OariSpacing.x3)
+
+                OariCard {
+                    VStack(alignment: .leading, spacing: OariSpacing.x4) {
+                        onboardingRow("You approve every share", icon: "checkmark.shield.fill")
+                        onboardingRow("Private keys stay on this device", icon: "key.fill")
+                        onboardingRow("Trusted connections are checked", icon: "network.badge.shield.half.filled")
+                    }
+                }
+
+                if case let .configurationRequired(message) = model.eudiAvailability {
                     OariCard {
-                        VStack(alignment: .leading, spacing: OariSpacing.x3) {
-                            Label("Environment setup", systemImage: "wrench.and.screwdriver.fill")
-                                .font(OariTypography.heading)
-                            switch model.eudiAvailability {
-                            case .available:
-                                Text("An approved EUDI profile is installed.")
-                            case let .configurationRequired(message):
+                        HStack(alignment: .top, spacing: OariSpacing.x3) {
+                            Image(systemName: "wrench.and.screwdriver.fill")
+                                .foregroundStyle(.orange)
+                            VStack(alignment: .leading, spacing: OariSpacing.x2) {
+                                Text("Wallet profile required")
+                                    .font(OariTypography.heading)
                                 Text(message)
-                                Text("Credential operations remain disabled until deployment installs trust anchors, issuer/verifier origins and an attestation provider.")
-                                    .font(.caption).foregroundStyle(.secondary)
+                                    .font(.caption)
+                                    .foregroundStyle(OariColor.textSecondary(scheme))
                             }
                         }
                     }
-                    Button("Continue to wallet") { model.completeOnboarding() }
-                        .buttonStyle(OariPrimaryButtonStyle())
-                        .accessibilityIdentifier("onboarding.continue")
+                }
+
+                OariCard {
+                    VStack(alignment: .leading, spacing: OariSpacing.x4) {
+                        HStack(spacing: OariSpacing.x3) {
+                            Image(systemName: model.appLockAuthenticationIcon)
+                                .font(.title2)
+                                .foregroundStyle(OariColor.action)
+                                .frame(width: 36)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Protect your wallet")
+                                    .font(OariTypography.heading)
+                                Text("Unlock with \(model.appLockAuthenticationName), with device passcode fallback.")
+                                    .font(.caption)
+                                    .foregroundStyle(OariColor.textSecondary(scheme))
+                            }
+                        }
+
+                        if let error = model.appLockSetupError {
+                            Text(error)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+
+                        if model.hasCompletedAppLockSetup {
+                            Button("Continue to wallet") { model.completeOnboarding() }
+                                .buttonStyle(OariPrimaryButtonStyle())
+                                .accessibilityIdentifier("onboarding.continue")
+                        } else {
+                            Button("Continue with \(model.appLockAuthenticationName)") {
+                                Task {
+                                    await model.configureAppLock(enabled: true)
+                                    if model.isAppLockEnabled { model.completeOnboarding() }
+                                }
+                            }
+                            .buttonStyle(OariPrimaryButtonStyle())
+                            .disabled(
+                                model.appLockAuthenticationKind == .unavailable ||
+                                    model.appLockState == .authenticating
+                            )
+                            .accessibilityIdentifier("onboarding.app-lock.enable")
+
+                            Button("Continue without App Lock") {
+                                model.declineAppLockSetup()
+                                model.completeOnboarding()
+                            }
+                            .frame(maxWidth: .infinity)
+                            .buttonStyle(.plain)
+                            .disabled(model.appLockState == .authenticating)
+                            .accessibilityIdentifier("onboarding.app-lock.skip")
+                        }
+                    }
+                }
             }
+            .navigationBarHidden(true)
         }
     }
 
     private func onboardingRow(_ text: String, icon: String) -> some View {
-        Label(text, systemImage: icon).font(OariTypography.body)
+        Label {
+            Text(text).font(OariTypography.body)
+        } icon: {
+            Image(systemName: icon)
+                .foregroundStyle(OariColor.action)
+                .frame(width: 24)
+        }
+    }
+}
+
+struct WalletAppLockSetupView: View {
+    @Environment(\.colorScheme) private var scheme
+    @ObservedObject var model: WalletAppModel
+    let allowsDismissal: Bool
+
+    var body: some View {
+        VStack(spacing: OariSpacing.x4) {
+            Image(systemName: model.appLockAuthenticationIcon)
+                .font(.system(size: 42, weight: .medium))
+                .foregroundStyle(OariColor.action)
+            Text("Protect Oari Wallet")
+                .font(OariTypography.heading)
+            Text("Use \(model.appLockAuthenticationName) whenever you open the wallet. Your device passcode remains available as a secure fallback.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(OariColor.textSecondary(scheme))
+            if let error = model.appLockSetupError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            }
+            if model.hasCompletedAppLockSetup {
+                Label(
+                    model.isAppLockEnabled ? "App Lock is enabled" : "App Lock setup skipped",
+                    systemImage: model.isAppLockEnabled ? "checkmark.shield.fill" : "shield.slash"
+                )
+                .foregroundStyle(model.isAppLockEnabled ? .green : .secondary)
+            } else {
+                Button("Set Up \(model.appLockAuthenticationName)") {
+                    Task { await model.configureAppLock(enabled: true) }
+                }
+                .buttonStyle(OariPrimaryButtonStyle())
+                .disabled(model.appLockAuthenticationKind == .unavailable || model.appLockState == .authenticating)
+
+                Button("Not Now") { model.declineAppLockSetup() }
+                    .buttonStyle(.plain)
+                    .disabled(model.appLockState == .authenticating)
+            }
+        }
+        .padding(OariSpacing.x5)
+        .frame(maxWidth: .infinity)
+        .background(OariColor.background(scheme))
+        .accessibilityElement(children: .contain)
     }
 }

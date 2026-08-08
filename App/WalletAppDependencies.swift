@@ -10,9 +10,28 @@ struct WalletAppDependencies: Sendable {
     let credentials: any CredentialMetadataRepository
     let audit: any AuditRepository
     let localAuthenticator: any LocalAuthenticator
+    let appLockAuthenticator: any AppLockAuthenticating
     let eudiWallet: (any EudiWalletOperating)?
     let eudiAvailability: EudiWalletAvailability
     let ebsiWallet: (any EbsiW3COperating)?
+
+    init(
+        credentials: any CredentialMetadataRepository,
+        audit: any AuditRepository,
+        localAuthenticator: any LocalAuthenticator,
+        appLockAuthenticator: any AppLockAuthenticating = SystemLocalAuthenticator(),
+        eudiWallet: (any EudiWalletOperating)?,
+        eudiAvailability: EudiWalletAvailability,
+        ebsiWallet: (any EbsiW3COperating)?
+    ) {
+        self.credentials = credentials
+        self.audit = audit
+        self.localAuthenticator = localAuthenticator
+        self.appLockAuthenticator = appLockAuthenticator
+        self.eudiWallet = eudiWallet
+        self.eudiAvailability = eudiAvailability
+        self.ebsiWallet = ebsiWallet
+    }
 
     static func make(configuration: AppConfiguration = .current()) -> Result<WalletAppDependencies, Error> {
 #if DEBUG

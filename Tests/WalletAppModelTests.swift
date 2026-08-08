@@ -2,8 +2,10 @@ import Foundation
 import EudiWalletKitAdapter
 import EbsiW3CBackend
 import ProtocolEngine
+import OariDesignSystem
 import Testing
 import WalletDomain
+import WalletVault
 @testable import OariWallet
 
 @MainActor
@@ -13,6 +15,170 @@ struct WalletAppModelTests {
         let model = WalletAppModel()
         #expect(model.credentialCountDescription == "No credentials")
         #expect(model.scanResult == .idle)
+    }
+
+    @Test("Theme defaults to system and persists every user choice across restarts")
+    func themePersistence() {
+        let suiteName = "WalletAppModelTests.theme.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        #expect(WalletAppModel(userDefaults: defaults).theme == .system)
+        for theme in OariTheme.allCases {
+            let model = WalletAppModel(userDefaults: defaults)
+            model.theme = theme
+            #expect(WalletAppModel(userDefaults: defaults).theme == theme)
+        }
+
+        defaults.set("unsupported-theme", forKey: "oari.appearance.theme")
+        #expect(WalletAppModel(userDefaults: defaults).theme == .system)
+    }
+
+    @Test("App Lock setup persists and authenticates on every foreground")
+    func appLockLifecycle() async {
+        let suiteName = "WalletAppModelTests.app-lock.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let authenticator = FixtureAppLockAuthenticator()
+        let model = WalletAppModel(showsOnboarding: true, userDefaults: defaults)
+        await model.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(),
+            audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(),
+            appLockAuthenticator: authenticator,
+            eudiWallet: nil,
+            eudiAvailability: .configurationRequired("Unavailable"),
+            ebsiWallet: nil
+        )))
+        #expect(!model.isAppLockEnabled)
+        await model.configureAppLock(enabled: true)
+        #expect(model.isAppLockEnabled)
+        #expect(model.appLockState == .unlocked)
+        #expect(await authenticator.callCount == 1)
+        // Face ID itself sends inactive/active; it must not start another prompt.
+        await model.handleScenePhase(.inactive)
+        #expect(!model.isPrivacyCoverVisible)
+        #expect(!model.isAppLockBlocking)
+        await model.handleScenePhase(.active)
+        #expect(await authenticator.callCount == 1)
+
+        await model.handleScenePhase(.inactive)
+        await model.handleScenePhase(.background)
+        #expect(model.isAppLockBlocking)
+        #expect(model.isPrivacyCoverVisible)
+        await model.handleScenePhase(.active)
+        #expect(model.appLockState == .unlocked)
+        #expect(await authenticator.callCount == 2)
+        await model.handleScenePhase(.active)
+        #expect(await authenticator.callCount == 2)
+
+        let restartedAuthenticator = FixtureAppLockAuthenticator()
+        let restarted = WalletAppModel(userDefaults: defaults)
+        await restarted.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(),
+            audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(),
+            appLockAuthenticator: restartedAuthenticator,
+            eudiWallet: nil,
+            eudiAvailability: .configurationRequired("Unavailable"),
+            ebsiWallet: nil
+        )))
+        #expect(restarted.appLockState == .unlocked)
+        #expect(await restartedAuthenticator.callCount == 1)
+    }
+
+    @Test("Declined or failed App Lock setup never enables the lock")
+    func appLockSetupFailure() async {
+        let suiteName = "WalletAppModelTests.app-lock-failure.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let authenticator = FixtureAppLockAuthenticator(shouldFail: true)
+        let model = WalletAppModel(showsOnboarding: true, userDefaults: defaults)
+        await model.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), appLockAuthenticator: authenticator,
+            eudiWallet: nil, eudiAvailability: .configurationRequired("Unavailable"), ebsiWallet: nil
+        )))
+        await model.configureAppLock(enabled: true)
+        #expect(!model.isAppLockEnabled)
+        #expect(model.appLockState == .disabled)
+        #expect(model.appLockSetupError != nil)
+        model.declineAppLockSetup()
+        #expect(model.hasCompletedAppLockSetup)
+        #expect(!model.isAppLockEnabled)
+    }
+
+    @Test("Disabling App Lock requires authentication and persists")
+    func appLockDisable() async {
+        let suiteName = "WalletAppModelTests.app-lock-disable.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let authenticator = FixtureAppLockAuthenticator()
+        let model = WalletAppModel(showsOnboarding: true, userDefaults: defaults)
+        await model.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), appLockAuthenticator: authenticator,
+            eudiWallet: nil, eudiAvailability: .configurationRequired("Unavailable"), ebsiWallet: nil
+        )))
+        await model.configureAppLock(enabled: true)
+        await model.configureAppLock(enabled: false)
+        #expect(!model.isAppLockEnabled)
+        #expect(model.appLockState == .disabled)
+        #expect(await authenticator.callCount == 2)
+        #expect(WalletAppModel(userDefaults: defaults).appLockState == .disabled)
+    }
+
+    @Test("Existing users receive App Lock migration prompt once")
+    func appLockMigrationPrompt() async {
+        let suiteName = "WalletAppModelTests.app-lock-migration.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = WalletAppModel(showsOnboarding: false, userDefaults: defaults)
+        await model.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), appLockAuthenticator: FixtureAppLockAuthenticator(),
+            eudiWallet: nil, eudiAvailability: .configurationRequired("Unavailable"), ebsiWallet: nil
+        )))
+        #expect(model.showsAppLockSetup)
+        model.declineAppLockSetup()
+        let restarted = WalletAppModel(showsOnboarding: false, userDefaults: defaults)
+        await restarted.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), appLockAuthenticator: FixtureAppLockAuthenticator(),
+            eudiWallet: nil, eudiAvailability: .configurationRequired("Unavailable"), ebsiWallet: nil
+        )))
+        #expect(!restarted.showsAppLockSetup)
+    }
+
+    @Test("Authentication completed after background cannot unlock a later foreground")
+    func staleAppLockAuthentication() async {
+        let suiteName = "WalletAppModelTests.app-lock-stale.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: "oari.security.app-lock.enabled")
+        defaults.set(true, forKey: "oari.security.app-lock.setup-completed")
+        let authenticator = SuspendingAppLockAuthenticator()
+        let model = WalletAppModel(userDefaults: defaults)
+        let load = Task {
+            await model.load(.success(WalletAppDependencies(
+                credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+                localAuthenticator: FixtureAuthenticator(), appLockAuthenticator: authenticator,
+                eudiWallet: nil, eudiAvailability: .configurationRequired("Unavailable"), ebsiWallet: nil
+            )))
+        }
+        await authenticator.waitForCallCount(1)
+        await model.handleScenePhase(.inactive)
+        await model.handleScenePhase(.background)
+        await authenticator.completeNext()
+        await load.value
+        #expect(model.appLockState == .locked(nil))
+
+        let foreground = Task { await model.handleScenePhase(.active) }
+        await authenticator.waitForCallCount(2)
+        await authenticator.completeNext()
+        await foreground.value
+        #expect(model.appLockState == .unlocked)
+        #expect(await authenticator.callCount == 2)
     }
 
     @Test("Scanner rejects unapproved hosts and classifies approved requests")
@@ -39,11 +205,13 @@ struct WalletAppModelTests {
     }
 
     @Test("Privacy cover state follows explicit lifecycle input")
-    func privacyCover() {
+    func privacyCover() async {
         let model = WalletAppModel()
-        model.setPrivacyCoverVisible(true)
+        await model.handleScenePhase(.inactive)
+        #expect(!model.isPrivacyCoverVisible)
+        await model.handleScenePhase(.background)
         #expect(model.isPrivacyCoverVisible)
-        model.setPrivacyCoverVisible(false)
+        await model.handleScenePhase(.active)
         #expect(!model.isPrivacyCoverVisible)
     }
 
@@ -251,29 +419,86 @@ struct WalletAppModelTests {
             id: "wallet-pid", documentType: "pid", displayName: "PID",
             format: "sjwt", status: "issued"
         )])
+        let authenticator = FixtureAppLockAuthenticator()
         let model = WalletAppModel()
         await model.load(.success(WalletAppDependencies(
             credentials: FixedMetadataRepository(records: [record]),
             audit: EmptyAuditRepository(), localAuthenticator: FixtureAuthenticator(),
+            appLockAuthenticator: authenticator,
             eudiWallet: service, eudiAvailability: .available, ebsiWallet: nil
         )))
         model.selectCredential(record)
         await model.deleteSelectedCredential()
-        #expect(model.selectedCredential == record)
+        #expect(model.selectedCredential == nil)
         #expect(model.credentialActionState == .completed("Credential removed."))
         #expect(await service.lastDeleted == "wallet-pid:issued")
+        #expect(await authenticator.callCount == 1)
+    }
+
+    @Test("W3C credential deletion authenticates and does not require Wallet Kit")
+    func w3cCredentialDeletion() async {
+        let backendID = UUID()
+        let record = CredentialRecord(
+            configurationID: "oari-v2", backendID: "oari-workspace-w3c",
+            backendDocumentID: backendID.uuidString, displayName: "Legal Person ID",
+            format: .jwtVC, profileID: "oari-ebsi-vcdm2-vc-jwt",
+            issuerIdentifier: "https://issuer.example", createdAt: Date()
+        )
+        let service = FixtureEbsiWallet(outcome: .allow)
+        let authenticator = FixtureAppLockAuthenticator()
+        let model = WalletAppModel()
+        await model.load(.success(WalletAppDependencies(
+            credentials: FixedMetadataRepository(records: [record]),
+            audit: EmptyAuditRepository(), localAuthenticator: FixtureAuthenticator(),
+            appLockAuthenticator: authenticator, eudiWallet: nil,
+            eudiAvailability: .configurationRequired("Unavailable"), ebsiWallet: service
+        )))
+        model.selectCredential(record)
+        #expect(model.canDeleteCredential(record))
+        await model.deleteSelectedCredential()
+        #expect(model.credentialActionState == .completed("Credential removed."))
+        #expect(await service.deletedCredentials.first?.0 == backendID)
+        #expect(await service.deletedCredentials.first?.1 == record.id)
+        #expect(await authenticator.callCount == 1)
+    }
+
+    @Test("Credential deletion cancellation mutates no backend")
+    func credentialDeletionAuthenticationFailure() async {
+        let record = CredentialRecord(
+            configurationID: "pid", walletDocumentID: "wallet-pid", displayName: "PID",
+            format: .sdJWTVC, profileID: "eudi-final-1",
+            issuerIdentifier: "https://issuer.example", createdAt: Date()
+        )
+        let service = FixtureEudiWallet(summaries: [EudiWalletDocumentSummary(
+            id: "wallet-pid", documentType: "pid", displayName: "PID",
+            format: "sjwt", status: "issued"
+        )])
+        let authenticator = FixtureAppLockAuthenticator(shouldFail: true)
+        let model = WalletAppModel()
+        await model.load(.success(WalletAppDependencies(
+            credentials: FixedMetadataRepository(records: [record]), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), appLockAuthenticator: authenticator,
+            eudiWallet: service, eudiAvailability: .available, ebsiWallet: nil
+        )))
+        model.selectCredential(record)
+        await model.deleteSelectedCredential()
+        #expect(model.credentialActionState == .failed("Authentication is required to remove this credential."))
+        #expect(await service.lastDeleted == nil)
+        #expect(await authenticator.callCount == 1)
     }
 
     @Test("Onboarding completion is explicit and persisted")
     func onboardingCompletion() {
+        let suiteName = "WalletAppModelTests.onboarding.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
         let key = "oari.onboarding.completed"
-        UserDefaults.standard.removeObject(forKey: key)
-        defer { UserDefaults.standard.removeObject(forKey: key) }
-        let model = WalletAppModel(showsOnboarding: true)
+        let model = WalletAppModel(showsOnboarding: true, userDefaults: defaults)
         #expect(model.showsOnboarding)
+        model.declineAppLockSetup()
         model.completeOnboarding()
         #expect(!model.showsOnboarding)
-        #expect(UserDefaults.standard.bool(forKey: key))
+        #expect(defaults.bool(forKey: key))
     }
 
     @Test("Untrusted EBSI flow requires explicit continue or cancel")
@@ -515,6 +740,7 @@ private actor FixtureEbsiWallet: EbsiW3COperating {
     let continuation: EbsiInteractionCompletion
     private(set) var completedAuthorizationCodes: [String] = []
     private(set) var completedPIDClaimIDs: [Set<String>] = []
+    private(set) var deletedCredentials: [(UUID, CredentialID)] = []
     let pidPresentationRequest: EudiPresentationRequest?
     init(
         outcome: EbsiTrustGateOutcome,
@@ -569,6 +795,13 @@ private actor FixtureEbsiWallet: EbsiW3COperating {
     func completeAuthorization(id: UUID, code: String) async throws -> EbsiInteractionCompletion {
         completedAuthorizationCodes.append(code)
         return .completed("Authorization completed")
+    }
+    func deleteCredential(
+        backendID: UUID,
+        metadataID: CredentialID,
+        issuerIdentifier: String
+    ) async throws {
+        deletedCredentials.append((backendID, metadataID))
     }
 }
 
@@ -708,4 +941,44 @@ private actor CountingAuditRepository: AuditRepository {
 
 private struct FixtureAuthenticator: LocalAuthenticator {
     func authenticate(reason: String) async throws {}
+}
+
+private actor FixtureAppLockAuthenticator: AppLockAuthenticating {
+    nonisolated let kind: DeviceAuthenticationKind
+    private let shouldFail: Bool
+    private(set) var callCount = 0
+
+    init(kind: DeviceAuthenticationKind = .faceID, shouldFail: Bool = false) {
+        self.kind = kind
+        self.shouldFail = shouldFail
+    }
+
+    nonisolated func availability() -> DeviceAuthenticationKind { kind }
+
+    func authenticateAppLock(reason: String) async throws {
+        callCount += 1
+        if shouldFail { throw TestFailure.unavailable }
+    }
+}
+
+private actor SuspendingAppLockAuthenticator: AppLockAuthenticating {
+    nonisolated func availability() -> DeviceAuthenticationKind { .faceID }
+    private(set) var callCount = 0
+    private var continuations: [CheckedContinuation<Void, Error>] = []
+
+    func authenticateAppLock(reason: String) async throws {
+        callCount += 1
+        try await withCheckedThrowingContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    func completeNext() {
+        guard !continuations.isEmpty else { return }
+        continuations.removeFirst().resume()
+    }
+
+    func waitForCallCount(_ expected: Int) async {
+        while callCount < expected { await Task.yield() }
+    }
 }

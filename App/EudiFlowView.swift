@@ -12,6 +12,8 @@ struct EudiFlowView: View {
     var body: some View {
         NavigationStack {
             OariScreen { content }
+            .scrollDismissesKeyboard(.interactively)
+            .onTapGesture { focusedField = nil }
             .navigationTitle("Wallet request")
             .navigationBarTitleDisplayMode(.inline)
         }
@@ -89,7 +91,9 @@ struct EudiFlowView: View {
                     SecurePINCodeField(
                         value: $model.transactionCode,
                         length: requirement.length ?? 4,
-                        label: "Transaction code"
+                        label: "Transaction code",
+                        focus: $focusedField,
+                        focusValue: .transactionCode
                     )
                 } else {
                     SecureField("Transaction code", text: $model.transactionCode)
@@ -97,13 +101,6 @@ struct EudiFlowView: View {
                         .keyboardType(.asciiCapable)
                         .textFieldStyle(.roundedBorder)
                         .focused($focusedField, equals: .transactionCode)
-                        .submitLabel(.done)
-                        .toolbar {
-                            ToolbarItemGroup(placement: .keyboard) {
-                                Spacer()
-                                Button("Done") { focusedField = nil }
-                            }
-                        }
                 }
             }
             primaryButton("Add to wallet", icon: "plus.circle.fill", disabled: !validTransactionCode(offer.transactionCode)) {
@@ -175,7 +172,9 @@ struct EudiFlowView: View {
                     SecurePINCodeField(
                         value: $model.ebsiTransactionCode,
                         length: length,
-                        label: "PIN"
+                        label: "PIN",
+                        focus: $focusedField,
+                        focusValue: .ebsiPIN
                     )
                 } else {
                     SecureField("PIN / transaction code", text: $model.ebsiTransactionCode)
@@ -183,20 +182,16 @@ struct EudiFlowView: View {
                         .keyboardType(.numberPad)
                         .textFieldStyle(.roundedBorder)
                         .focused($focusedField, equals: .ebsiPIN)
-                        .submitLabel(.done)
-                        .toolbar {
-                            ToolbarItemGroup(placement: .keyboard) {
-                                Spacer()
-                                Button("Done") { focusedField = nil }
-                            }
-                        }
                 }
             }
             primaryButton("Issue and store credential", icon: "plus.circle.fill", disabled: !validPIN(interaction)) {
                 focusedField = nil
                 await model.issueReviewedEbsiCredential()
             }
-            Button("Cancel") { Task { await model.cancelEbsiTrustWarning() } }
+            Button("Cancel") {
+                focusedField = nil
+                Task { await model.cancelEbsiTrustWarning() }
+            }
                 .frame(maxWidth: .infinity)
                 .buttonStyle(OariSecondaryButtonStyle())
 
@@ -309,45 +304,46 @@ struct EudiFlowView: View {
     }
 }
 
-private struct SecurePINCodeField: View {
+private struct SecurePINCodeField<FocusValue: Hashable>: View {
     @Binding var value: String
     let length: Int
     let label: String
+    let focus: FocusState<FocusValue?>.Binding
+    let focusValue: FocusValue
 
     @Environment(\.colorScheme) private var scheme
-    @FocusState private var isFocused: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
-            ForEach(0..<length, id: \.self) { index in
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(OariColor.surface(scheme))
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(
-                            index == activeIndex && isFocused
-                                ? OariColor.action
-                                : Color.secondary.opacity(0.25),
-                            lineWidth: isFocused && index == activeIndex ? 2 : 1
-                        )
-                    if index < value.count {
-                        Circle()
-                            .fill(OariColor.textPrimary(scheme))
-                            .frame(width: 10, height: 10)
+        ZStack {
+            Button { focus.wrappedValue = focusValue } label: {
+                HStack(spacing: 10) {
+                    ForEach(0..<length, id: \.self) { index in
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(OariColor.surface(scheme))
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(
+                                    index == activeIndex && isFocused
+                                        ? OariColor.action
+                                        : Color.secondary.opacity(0.25),
+                                    lineWidth: isFocused && index == activeIndex ? 2 : 1
+                                )
+                            if index < value.count {
+                                Circle()
+                                    .fill(OariColor.textPrimary(scheme))
+                                    .frame(width: 10, height: 10)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 54)
                     }
                 }
-                .frame(maxWidth: .infinity)
-                .frame(height: 54)
             }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture { isFocused = true }
-        .onAppear { isFocused = true }
-        .background {
+            .buttonStyle(.plain)
             TextField("", text: $value)
                 .textContentType(.oneTimeCode)
                 .keyboardType(.numberPad)
-                .focused($isFocused)
+                .focused(focus, equals: focusValue)
                 .frame(width: 1, height: 1)
                 .opacity(0.01)
                 .accessibilityHidden(true)
@@ -355,14 +351,10 @@ private struct SecurePINCodeField: View {
                     let digits = newValue.filter { $0 >= "0" && $0 <= "9" }
                     let normalized = String(digits.prefix(length))
                     if value != normalized { value = normalized }
-                }
-                .toolbar {
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
-                        Button("Done") { isFocused = false }
-                    }
+                    if normalized.count == length { focus.wrappedValue = nil }
                 }
         }
+        .onAppear { focus.wrappedValue = focusValue }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
         .accessibilityValue("\(value.count) of \(length) digits entered")
@@ -372,4 +364,6 @@ private struct SecurePINCodeField: View {
     private var activeIndex: Int {
         max(0, min(value.count, length - 1))
     }
+
+    private var isFocused: Bool { focus.wrappedValue == focusValue }
 }

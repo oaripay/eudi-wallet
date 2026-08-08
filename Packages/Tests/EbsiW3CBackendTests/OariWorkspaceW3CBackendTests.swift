@@ -163,6 +163,11 @@ struct OariWorkspaceW3CBackendTests {
         let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(body["credential_identifier"] as? String == "authorized-fallback")
         #expect(credentialRequests.count == 2)
+        let firstData = try #require(credentialRequests.first?.body)
+        let firstBody = try #require(JSONSerialization.jsonObject(with: firstData) as? [String: Any])
+        let firstProof = try #require(firstBody["proof"] as? [String: Any])
+        let lastProof = try #require(body["proof"] as? [String: Any])
+        #expect(firstProof["jwt"] as? String == lastProof["jwt"] as? String)
     }
 
     @Test("Draft issuance accepts one metadata-proven configuration alias")
@@ -647,6 +652,28 @@ struct OariWorkspaceW3CBackendTests {
         let presentedCredentials = try #require(vp["verifiableCredential"] as? [[String: Any]])
         #expect(presentedCredentials.first?["type"] as? String == "EnvelopedVerifiableCredential")
         #expect(presentedCredentials.first?["id"] as? String == "data:application/vc+jwt,\(credential)")
+    }
+
+    @Test("Stored W3C credential deletion is idempotent")
+    func storedCredentialDeletion() async throws {
+        let credential = StoredEbsiCredential(
+            profileID: "oari-ebsi-vcdm2-vc-jwt",
+            representation: .vcdm2Jwt,
+            rawCredential: Data("credential".utf8),
+            holderKeyReference: UUID().uuidString
+        )
+        let store = FixtureCredentialStore(values: [credential])
+        let backend = OariWorkspaceW3CBackend(
+            transport: FixtureWorkspaceTransport(),
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(),
+            credentialStore: store,
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .oariVcdm2Jwt()
+        )
+        try await backend.deleteStoredCredential(id: credential.id)
+        try await backend.deleteStoredCredential(id: credential.id)
+        #expect(try await store.credentials().isEmpty)
     }
 
     private static func jwtPayload(_ compact: String) throws -> [String: Any] {

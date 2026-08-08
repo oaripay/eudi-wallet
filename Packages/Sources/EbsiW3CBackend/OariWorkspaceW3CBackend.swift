@@ -763,15 +763,15 @@ public actor OariWorkspaceW3CBackend {
             } else {
                 identifierCandidates = [nil]
             }
+            let proof = try await proofJWT(
+                key: key,
+                kid: method,
+                issuer: holderDID,
+                audience: transaction.issuer.absoluteString,
+                nonce: token.nonce
+            )
             var successfulResponse: Data?
             for (index, candidate) in identifierCandidates.enumerated() {
-                let proof = try await proofJWT(
-                    key: key,
-                    kid: method,
-                    issuer: holderDID,
-                    audience: transaction.issuer.absoluteString,
-                    nonce: token.nonce
-                )
                 let request = CredentialRequest(
                     credentialConfigurationId: transportContract.credentialIdentifierField == .credentialConfigurationID ? configurationID : nil,
                     credentialIdentifier: candidate,
@@ -1266,6 +1266,10 @@ public actor OariWorkspaceW3CBackend {
         presentationChallenges[id] = nil
         preparedPIDPresentations[id] = nil
         trustConsents.remove(id)
+    }
+
+    public func deleteStoredCredential(id: UUID) async throws {
+        try await credentialStore.delete(id: id)
     }
 
     private func authorizeTrust(
