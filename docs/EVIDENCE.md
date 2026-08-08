@@ -81,7 +81,7 @@ loop receives one independent review and one final local commit.
 
 - Review cycle: 3
 - Changed paths: `Package.swift`, `project.yml`, `OARIWallet.xcodeproj/**`,
-  `Packages/Sources/OariDesignSystem/**`, `OARIWallet/**`, `OARIWalletTests/**`,
+  `Packages/Sources/OariDesignSystem/**`, `App/**`, `Tests/**`,
   `docs/EVIDENCE.md`.
 - Checks:
   - `xcodegen generate`: pass.
@@ -258,7 +258,7 @@ These are absence-of-implementation failures, not regressions.
 
 - Review cycle: 4
 - Changed paths: `.github/workflows/verify.yml`, `.gitignore`, `README.md`,
-  `project.yml`, `OARIWallet.xcodeproj/**`, `OARIWallet/**`, `OARIWalletTests/**`,
+  `project.yml`, `OariWallet.xcodeproj/**`, `App/**`, `Tests/**`,
   `Scripts/check_tracked_secrets.py`, `docs/EVIDENCE.md`, `docs/THREAT_MODEL.md`,
   `docs/RELEASE_POLICY.md`.
 - Checks:

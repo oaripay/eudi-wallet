@@ -22,7 +22,7 @@ def main() -> None:
     if imports != [ADAPTER.resolve()]:
         fail(f"production Wallet Kit imports differ from sole adapter: {imports}")
 
-    composition = (ROOT / "OARIWallet/WalletAppDependencies.swift").read_text()
+    composition = (ROOT / "App/WalletAppDependencies.swift").read_text()
     if "EncryptedCredentialRepository(" in composition or "encodedCredential" in composition:
         fail("production app composition can persist raw credential bytes")
     if "EncryptedCredentialMetadataRepository(" not in composition:

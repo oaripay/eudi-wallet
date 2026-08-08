@@ -152,7 +152,7 @@ checkpoint. Never run concurrent Xcode builds against the same DerivedData path.
 ```sh
 swift test
 xcodegen generate
-xcodebuild -project OARIWallet.xcodeproj -scheme OARIWallet \
+xcodebuild -project OariWallet.xcodeproj -scheme OARIWallet \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 gitleaks detect --config .gitleaks.toml --redact --source .
 gitleaks dir --config .gitleaks.toml --redact .

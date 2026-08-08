@@ -1,4 +1,4 @@
-name: OARIWallet
+name: OariWallet
 
 options:
   bundleIdPrefix: io.oari
@@ -40,9 +40,9 @@ targets:
     type: application
     platform: iOS
     sources:
-      - path: OARIWallet
+      - path: App
     resources:
-      - path: OARIWallet/Resources
+      - path: App/Resources
     dependencies:
       - package: OARIWalletModules
         product: WalletDomain
@@ -57,7 +57,7 @@ targets:
       - package: OARIWalletModules
         product: EbsiW3CBackend
     info:
-      path: OARIWallet/Info.plist
+      path: App/Info.plist
       properties:
         CFBundleDisplayName: Oari Wallet
         CFBundleShortVersionString: "0.1.0"
@@ -82,8 +82,8 @@ targets:
         PRODUCT_NAME: OARIWallet
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
-        CODE_SIGN_ENTITLEMENTS: OARIWallet/OARIWallet.entitlements
-        DEVELOPMENT_ASSET_PATHS: '"OARIWallet/Preview Content"'
+        CODE_SIGN_ENTITLEMENTS: App/OARIWallet.entitlements
+        DEVELOPMENT_ASSET_PATHS: '"App/Preview Content"'
         ENABLE_PREVIEWS: YES
         GENERATE_INFOPLIST_FILE: NO
         SUPPORTS_MACCATALYST: NO
