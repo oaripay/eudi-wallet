@@ -39,10 +39,40 @@ struct EudiFlowView: View {
                         else { model.selectedIssuanceConfigurationIDs.remove(document.configurationID) }
                     }
                 )) {
-                    VStack(alignment: .leading) {
-                        Text(document.displayName).font(.headline)
-                        Text(document.documentType).font(.caption).foregroundStyle(.secondary)
+                    ZStack(alignment: .leading) {
+                        OariColor.safeColor(document.display?.backgroundColor, fallback: OariColor.surface(scheme))
+                        if let backgroundURL = document.display?.backgroundImageURL {
+                            AsyncImage(url: backgroundURL) { image in
+                                image.resizable().scaledToFill()
+                            } placeholder: { Color.clear }
+                            .opacity(0.72)
+                            LinearGradient(
+                                colors: [.black.opacity(0.04), .black.opacity(0.48)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        }
+                        HStack(spacing: 12) {
+                            if let logoURL = document.display?.logoURL {
+                                AsyncImage(url: logoURL) { image in
+                                    image.resizable().scaledToFit()
+                                } placeholder: { ProgressView() }
+                                .padding(6)
+                                .frame(width: 42, height: 42)
+                                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                            }
+                            VStack(alignment: .leading) {
+                                Text(document.displayName).font(.headline)
+                                Text(document.documentType).font(.caption).opacity(0.78)
+                            }
+                        }
+                        .padding(12)
                     }
+                    .foregroundStyle(OariColor.safeColor(
+                        document.display?.textColor,
+                        fallback: document.display?.backgroundImageURL == nil ? OariColor.textPrimary(scheme) : .white
+                    ))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
             }
             if offer.transactionCode != nil {
@@ -65,24 +95,43 @@ struct EudiFlowView: View {
                 .foregroundStyle(OariColor.textSecondary(scheme))
             ForEach(interaction.configurationIDs, id: \.self) { configurationID in
                 if let display = interaction.credentialDisplay[configurationID] {
-                    VStack(alignment: .leading, spacing: 6) {
-                        if let logoURL = display.logoURL {
-                            AsyncImage(url: logoURL) { image in
-                                image.resizable().scaledToFit()
-                            } placeholder: { ProgressView() }
-                            .frame(width: 42, height: 42)
+                    ZStack(alignment: .leading) {
+                        OariColor.safeColor(display.backgroundColor, fallback: OariColor.surface(scheme))
+                        if let backgroundURL = display.backgroundImageURL {
+                            AsyncImage(url: backgroundURL) { image in
+                                image.resizable().scaledToFill()
+                            } placeholder: { Color.clear }
+                            .opacity(0.72)
+                            LinearGradient(
+                                colors: [.black.opacity(0.04), .black.opacity(0.48)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
                         }
-                        Text(display.name).font(.headline)
-                        if let description = display.claims.first?.description {
-                            Text(description).font(.caption)
+                        VStack(alignment: .leading, spacing: 6) {
+                            if let logoURL = display.logoURL {
+                                AsyncImage(url: logoURL) { image in
+                                    image.resizable().scaledToFit()
+                                } placeholder: { ProgressView() }
+                                .padding(6)
+                                .frame(width: 48, height: 48)
+                                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 11))
+                            }
+                            Text(display.name).font(.headline)
+                            if let description = display.description ?? display.claims.first?.description {
+                                Text(description).font(.caption)
+                            }
+                            Text("Claims: \(display.claims.map { $0.name ?? $0.path.joined(separator: ".") }.joined(separator: ", "))")
+                                .font(.caption)
                         }
-                        Text("Claims: \(display.claims.map { $0.name ?? $0.path.joined(separator: ".") }.joined(separator: ", "))")
-                            .font(.caption)
+                        .padding(14)
                     }
-                    .foregroundStyle(OariColor.safeColor(display.textColor, fallback: scheme == .dark ? .white : .black))
-                    .padding(14)
+                    .foregroundStyle(OariColor.safeColor(
+                        display.textColor,
+                        fallback: display.backgroundImageURL == nil ? OariColor.textPrimary(scheme) : .white
+                    ))
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(OariColor.safeColor(display.backgroundColor, fallback: OariColor.surface(scheme)), in: RoundedRectangle(cornerRadius: 14))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
             }
             if interaction.transactionCodeRequired {

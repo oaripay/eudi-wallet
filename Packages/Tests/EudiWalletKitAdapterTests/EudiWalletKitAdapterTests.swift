@@ -5,6 +5,36 @@ import Testing
 import WalletDomain
 
 struct EudiWalletKitAdapterTests {
+    @Test("Wallet Kit inline display artwork becomes offline credential metadata")
+    func walletKitDisplayArtwork() throws {
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        let metadata = Data("""
+        {
+          "credentialIssuerIdentifier":"https://issuer.example",
+          "configurationIdentifier":"pid",
+          "docType":"pid",
+          "display":[{
+            "name":"PID",
+            "localeIdentifier":"en",
+            "description":"Identity credential",
+            "backgroundColor":"#003366",
+            "textColor":"#ffffff",
+            "logo":{"urlString":"data:image/png;base64,\(png)","alternativeText":"Issuer mark"},
+            "backgroundImageURL":"data:image/png;base64,\(png)"
+          }]
+        }
+        """.utf8)
+
+        let display = try #require(EudiWalletKitAdapter.credentialDisplayMetadata(
+            fromWalletKitMetadata: metadata
+        ))
+        #expect(display.backgroundColor == "#003366")
+        #expect(display.textColor == "#ffffff")
+        #expect(display.logo?.alternativeText == "Issuer mark")
+        #expect(display.logo?.data == display.backgroundImage?.data)
+        #expect(display.logo?.data.isEmpty == false)
+    }
+
     @Test("Selected Wallet Kit revision is immutable and explicit")
     func selectedRevision() {
         #expect(EudiWalletKitBaseline.selectedVersion == "0.39.1")

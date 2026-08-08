@@ -70,6 +70,43 @@ public struct CredentialDisplayClaim: Codable, Equatable, Sendable, Identifiable
     }
 }
 
+public struct CredentialDisplayImage: Codable, Equatable, Sendable {
+    public let mediaType: String
+    public let data: Data
+    public let alternativeText: String?
+
+    public init(mediaType: String, data: Data, alternativeText: String? = nil) {
+        self.mediaType = mediaType
+        self.data = data
+        self.alternativeText = alternativeText
+    }
+}
+
+public struct CredentialDisplayMetadata: Codable, Equatable, Sendable {
+    public let locale: String?
+    public let description: String?
+    public let backgroundColor: String?
+    public let textColor: String?
+    public let logo: CredentialDisplayImage?
+    public let backgroundImage: CredentialDisplayImage?
+
+    public init(
+        locale: String? = nil,
+        description: String? = nil,
+        backgroundColor: String? = nil,
+        textColor: String? = nil,
+        logo: CredentialDisplayImage? = nil,
+        backgroundImage: CredentialDisplayImage? = nil
+    ) {
+        self.locale = locale
+        self.description = description
+        self.backgroundColor = backgroundColor
+        self.textColor = textColor
+        self.logo = logo
+        self.backgroundImage = backgroundImage
+    }
+}
+
 public struct HolderBinding: Codable, Equatable, Sendable {
     public let method: IdentifierMethod
     public let publicIdentifier: String
@@ -102,6 +139,7 @@ public struct CredentialRecord: Codable, Equatable, Identifiable, Sendable {
     public let expiresAt: Date?
     public let createdAt: Date
     public let displayClaims: [CredentialDisplayClaim]
+    public let display: CredentialDisplayMetadata?
 
     public init(
         id: CredentialID = CredentialID(),
@@ -122,7 +160,8 @@ public struct CredentialRecord: Codable, Equatable, Identifiable, Sendable {
         issuedAt: Date? = nil,
         expiresAt: Date? = nil,
         createdAt: Date,
-        displayClaims: [CredentialDisplayClaim] = []
+        displayClaims: [CredentialDisplayClaim] = [],
+        display: CredentialDisplayMetadata? = nil
     ) {
         self.id = id
         self.configurationID = configurationID
@@ -143,5 +182,6 @@ public struct CredentialRecord: Codable, Equatable, Identifiable, Sendable {
         self.expiresAt = expiresAt
         self.createdAt = createdAt
         self.displayClaims = displayClaims
+        self.display = display
     }
 }

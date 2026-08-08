@@ -1,5 +1,6 @@
 import OariDesignSystem
 import SwiftUI
+import UIKit
 import WalletDomain
 
 struct WalletVaultView: View {
@@ -90,27 +91,72 @@ struct WalletVaultView: View {
 }
 
 private struct CredentialListRow: View {
+    @Environment(\.colorScheme) private var scheme
     let credential: CredentialRecord
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: credential.format == .mdoc ? "person.text.rectangle.fill" : "doc.text.fill")
-                .font(.title3).foregroundStyle(.tint)
-                .frame(width: 38, height: 38)
-                .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(credential.displayName).font(.body.weight(.semibold)).lineLimit(1)
-                Text(credential.issuerIdentifier).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        ZStack {
+            OariColor.safeColor(credential.display?.backgroundColor, fallback: OariColor.surface(scheme))
+            if let image = credential.display?.backgroundImage {
+                LocalCredentialImage(image: image, contentMode: .fill)
+                    .opacity(0.72)
+                LinearGradient(
+                    colors: [.black.opacity(0.08), .black.opacity(0.48)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
             }
-            Spacer(minLength: 6)
-            VStack(alignment: .trailing, spacing: 3) {
-                Text(statusText).font(.caption.weight(.medium)).foregroundStyle(statusColor)
-                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+            HStack(spacing: 12) {
+                credentialLogo(size: 42)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(credential.displayName).font(.body.weight(.semibold)).lineLimit(1)
+                    Text(credential.issuerIdentifier).font(.caption).opacity(0.78).lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                VStack(alignment: .trailing, spacing: 4) {
+                    Label(statusText, systemImage: statusIcon)
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(.ultraThinMaterial, in: Capsule())
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).opacity(0.7)
+                }
             }
+            .padding(12)
         }
-        .padding(.vertical, 5)
+        .foregroundStyle(cardTextColor)
+        .clipShape(RoundedRectangle(cornerRadius: OariRadius.large, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: OariRadius.large, style: .continuous)
+                .stroke(.white.opacity(scheme == .dark ? 0.12 : 0.22))
+        }
+        .padding(.vertical, 3)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(credential.displayName), \(statusText)")
         .accessibilityIdentifier("wallet.credential.row.\(credential.configurationID)")
+    }
+
+    @ViewBuilder
+    private func credentialLogo(size: CGFloat) -> some View {
+        if let logo = credential.display?.logo {
+            LocalCredentialImage(image: logo, contentMode: .fit)
+                .padding(7)
+                .frame(width: size, height: size)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .accessibilityLabel(logo.alternativeText ?? "Credential logo")
+        } else {
+            Image(systemName: credential.format == .mdoc ? "person.text.rectangle.fill" : "doc.text.fill")
+                .font(.title3)
+                .frame(width: size, height: size)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var cardTextColor: Color {
+        OariColor.safeColor(
+            credential.display?.textColor,
+            fallback: credential.display?.backgroundImage == nil ? OariColor.textPrimary(scheme) : .white
+        )
     }
 
     private var statusText: String {
@@ -121,11 +167,12 @@ private struct CredentialListRow: View {
         }
     }
 
-    private var statusColor: Color {
+    private var statusIcon: String {
         switch credential.issuerTrust {
-        case .trusted: .green
-        case .untrusted: .orange
-        default: .secondary
+        case .trusted: "checkmark.shield.fill"
+        case .untrusted: "exclamationmark.triangle.fill"
+        case .invalid: "xmark.octagon.fill"
+        default: "questionmark.diamond.fill"
         }
     }
 }
@@ -140,17 +187,9 @@ private struct CredentialDetailView: View {
         NavigationStack {
             List {
                 Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(credential.displayName).font(.title3.weight(.semibold))
-                        Text(credential.issuerIdentifier)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        HStack(spacing: 6) {
-                            OariBackendBadge(credential.backendID == "oari-workspace-w3c" ? "Workspace W3C" : "EUDI Wallet Kit")
-                            OariStatusBadge(credential.format.rawValue, kind: .indeterminate)
-                        }
-                    }
-                    .padding(.vertical, 4)
+                    CredentialHeroCard(credential: credential)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
                 }
                 Section("Status") {
                     detailRow("Current status", model.documentStatus(for: credential) ?? "Unavailable")
@@ -244,6 +283,115 @@ private struct CredentialDetailView: View {
         case let .failed(message):
             Label(message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red)
             Button("Dismiss") { model.dismissCredentialAction() }
+        }
+    }
+}
+
+private struct CredentialHeroCard: View {
+    @Environment(\.colorScheme) private var scheme
+    let credential: CredentialRecord
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            OariColor.safeColor(credential.display?.backgroundColor, fallback: OariColor.action.opacity(0.13))
+            if let background = credential.display?.backgroundImage {
+                LocalCredentialImage(image: background, contentMode: .fill)
+                LinearGradient(
+                    colors: [.black.opacity(0.02), .black.opacity(0.62)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+            VStack(alignment: .leading, spacing: OariSpacing.x3) {
+                HStack(alignment: .top) {
+                    logo
+                    Spacer()
+                    Label(statusLabel, systemImage: statusIcon)
+                        .font(.caption.weight(.bold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+                Spacer(minLength: 24)
+                Text(credential.displayName)
+                    .font(.title2.weight(.bold))
+                    .lineLimit(2)
+                Text(credential.issuerIdentifier)
+                    .font(.caption)
+                    .opacity(0.82)
+                    .lineLimit(2)
+                HStack(spacing: 6) {
+                    OariBackendBadge(credential.backendID == "oari-workspace-w3c" ? "Workspace W3C" : "EUDI Wallet Kit")
+                    Text(credential.format.rawValue)
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+            }
+            .padding(OariSpacing.x5)
+        }
+        .foregroundStyle(textColor)
+        .aspectRatio(1.58, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: OariRadius.extraLarge, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: OariRadius.extraLarge, style: .continuous)
+                .stroke(.white.opacity(scheme == .dark ? 0.12 : 0.25))
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(credential.displayName), issued by \(credential.issuerIdentifier), \(statusLabel)")
+    }
+
+    @ViewBuilder private var logo: some View {
+        if let image = credential.display?.logo {
+            LocalCredentialImage(image: image, contentMode: .fit)
+                .padding(9)
+                .frame(width: 58, height: 58)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+                .accessibilityLabel(image.alternativeText ?? "Credential logo")
+        } else {
+            Image(systemName: credential.format == .mdoc ? "person.text.rectangle.fill" : "doc.text.fill")
+                .font(.title2)
+                .frame(width: 58, height: 58)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+                .accessibilityHidden(true)
+        }
+    }
+
+    private var textColor: Color {
+        OariColor.safeColor(
+            credential.display?.textColor,
+            fallback: credential.display?.backgroundImage == nil ? OariColor.textPrimary(scheme) : .white
+        )
+    }
+
+    private var statusLabel: String {
+        switch credential.issuerTrust {
+        case .trusted: credential.status == .valid ? "Valid" : credential.status.rawValue
+        case .untrusted: "Development warning"
+        default: credential.status.rawValue
+        }
+    }
+
+    private var statusIcon: String {
+        switch credential.issuerTrust {
+        case .trusted: "checkmark.shield.fill"
+        case .untrusted: "exclamationmark.triangle.fill"
+        case .invalid: "xmark.octagon.fill"
+        default: "questionmark.diamond.fill"
+        }
+    }
+}
+
+private struct LocalCredentialImage: View {
+    let image: CredentialDisplayImage
+    let contentMode: ContentMode
+
+    var body: some View {
+        if let uiImage = UIImage(data: image.data) {
+            Image(uiImage: uiImage)
+                .resizable()
+                .aspectRatio(contentMode: contentMode)
         }
     }
 }

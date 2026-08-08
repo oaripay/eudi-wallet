@@ -98,11 +98,13 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
         var credentialIDs: [CredentialID] = []
         for credential in credentials {
             let record = CredentialRecord(
-                configurationID: credential.profileID,
+                configurationID: credential.configurationID,
                 backendID: "oari-workspace-w3c",
                 backendDocumentID: credential.id.uuidString,
-                displayName: "EBSI W3C Credential",
-                format: .jwtVC,
+                displayName: credential.displayName,
+                format: credential.representation == .dcSdJwt || credential.representation == .vcdm2SdJwt
+                    ? .sdJWTVC
+                    : .jwtVC,
                  profileID: credential.profileID,
                  issuerIdentifier: issuer,
                  cryptographicValidity: .valid,
@@ -110,7 +112,8 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
                 status: .notEvaluated,
                 legalClassification: .oariProvisional,
                  createdAt: Date(),
-                 displayClaims: credential.displayClaims
+                 displayClaims: credential.displayClaims,
+                 display: credential.display
             )
             try await metadata.saveMetadata(record)
             credentialIDs.append(record.id)

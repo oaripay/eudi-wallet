@@ -438,6 +438,7 @@ public struct EudiWalletDocumentSummary: Equatable, Sendable {
     public let status: String
     public let configurationID: String?
     public let issuerIdentifier: String?
+    public let display: CredentialDisplayMetadata?
 
     public init(
         id: String,
@@ -446,7 +447,8 @@ public struct EudiWalletDocumentSummary: Equatable, Sendable {
         format: String,
         status: String,
         configurationID: String? = nil,
-        issuerIdentifier: String? = nil
+        issuerIdentifier: String? = nil,
+        display: CredentialDisplayMetadata? = nil
     ) {
         self.id = id
         self.documentType = documentType
@@ -455,7 +457,17 @@ public struct EudiWalletDocumentSummary: Equatable, Sendable {
         self.status = status
         self.configurationID = configurationID
         self.issuerIdentifier = issuerIdentifier
+        self.display = display
     }
+}
+
+public struct EudiIssuanceOfferDisplay: Equatable, Sendable {
+    public let description: String?
+    public let backgroundColor: String?
+    public let textColor: String?
+    public let logoURL: URL?
+    public let logoAlternativeText: String?
+    public let backgroundImageURL: URL?
 }
 
 public struct EudiIssuanceOfferDocument: Equatable, Sendable {
@@ -463,12 +475,20 @@ public struct EudiIssuanceOfferDocument: Equatable, Sendable {
     public let documentType: String
     public let displayName: String
     public let supportedAlgorithms: [String]
+    public let display: EudiIssuanceOfferDisplay?
 
-    public init(configurationID: String, documentType: String, displayName: String, supportedAlgorithms: [String]) {
+    public init(
+        configurationID: String,
+        documentType: String,
+        displayName: String,
+        supportedAlgorithms: [String],
+        display: EudiIssuanceOfferDisplay? = nil
+    ) {
         self.configurationID = configurationID
         self.documentType = documentType
         self.displayName = displayName
         self.supportedAlgorithms = supportedAlgorithms
+        self.display = display
     }
 }
 
@@ -845,12 +865,16 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
         if operationalConfiguration != nil { try await reconcilePendingOperationsUnlocked() }
         let documents = try await wallet.loadAllDocuments() ?? []
         return documents.map {
+            let display = Self.storedDisplayMetadata(from: $0.metadata)
             return EudiWalletDocumentSummary(
                 id: $0.id,
                 documentType: $0.docType,
                 displayName: $0.displayName,
                 format: $0.docDataFormat.rawValue,
-                status: $0.status.rawValue
+                status: $0.status.rawValue,
+                configurationID: display?.configurationID,
+                issuerIdentifier: display?.issuerIdentifier,
+                display: display?.display
             )
         }
     }
@@ -995,7 +1019,8 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
                     configurationID: $0.credentialConfigurationIdentifier,
                     documentType: $0.docTypeOrVct ?? $0.credentialConfigurationIdentifier,
                     displayName: $0.displayName,
-                    supportedAlgorithms: $0.algValuesSupported
+                    supportedAlgorithms: $0.algValuesSupported,
+                    display: Self.offerDisplayMetadata(from: $0.credentialMetadata?.display)
                 )
             },
             transactionCode: model.txCodeSpec.map {
@@ -1101,7 +1126,8 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
                 format: document.docDataFormat.rawValue,
                 status: document.status.rawValue,
                 configurationID: configurationID,
-                issuerIdentifier: offer.model.issuerName
+                issuerIdentifier: offer.model.issuerName,
+                display: Self.storedDisplayMetadata(from: document.metadata)?.display
             )
         }
         recovery = WalletOperationRecovery(
@@ -1351,7 +1377,8 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
                     format: document.docDataFormat.rawValue,
                     status: document.status.rawValue,
                     configurationID: record.configurationID,
-                    issuerIdentifier: record.issuerIdentifier
+                    issuerIdentifier: record.issuerIdentifier,
+                    display: record.display
                 )
             ))
         }
@@ -1422,7 +1449,8 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
             format: resumed.docDataFormat.rawValue,
             status: resumed.status.rawValue,
             configurationID: existing.configurationID,
-            issuerIdentifier: pending.issuerName
+            issuerIdentifier: pending.issuerName,
+            display: Self.storedDisplayMetadata(from: resumed.metadata)?.display ?? existing.display
         )
         let repeatedPendingRequestURI: String?
         do {
@@ -1605,7 +1633,8 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
             format: result.docDataFormat.rawValue,
             status: result.status.rawValue,
             configurationID: existing.configurationID,
-            issuerIdentifier: issuerName
+            issuerIdentifier: issuerName,
+            display: Self.storedDisplayMetadata(from: result.metadata)?.display ?? existing.display
         )
         recovery = WalletOperationRecovery(
             id: recovery.id,
@@ -1927,6 +1956,125 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
         )
     }
 
+    private struct StoredDisplayResolution {
+        let configurationID: String
+        let issuerIdentifier: String
+        let display: CredentialDisplayMetadata?
+    }
+
+    private struct StoredDocMetadata: Decodable {
+        let credentialIssuerIdentifier: String
+        let configurationIdentifier: String
+        let display: [StoredDisplayMetadata]?
+    }
+
+    private struct StoredDisplayMetadata: Decodable {
+        let localeIdentifier: String?
+        let logo: StoredLogoMetadata?
+        let description: String?
+        let backgroundColor: String?
+        let textColor: String?
+        let backgroundImageURL: String?
+    }
+
+    private struct StoredLogoMetadata: Decodable {
+        let urlString: String?
+        let alternativeText: String?
+    }
+
+    private static func offerDisplayMetadata(
+        from displays: [Display]?
+    ) -> EudiIssuanceOfferDisplay? {
+        guard let display = preferredDisplay(displays, locale: { $0.locale?.identifier }) else {
+            return nil
+        }
+        return EudiIssuanceOfferDisplay(
+            description: display.description,
+            backgroundColor: display.backgroundColor,
+            textColor: display.textColor,
+            logoURL: display.logo?.uri,
+            logoAlternativeText: display.logo?.alternativeText,
+            backgroundImageURL: display.backgroundImage?.url
+        )
+    }
+
+    private static func storedDisplayMetadata(from data: Data?) -> StoredDisplayResolution? {
+        guard let data,
+              let metadata = try? JSONDecoder().decode(StoredDocMetadata.self, from: data) else {
+            return nil
+        }
+        let selected = preferredDisplay(metadata.display, locale: { $0.localeIdentifier })
+        let display = selected.map {
+            CredentialDisplayMetadata(
+                locale: $0.localeIdentifier,
+                description: $0.description,
+                backgroundColor: $0.backgroundColor,
+                textColor: $0.textColor,
+                logo: displayImage(from: $0.logo?.urlString, alternativeText: $0.logo?.alternativeText),
+                backgroundImage: displayImage(from: $0.backgroundImageURL)
+            )
+        }
+        return StoredDisplayResolution(
+            configurationID: metadata.configurationIdentifier,
+            issuerIdentifier: metadata.credentialIssuerIdentifier,
+            display: display
+        )
+    }
+
+    static func credentialDisplayMetadata(
+        fromWalletKitMetadata data: Data?
+    ) -> CredentialDisplayMetadata? {
+        storedDisplayMetadata(from: data)?.display
+    }
+
+    private static func preferredDisplay<T>(
+        _ displays: [T]?,
+        locale: (T) -> String?
+    ) -> T? {
+        guard let displays, !displays.isEmpty else { return nil }
+        let language = Locale.current.language.languageCode?.identifier
+        return displays.first {
+            guard let identifier = locale($0) else { return false }
+            return Locale(identifier: identifier).language.languageCode?.identifier == language
+        } ?? displays.first
+    }
+
+    private static func displayImage(
+        from source: String?,
+        alternativeText: String? = nil
+    ) -> CredentialDisplayImage? {
+        guard let source,
+              source.lowercased().hasPrefix("data:"),
+              let comma = source.firstIndex(of: ",") else { return nil }
+        let metadata = source[source.index(source.startIndex, offsetBy: 5)..<comma]
+            .lowercased()
+        guard metadata.split(separator: ";").contains("base64") else { return nil }
+        let payload = String(source[source.index(after: comma)...])
+        guard payload.utf8.count <= 1_398_104,
+              let data = Data(base64Encoded: payload),
+              !data.isEmpty,
+              data.count <= 1_048_576,
+              let mediaType = validatedImageMediaType(data) else { return nil }
+        return CredentialDisplayImage(
+            mediaType: mediaType,
+            data: data,
+            alternativeText: alternativeText
+        )
+    }
+
+    private static func validatedImageMediaType(_ data: Data) -> String? {
+        if data.starts(with: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) {
+            return "image/png"
+        }
+        if data.starts(with: [0xff, 0xd8, 0xff]) { return "image/jpeg" }
+        if data.count >= 12,
+           String(decoding: data.prefix(4), as: UTF8.self) == "RIFF",
+           String(decoding: data.dropFirst(8).prefix(4), as: UTF8.self) == "WEBP" {
+            return "image/webp"
+        }
+        return nil
+    }
+
     private func metadataRecord(
         summary: EudiWalletDocumentSummary,
         profileID: String,
@@ -1954,7 +2102,8 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
             cryptographicValidity: .valid,
             issuerTrust: .trusted,
             status: status,
-            createdAt: createdAt
+            createdAt: createdAt,
+            display: summary.display
         )
     }
 

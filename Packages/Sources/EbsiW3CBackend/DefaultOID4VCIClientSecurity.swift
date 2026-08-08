@@ -37,21 +37,26 @@ public actor DefaultOID4VCIClientSecurity: OID4VCIClientSecurity {
     public func dpopHeader(
         state: OID4VCIClientSecurityState,
         method: String,
-        targetURI: URL
+        targetURI: URL,
+        accessToken: String?
     ) async throws -> String {
         let key = try await keyProvider.publicKey(id: state.dpopKeyID)
         var jwk = try Self.publicJWK(key.x963Representation)
         jwk["use"] = "sig"
         jwk["alg"] = "ES256"
+        var payload: [String: Any] = [
+            "htm": method,
+            "htu": targetURI.absoluteString,
+            "iat": Int(Date().timeIntervalSince1970),
+            "jti": UUID().uuidString,
+        ]
+        if let accessToken {
+            payload["ath"] = Self.base64URL(Data(SHA256.hash(data: Data(accessToken.utf8))))
+        }
         return try await sign(
             keyID: state.dpopKeyID,
             header: ["alg": "ES256", "typ": "dpop+jwt", "jwk": jwk],
-            payload: [
-                "htm": method,
-                "htu": targetURI.absoluteString,
-                "iat": Int(Date().timeIntervalSince1970),
-                "jti": UUID().uuidString,
-            ]
+            payload: payload
         )
     }
 

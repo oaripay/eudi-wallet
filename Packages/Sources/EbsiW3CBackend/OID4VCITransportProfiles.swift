@@ -77,15 +77,17 @@ public struct OID4VCITransportContract: Equatable, Sendable {
         let path = issuerURL.path.lowercased()
         if path.contains("draft-13") || path.contains("draft-18") {
             let base = path.contains("draft-13") ? OID4VCITransportContract.draft13 : .draft18
+            let authenticationMethods = authorizationMetadata.tokenEndpointAuthenticationMethods ?? []
+            let supportsAnonymousAuthentication = authenticationMethods.contains("none")
+            let supportsClientAttestation = authenticationMethods.contains("attest_jwt_client_auth") &&
+                authorizationMetadata.clientAttestationAlgorithms?.contains("ES256") == true
             return OID4VCITransportContract(
                 profile: base.profile,
                 proofShape: base.proofShape,
                 credentialIdentifierField: base.credentialIdentifierField,
                 responseEnvelopes: base.responseEnvelopes,
-                requiresDPoP: false,
-                requiresClientAttestation:
-                    authorizationMetadata.clientAttestationAlgorithms?.isEmpty == false &&
-                    authorizationMetadata.tokenEndpointAuthenticationMethods?.contains("none") == false,
+                requiresDPoP: authorizationMetadata.dpopSigningAlgorithms?.contains("ES256") == true,
+                requiresClientAttestation: supportsClientAttestation && !supportsAnonymousAuthentication,
                 requiresCredentialResponseEncryption: true,
                 supportsDeferredIssuance: true,
                 supportsBatchIssuance: true
@@ -98,7 +100,8 @@ public struct OID4VCITransportContract: Equatable, Sendable {
             responseEnvelopes: [.jsonCredential, .jsonCredentials, .encryptedJWT, .deferredTransaction],
             requiresDPoP: false,
             requiresClientAttestation:
-                authorizationMetadata.clientAttestationAlgorithms?.isEmpty == false &&
+                authorizationMetadata.clientAttestationAlgorithms?.contains("ES256") == true &&
+                authorizationMetadata.tokenEndpointAuthenticationMethods?.contains("attest_jwt_client_auth") == true &&
                 authorizationMetadata.tokenEndpointAuthenticationMethods?.contains("none") == false,
             requiresCredentialResponseEncryption: false,
             supportsDeferredIssuance: true,

@@ -55,9 +55,12 @@ public struct WorkspaceResolvedOffer: Equatable, Identifiable, Sendable {
 public struct WorkspaceCredentialDisplay: Codable, Equatable, Sendable {
     public let name: String
     public let locale: String?
+    public let description: String?
     public let backgroundColor: String?
     public let textColor: String?
     public let logoURL: URL?
+    public let logoAlternativeText: String?
+    public let backgroundImageURL: URL?
     public let claims: [WorkspaceCredentialClaim]
 }
 
@@ -100,9 +103,12 @@ public struct WorkspacePresentationChallenge: Equatable, Identifiable, Sendable 
 
 public struct WorkspaceIssuedCredential: Equatable, Sendable {
     public let id: UUID
+    public let configurationID: String
+    public let displayName: String
     public let profileID: String
     public let representation: EbsiCredentialRepresentation
     public let displayClaims: [CredentialDisplayClaim]
+    public let display: CredentialDisplayMetadata?
 }
 
 public enum WorkspaceBackendError: Error, Equatable, Sendable {
@@ -396,7 +402,8 @@ public actor OariWorkspaceW3CBackend {
             issuerURL: transaction.issuer,
             authorizationMetadata: OID4VCIAuthorizationMetadata(
                 dpopSigningAlgorithms: authMetadata.dpopSigningAlgorithms,
-                clientAttestationAlgorithms: authMetadata.clientAttestationAlgorithms
+                clientAttestationAlgorithms: authMetadata.clientAttestationAlgorithms,
+                tokenEndpointAuthenticationMethods: authMetadata.tokenEndpointAuthenticationMethods
             )
         )
         let securityState: OID4VCIClientSecurityState?
@@ -417,17 +424,19 @@ public actor OariWorkspaceW3CBackend {
                 tokenHeaders["DPoP"] = try await clientSecurity.dpopHeader(
                     state: securityState,
                     method: "POST",
-                    targetURI: tokenEndpoint
+                    targetURI: tokenEndpoint,
+                    accessToken: nil
                 )
             }
             if transportContract.requiresClientAttestation {
-                tokenHeaders.merge(
-                    try await clientSecurity.clientAttestationHeaders(
-                        state: securityState,
-                        audience: tokenEndpoint
-                    ),
-                    uniquingKeysWith: { _, new in new }
+                let attestationHeaders = try await clientSecurity.clientAttestationHeaders(
+                    state: securityState,
+                    audience: tokenEndpoint
                 )
+                guard !attestationHeaders.isEmpty else {
+                    throw WorkspaceBackendError.clientSecurityUnavailable
+                }
+                tokenHeaders.merge(attestationHeaders, uniquingKeysWith: { _, new in new })
             }
         }
         let tokenResponse = try await successfulRequest(
@@ -455,6 +464,13 @@ public actor OariWorkspaceW3CBackend {
             ? transaction.configurationIDs
             : authorizedConfigurationIDs
         for configurationID in configurationIDs {
+            let display = await offlineDisplayMetadata(
+                transaction.issuerMetadata.credentialConfigurations[configurationID]?.display
+            )
+            let authorizationDetail = token.authorizationDetails?.first {
+                $0.credentialConfigurationID == configurationID
+            }
+            let credentialIdentifier = authorizationDetail?.credentialIdentifiers?.first ?? configurationID
             let proof = try await proofJWT(
                 key: key,
                 kid: method,
@@ -482,9 +498,11 @@ public actor OariWorkspaceW3CBackend {
             let request = CredentialRequest(
                 credentialConfigurationId: transportContract.credentialIdentifierField == .credentialConfigurationID ? configurationID : nil,
                 credentialIdentifier: transportContract.credentialIdentifierField == .credentialIdentifier
-                    ? token.authorizationDetails?.first?.credentialIdentifiers?.first
+                    ? credentialIdentifier
                     : nil,
-                format: transaction.issuerMetadata.credentialConfigurations[configurationID]?.format,
+                format: transportContract.credentialIdentifierField == .credentialIdentifier
+                    ? nil
+                    : transaction.issuerMetadata.credentialConfigurations[configurationID]?.format,
                 proof: transportContract.proofShape == .draftProof
                     ? ProofValue(proofType: "jwt", jwt: proof)
                     : nil,
@@ -506,7 +524,8 @@ public actor OariWorkspaceW3CBackend {
                 credentialHeaders["DPoP"] = try await clientSecurity.dpopHeader(
                     state: securityState,
                     method: "POST",
-                    targetURI: credentialEndpoint
+                    targetURI: credentialEndpoint,
+                    accessToken: token.accessToken
                 )
                 credentialHeaders["Authorization"] = "DPoP \(token.accessToken)"
             }
@@ -550,12 +569,16 @@ public actor OariWorkspaceW3CBackend {
                 try await credentialStore.save(stored)
                 results.append(WorkspaceIssuedCredential(
                     id: stored.id,
+                    configurationID: configurationID,
+                    displayName: transaction.issuerMetadata.credentialConfigurations[configurationID]?.display.name
+                        ?? "Credential",
                     profileID: stored.profileID,
                     representation: stored.representation,
                     displayClaims: Self.displayClaims(
                         raw: String(decoding: raw, as: UTF8.self),
                         profile: selectedProfile
-                    )
+                    ),
+                    display: display
                 ))
             }
             if let notificationID = credentials.notificationID,
@@ -694,11 +717,13 @@ public actor OariWorkspaceW3CBackend {
         audience: String,
         nonce: String?
     ) async throws -> String {
+        let issuedAt = Int(now().timeIntervalSince1970)
         let header = try Self.base64JSON(["alg": "ES256", "kid": kid, "typ": "openid4vci-proof+jwt"])
         var payload: [String: Any] = [
             "iss": issuer,
             "aud": audience,
-            "iat": Int(now().timeIntervalSince1970),
+            "iat": issuedAt,
+            "exp": issuedAt + 300,
         ]
         if let nonce { payload["nonce"] = nonce }
         let encodedPayload = try Self.base64JSON(payload)
@@ -720,6 +745,71 @@ public actor OariWorkspaceW3CBackend {
             body: nil,
             allowedOrigins: allowedOrigins
         )
+    }
+
+    private func offlineDisplayMetadata(
+        _ display: WorkspaceCredentialDisplay?
+    ) async -> CredentialDisplayMetadata? {
+        guard let display else { return nil }
+        async let logo = downloadDisplayImage(
+            display.logoURL,
+            alternativeText: display.logoAlternativeText
+        )
+        async let background = downloadDisplayImage(display.backgroundImageURL)
+        let images = await (logo, background)
+        return CredentialDisplayMetadata(
+            locale: display.locale,
+            description: display.description,
+            backgroundColor: display.backgroundColor,
+            textColor: display.textColor,
+            logo: images.0,
+            backgroundImage: images.1
+        )
+    }
+
+    private func downloadDisplayImage(
+        _ url: URL?,
+        alternativeText: String? = nil
+    ) async -> CredentialDisplayImage? {
+        guard let url else { return nil }
+        do {
+            try Self.validateHTTPS(url)
+            let response = try await transport.send(url: url, method: "GET", headers: [:], body: nil)
+            guard (200..<300).contains(response.statusCode),
+                  !response.body.isEmpty,
+                  response.body.count <= 1_048_576,
+                  let mediaType = Self.validatedImageMediaType(
+                      response.headers.first { $0.key.caseInsensitiveCompare("Content-Type") == .orderedSame }?.value,
+                      data: response.body
+                  ) else { return nil }
+            return CredentialDisplayImage(
+                mediaType: mediaType,
+                data: response.body,
+                alternativeText: alternativeText
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    private static func validatedImageMediaType(_ contentType: String?, data: Data) -> String? {
+        let declared = contentType?.split(separator: ";", maxSplits: 1).first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let detected: String?
+        if data.starts(with: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) {
+            detected = "image/png"
+        } else if data.starts(with: [0xff, 0xd8, 0xff]) {
+            detected = "image/jpeg"
+        } else if data.count >= 12,
+                  String(decoding: data.prefix(4), as: UTF8.self) == "RIFF",
+                  String(decoding: data.dropFirst(8).prefix(4), as: UTF8.self) == "WEBP" {
+            detected = "image/webp"
+        } else {
+            detected = nil
+        }
+        guard let detected, declared == nil || declared == detected else { return nil }
+        return detected
     }
 
     private func successfulRequest(
@@ -934,9 +1024,12 @@ private struct SupportedConfiguration: Decodable {
         return WorkspaceCredentialDisplay(
             name: display?.name ?? "Credential",
             locale: display?.locale,
+            description: display?.description,
             backgroundColor: display?.backgroundColor,
             textColor: display?.textColor,
             logoURL: display?.logo.flatMap { URL(string: $0.url) },
+            logoAlternativeText: display?.logo?.alternativeText,
+            backgroundImageURL: display?.backgroundImage.flatMap { URL(string: $0.url) },
             claims: directClaims?.map { key, value in
                 WorkspaceCredentialClaim(
                     id: key,
@@ -970,17 +1063,20 @@ private struct CredentialMetadata: Decodable {
 }
 
 private struct CredentialDisplay: Decodable {
-    let name: String
+    let name: String?
     let locale: String?
+    let description: String?
     let backgroundColor: String?
     let textColor: String?
     let logo: Logo?
+    let backgroundImage: DisplayImage?
 
     enum CodingKeys: String, CodingKey {
-        case name, locale
+        case name, locale, description
         case backgroundColor = "background_color"
         case textColor = "text_color"
         case logo
+        case backgroundImage = "background_image"
     }
 }
 
@@ -990,6 +1086,18 @@ private struct ClaimDefinition: Decodable {
 }
 
 private struct Logo: Decodable {
+    let url: String
+    let alternativeText: String?
+    enum CodingKeys: String, CodingKey { case url, uri, alternativeText = "alt_text" }
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        url = try values.decodeIfPresent(String.self, forKey: .url)
+            ?? values.decode(String.self, forKey: .uri)
+        alternativeText = try values.decodeIfPresent(String.self, forKey: .alternativeText)
+    }
+}
+
+private struct DisplayImage: Decodable {
     let url: String
     enum CodingKeys: String, CodingKey { case url, uri }
     init(from decoder: any Decoder) throws {
@@ -1003,10 +1111,12 @@ private struct AuthorizationMetadata: Decodable {
     let tokenEndpoint: String
     let dpopSigningAlgorithms: [String]?
     let clientAttestationAlgorithms: [String]?
+    let tokenEndpointAuthenticationMethods: [String]?
     enum CodingKeys: String, CodingKey {
         case tokenEndpoint = "token_endpoint"
         case dpopSigningAlgorithms = "dpop_signing_alg_values_supported"
         case clientAttestationAlgorithms = "client_attestation_signing_alg_values_supported"
+        case tokenEndpointAuthenticationMethods = "token_endpoint_auth_methods_supported"
     }
 }
 
@@ -1031,10 +1141,12 @@ private struct TokenResponse: Decodable {
         }
     }
     let accessToken: String
+    let tokenType: String?
     let nonce: String?
     let authorizationDetails: [AuthorizationDetail]?
     enum CodingKeys: String, CodingKey {
         case accessToken = "access_token"
+        case tokenType = "token_type"
         case nonce = "c_nonce"
         case authorizationDetails = "authorization_details"
     }

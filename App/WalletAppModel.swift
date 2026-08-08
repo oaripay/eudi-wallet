@@ -362,6 +362,7 @@ final class WalletAppModel: ObservableObject {
                 transactionCode: transactionCode.isEmpty ? nil : transactionCode,
                 promptMessage: "Authenticate to add this credential to OARI Wallet"
             )
+            try await refreshWalletState()
             if let pending = result.pendingIssuances.first {
                 activePendingIssuanceID = pending.id
                 activePendingIssuance = pending
@@ -406,6 +407,7 @@ final class WalletAppModel: ObservableObject {
             )
             switch completion {
             case let .issuance(result):
+                try await refreshWalletState()
                 if let pending = result.pendingIssuances.first {
                     activePendingIssuanceID = pending.id
                     activePendingIssuance = pending
@@ -431,6 +433,7 @@ final class WalletAppModel: ObservableObject {
                     return
                 }
                 let result = try await ebsiWallet.completeAuthorization(id: id, code: code)
+                try await refreshWalletState()
                 activeEbsiInteractionID = nil
                 activeEbsiInteraction = nil
                 activeEbsiChallenge = nil

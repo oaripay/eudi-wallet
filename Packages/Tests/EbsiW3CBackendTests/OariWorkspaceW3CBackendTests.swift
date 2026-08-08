@@ -7,6 +7,55 @@ import TrustDomain
 import WalletDomain
 
 struct OariWorkspaceW3CBackendTests {
+    @Test("Draft 13 issuance uses DPoP, identifier-only request and encrypted response")
+    func draft13Issuance() async throws {
+        let transport = Draft13WorkspaceTransport()
+        let security = RecordingOID4VCIClientSecurity()
+        let store = FixtureCredentialStore()
+        let backend = OariWorkspaceW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(),
+            credentialStore: store,
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .vcdm2SdJWT(),
+            clientSecurity: security,
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }
+        )
+        let offerJSON = #"{"credential_issuer":"https://issuer.example/service/draft-13","credential_configuration_ids":["pid-config"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":"pre-code","tx_code":{"input_mode":"numeric","length":4}}}}"#
+        let encoded = offerJSON.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
+        let offer = try await backend.resolveOffer("openid-credential-offer://?credential_offer=\(encoded)")
+        let issued = try await backend.issue(id: offer.id, allowUntrusted: false, transactionCode: "1234")
+
+        #expect(issued.count == 1)
+        #expect(try await store.credentials().count == 1)
+        let requests = await transport.requests
+        let token = try #require(requests.first { $0.url.path.hasSuffix("/token") })
+        #expect(token.headers["DPoP"] == "dpop-token")
+        #expect(token.headers["OAuth-Client-Attestation"] == nil)
+        let credential = try #require(requests.first { $0.url.path.hasSuffix("/credential") })
+        #expect(credential.headers["Authorization"] == "DPoP access-token")
+        #expect(credential.headers["DPoP"] == "dpop-access-token")
+        let credentialBody = try #require(credential.body)
+        let body = try #require(
+            JSONSerialization.jsonObject(with: credentialBody) as? [String: Any]
+        )
+        #expect(body["credential_identifier"] as? String == "authorized-pid")
+        #expect(body["credential_configuration_id"] == nil)
+        #expect(body["format"] == nil)
+        #expect(body["proofs"] == nil)
+        let proof = try #require(body["proof"] as? [String: Any])
+        #expect(proof["proof_type"] as? String == "jwt")
+        let proofPayload = try Self.jwtPayload(try #require(proof["jwt"] as? String))
+        #expect(proofPayload["iat"] as? Int == 1_800_000_000)
+        #expect(proofPayload["exp"] as? Int == 1_800_000_300)
+        #expect(proofPayload["nonce"] as? String == "credential-nonce")
+        #expect(body["credential_response_encryption"] != nil)
+        #expect(await security.dpopAccessTokens == [nil, "access-token"])
+        #expect(await security.decryptionCalls == 1)
+        #expect(requests.contains { $0.url.path.hasSuffix("/notification") && $0.method == "POST" })
+    }
+
     @Test("Pre-authorized offer requires warning, signs proof, validates and stores credential")
     func preauthorizedIssuance() async throws {
         let transport = FixtureWorkspaceTransport()
@@ -46,6 +95,13 @@ struct OariWorkspaceW3CBackendTests {
             transactionCode: "123456"
         )
         #expect(issued.count == 1)
+        #expect(issued.first?.configurationID == "oari-v2")
+        #expect(issued.first?.displayName == "OARI Legal Person ID")
+        #expect(issued.first?.display?.backgroundColor == "#003366")
+        #expect(issued.first?.display?.textColor == "#ffffff")
+        #expect(issued.first?.display?.logo?.alternativeText == "OARI mark")
+        #expect(issued.first?.display?.logo?.data == FixtureWorkspaceTransport.png)
+        #expect(issued.first?.display?.backgroundImage?.data == FixtureWorkspaceTransport.png)
         #expect(try await store.credentials().count == 1)
         #expect(await validator.calls == 1)
         let requests = await transport.requests
@@ -95,19 +151,33 @@ struct OariWorkspaceW3CBackendTests {
         #expect(try await backend.submitPresentation(id: offer.id, vpToken: "valid.pid.vp") == "auth-code")
         #expect(try await backend.issue(id: offer.id, allowUntrusted: false, transactionCode: nil).count == 1)
     }
+
+    private static func jwtPayload(_ compact: String) throws -> [String: Any] {
+        let parts = compact.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { throw WorkspaceBackendError.invalidResponse }
+        var base64 = String(parts[1]).replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+        let data = try #require(Data(base64Encoded: base64))
+        return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
 }
 
 private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
-    struct Request: Sendable { let url: URL; let method: String; let body: Data? }
+    static let png = Data([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+        0x00, 0x00, 0x00, 0x00,
+    ])
+    struct Request: Sendable { let url: URL; let method: String; let headers: [String: String]; let body: Data? }
     private(set) var requests: [Request] = []
     func send(url: URL, method: String, headers: [String: String], body: Data?) async throws -> WorkspaceHTTPResponse {
-        requests.append(Request(url: url, method: method, body: body))
+        requests.append(Request(url: url, method: method, headers: headers, body: body))
         let response: String
         switch url.path {
         case "/offer":
             response = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["oari-v2"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":"pre-code","tx_code":{"input_mode":"numeric","length":6}}}}"#
         case "/.well-known/openid-credential-issuer":
-            response = #"{"credential_endpoint":"https://issuer.example/credential","authorization_servers":["https://issuer.example"]}"#
+            response = ##"{"credential_endpoint":"https://issuer.example/credential","authorization_servers":["https://issuer.example"],"credential_configurations_supported":{"oari-v2":{"format":"application/vc+jwt","display":[{"name":"OARI Legal Person ID","locale":"en","description":"Legal person credential","background_color":"#003366","text_color":"#ffffff","logo":{"uri":"https://assets.example/logo.png","alt_text":"OARI mark"},"background_image":{"uri":"https://assets.example/background.png"}}]}}}"##
         case "/.well-known/oauth-authorization-server":
             response = #"{"token_endpoint":"https://issuer.example/token"}"#
         case "/token":
@@ -119,9 +189,96 @@ private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
             response = #"{"authorization_code":"auth-code","code":"auth-code"}"#
         case "/credential":
             response = #"{"credentials":[{"credential":"header.payload.signature"}]}"#
+        case "/logo.png", "/background.png":
+            return WorkspaceHTTPResponse(
+                statusCode: 200,
+                body: Self.png,
+                headers: ["Content-Type": "image/png"]
+            )
         default: throw WorkspaceBackendError.invalidResponse
         }
         return WorkspaceHTTPResponse(statusCode: 200, body: Data(response.utf8))
+    }
+}
+
+private actor Draft13WorkspaceTransport: WorkspaceHTTPTransport {
+    struct Request: Sendable {
+        let url: URL
+        let method: String
+        let headers: [String: String]
+        let body: Data?
+    }
+    private(set) var requests: [Request] = []
+
+    func send(url: URL, method: String, headers: [String: String], body: Data?) async throws -> WorkspaceHTTPResponse {
+        requests.append(Request(url: url, method: method, headers: headers, body: body))
+        let response: String
+        let statusCode: Int
+        if url.path.hasSuffix("/.well-known/openid-credential-issuer") {
+            response = #"{"credential_endpoint":"https://issuer.example/credential","authorization_servers":["https://issuer.example/service/draft-13"],"credential_configurations_supported":{"pid-config":{"format":"dc+sd-jwt"}},"notification_endpoint":"https://issuer.example/notification"}"#
+            statusCode = 200
+        } else if url.path.hasSuffix("/.well-known/oauth-authorization-server") {
+            response = #"{"token_endpoint":"https://issuer.example/token","token_endpoint_auth_methods_supported":["attest_jwt_client_auth","none"],"client_attestation_signing_alg_values_supported":["ES256"],"dpop_signing_alg_values_supported":["ES256"]}"#
+            statusCode = 200
+        } else if url.path.hasSuffix("/token") {
+            response = #"{"access_token":"access-token","token_type":"bearer","c_nonce":"credential-nonce","authorization_details":[{"type":"openid_credential","credential_configuration_id":"pid-config","credential_identifiers":["authorized-pid"]}]}"#
+            statusCode = 200
+        } else if url.path.hasSuffix("/credential") {
+            response = #"{"credentials":[{"credential":"eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJkaWQ6a2V5OnRlc3QifQ.signature~","format":"dc+sd-jwt"}],"notification_id":"notification-id"}"#
+            statusCode = 200
+        } else if url.path.hasSuffix("/notification") {
+            response = ""
+            statusCode = 204
+        } else {
+            throw WorkspaceBackendError.invalidResponse
+        }
+        return WorkspaceHTTPResponse(statusCode: statusCode, body: Data(response.utf8))
+    }
+}
+
+private actor RecordingOID4VCIClientSecurity: OID4VCIClientSecurity {
+    private(set) var dpopAccessTokens: [String?] = []
+    private(set) var decryptionCalls = 0
+
+    func state(for profile: OID4VCITransportProfile) async throws -> OID4VCIClientSecurityState {
+        OID4VCIClientSecurityState(
+            dpopKeyID: KeyID(),
+            clientAttestationKeyID: nil,
+            responseEncryptionKeyID: KeyID()
+        )
+    }
+
+    func dpopHeader(
+        state: OID4VCIClientSecurityState,
+        method: String,
+        targetURI: URL,
+        accessToken: String?
+    ) async throws -> String {
+        dpopAccessTokens.append(accessToken)
+        return accessToken == nil ? "dpop-token" : "dpop-access-token"
+    }
+
+    func clientAttestationHeaders(
+        state: OID4VCIClientSecurityState,
+        audience: URL
+    ) async throws -> [String: String] {
+        ["unexpected": "attestation"]
+    }
+
+    func responseEncryption(
+        state: OID4VCIClientSecurityState
+    ) async throws -> OID4VCIResponseEncryptionParameters {
+        OID4VCIResponseEncryptionParameters(
+            publicJWK: #"{"alg":"ECDH-ES","crv":"P-256","enc":"A128CBC-HS256","kty":"EC","use":"enc","x":"x","y":"y"}"#
+        )
+    }
+
+    func decryptCredentialResponse(
+        state: OID4VCIClientSecurityState,
+        compactJWE: Data
+    ) async throws -> Data {
+        decryptionCalls += 1
+        return compactJWE
     }
 }
 

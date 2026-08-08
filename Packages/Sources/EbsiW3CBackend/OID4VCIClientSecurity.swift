@@ -51,7 +51,8 @@ public protocol OID4VCIClientSecurity: Sendable {
     func dpopHeader(
         state: OID4VCIClientSecurityState,
         method: String,
-        targetURI: URL
+        targetURI: URL,
+        accessToken: String?
     ) async throws -> String
     func clientAttestationHeaders(
         state: OID4VCIClientSecurityState,

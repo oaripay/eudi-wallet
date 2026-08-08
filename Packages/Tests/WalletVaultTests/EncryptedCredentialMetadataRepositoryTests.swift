@@ -20,7 +20,16 @@ struct EncryptedCredentialMetadataRepositoryTests {
             format: .sdJWTVC,
             profileID: "test-profile",
             issuerIdentifier: "issuer-reference",
-            createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+            display: CredentialDisplayMetadata(
+                backgroundColor: "#003366",
+                textColor: "#ffffff",
+                logo: CredentialDisplayImage(
+                    mediaType: "image/png",
+                    data: Data([0x89, 0x50, 0x4e, 0x47, 0x01, 0x02]),
+                    alternativeText: "Issuer mark"
+                )
+            )
         )
 
         try await repository.saveMetadata(record)
@@ -32,6 +41,7 @@ struct EncryptedCredentialMetadataRepositoryTests {
             ).first
         ))
         #expect(!bytes.contains(Data("issuer-reference".utf8)))
+        #expect(!bytes.contains(Data([0x89, 0x50, 0x4e, 0x47, 0x01, 0x02])))
 
         let updated = CredentialRecord(
             id: record.id,
