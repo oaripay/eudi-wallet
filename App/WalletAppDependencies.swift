@@ -153,7 +153,9 @@ struct WalletAppDependencies: Sendable {
                             applicationTagPrefix: "io.oari.wallet.oid4vci.security"
                         )
                     ),
-                    transportProfileRegistry: .developmentDraftCompatibility
+                    transportProfileRegistry: .developmentDraftCompatibility,
+                    authorizationClientID: configuration.eudiConfiguration.clientID,
+                    authorizationRedirectURI: configuration.eudiConfiguration.authorizationRedirectURI
                 )
                 ebsiWallet = LiveWorkspaceEbsiWalletService(
                     backend: ebsiBackend,

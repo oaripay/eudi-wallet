@@ -228,6 +228,8 @@ public actor OariWorkspaceW3CBackend {
     private let profiles: [EbsiCredentialProfile]
     private let clientSecurity: (any OID4VCIClientSecurity)?
     private let transportProfileRegistry: OID4VCITransportProfileRegistry
+    private let authorizationClientID: String
+    private let authorizationRedirectURI: URL
     private let now: @Sendable () -> Date
     private var transactions: [UUID: Transaction] = [:]
     private var authorizationCodes: [UUID: String] = [:]
@@ -246,6 +248,8 @@ public actor OariWorkspaceW3CBackend {
         additionalProfiles: [EbsiCredentialProfile] = [],
         clientSecurity: (any OID4VCIClientSecurity)? = nil,
         transportProfileRegistry: OID4VCITransportProfileRegistry = .finalOnly,
+        authorizationClientID: String = "oari-development-wallet",
+        authorizationRedirectURI: URL = URL(string: "https://oari.io/oauth/callback")!,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.transport = transport
@@ -256,6 +260,8 @@ public actor OariWorkspaceW3CBackend {
         self.profiles = [profile] + additionalProfiles
         self.clientSecurity = clientSecurity
         self.transportProfileRegistry = transportProfileRegistry
+        self.authorizationClientID = authorizationClientID
+        self.authorizationRedirectURI = authorizationRedirectURI
         self.now = now
     }
 
@@ -358,7 +364,6 @@ public actor OariWorkspaceW3CBackend {
         allowUntrusted: Bool,
         interactionTypes: [String] = [
             "urn:openid:dcp:ia:openid4vp_presentation",
-            "openid4vp_presentation",
         ]
     ) async throws -> WorkspacePresentationChallenge {
         guard let transaction = transactions[id],
@@ -371,7 +376,21 @@ public actor OariWorkspaceW3CBackend {
         let requestMethod: String
         let requestURL: URL
         let requestBody: Data?
-        if let publishedEndpoint = transaction.issuerMetadata.interactiveAuthorizationEndpoint,
+        let authorizationServer = URL(
+            string: transaction.issuerMetadata.authorizationServers?.first ?? transaction.issuer.absoluteString
+        ) ?? transaction.issuer
+        let metadataURL = try Self.wellKnownURL(
+            name: "oauth-authorization-server",
+            issuer: authorizationServer
+        )
+        let metadata = try await discoverMetadata(
+            AuthorizationMetadata.self,
+            name: "oauth-authorization-server",
+            issuer: authorizationServer,
+            standardURL: metadataURL,
+            stage: "authorization server metadata"
+        )
+        if let publishedEndpoint = metadata.authorizationChallengeEndpoint,
            let url = URL(string: publishedEndpoint),
            try Self.origin(of: url) == Self.origin(of: transaction.issuer) {
             endpoint = url
@@ -384,21 +403,20 @@ public actor OariWorkspaceW3CBackend {
                 endpoint: endpoint,
                 configurationIDs: transaction.configurationIDs
             )
+        } else if let publishedEndpoint = transaction.issuerMetadata.interactiveAuthorizationEndpoint,
+                  let url = URL(string: publishedEndpoint),
+                  try Self.origin(of: url) == Self.origin(of: transaction.issuer) {
+            endpoint = url
+            requestMethod = "POST"
+            requestURL = endpoint
+            requestBody = try interactiveAuthorizationRequestBody(
+                id: id,
+                issuerState: issuerState,
+                interactionTypes: interactionTypes,
+                endpoint: endpoint,
+                configurationIDs: transaction.configurationIDs
+            )
         } else {
-            let authorizationServer = URL(
-                string: transaction.issuerMetadata.authorizationServers?.first ?? transaction.issuer.absoluteString
-            ) ?? transaction.issuer
-            let metadataURL = try Self.wellKnownURL(
-                name: "oauth-authorization-server",
-                issuer: authorizationServer
-            )
-            let metadata = try await discoverMetadata(
-                AuthorizationMetadata.self,
-                name: "oauth-authorization-server",
-                issuer: authorizationServer,
-                standardURL: metadataURL,
-                stage: "authorization server metadata"
-            )
             if let value = metadata.authorizationEndpoint,
                let url = URL(string: value),
                try Self.origin(of: url) == Self.origin(of: transaction.issuer) {
@@ -456,6 +474,15 @@ public actor OariWorkspaceW3CBackend {
             from: data,
             stage: "presentation challenge"
         )
+        let expectedInteractionType = "urn:openid:dcp:ia:openid4vp_presentation"
+        guard response.interactionTypeRequired == expectedInteractionType,
+              interactionTypes.contains(expectedInteractionType),
+              let authSession = response.authSession,
+              !authSession.isEmpty else {
+            throw WorkspaceBackendError.invalidPresentationChallenge(
+                reason: "response did not contain the requested interaction type and auth_session"
+            )
+        }
         guard let request = response.openid4vpRequest else {
             throw WorkspaceBackendError.invalidPresentationChallenge(
                 reason: "response did not contain openid4vp_request"
@@ -469,11 +496,18 @@ public actor OariWorkspaceW3CBackend {
                 reason: "request did not contain response_mode, nonce, and dcql_query"
             )
         }
+        guard responseMode == "ia_post" else {
+            throw WorkspaceBackendError.invalidPresentationChallenge(
+                reason: responseMode == "ia_post.jwt"
+                    ? "encrypted ia_post.jwt is not implemented"
+                    : "unsupported response_mode \(responseMode)"
+            )
+        }
         let challenge = WorkspacePresentationChallenge(
             id: id,
             authorizationEndpoint: endpoint,
-            authSession: response.authSession,
-            interactionType: response.interactionTypeRequired ?? "openid4vp_presentation",
+            authSession: authSession,
+            interactionType: expectedInteractionType,
             responseMode: responseMode,
             responseURI: (request.responseURI ?? request.requestObject?.responseURI ?? signedClaims?.responseURI).flatMap(URL.init(string:)),
             nonce: nonce,
@@ -561,13 +595,11 @@ public actor OariWorkspaceW3CBackend {
               let keyUUID = UUID(uuidString: prepared.credential.holderKeyReference) else {
             throw WorkspaceBackendError.invalidPresentationResponse
         }
-        let audience = challenge.clientID?.hasPrefix("redirect_uri:") == true
-            ? String(challenge.clientID!.dropFirst("redirect_uri:".count))
-            : (challenge.clientID ?? challenge.authorizationEndpoint.absoluteString)
         let keyID = KeyID(rawValue: keyUUID)
         let presentation: String
         switch prepared.kind {
         case let .sdJWT(issuerJWT, disclosures):
+            let audience = "ia:\(try Self.origin(of: challenge.authorizationEndpoint))"
             let selectedDisclosures = disclosures.keys.sorted().compactMap {
                 selectedClaimIDs.contains($0) ? disclosures[$0] : nil
             }
@@ -583,26 +615,26 @@ public actor OariWorkspaceW3CBackend {
                 ]
             ))
         case let .jwtVC(compactCredential):
+            let audience = "ia:\(challenge.authorizationEndpoint.absoluteString)"
             let publicKey = try await keyProvider.publicKey(id: keyID)
             let holder = try KeyDIDResolver().derive(publicKeyX963: publicKey.x963Representation)
+            let issuedAt = Int(now().timeIntervalSince1970)
             presentation = try await signedPresentationJWT(
                 keyID: keyID,
-                type: "vp-ld+jwt",
+                type: "JWT",
                 payload: [
                     "iss": holder,
+                    "jti": "urn:uuid:\(UUID().uuidString.lowercased())",
                     "aud": audience,
                     "nonce": challenge.nonce,
-                    "iat": Int(now().timeIntervalSince1970),
-                    "exp": Int(now().timeIntervalSince1970) + 300,
+                    "nbf": issuedAt,
+                    "iat": issuedAt,
+                    "exp": issuedAt + 300,
                     "vp": [
-                        "@context": ["https://www.w3.org/ns/credentials/v2"],
+                        "@context": ["https://www.w3.org/2018/credentials/v1"],
                         "type": ["VerifiablePresentation"],
                         "holder": holder,
-                        "verifiableCredential": [[
-                            "@context": "https://www.w3.org/ns/credentials/v2",
-                            "id": "data:application/vc+jwt,\(compactCredential)",
-                            "type": "EnvelopedVerifiableCredential",
-                        ]],
+                        "verifiableCredential": [compactCredential],
                     ],
                 ]
             )
@@ -620,10 +652,12 @@ public actor OariWorkspaceW3CBackend {
               trustConsents.contains(id) else {
             throw WorkspaceBackendError.unknownTransaction
         }
-        var fields: [String: String?] = ["state": challenge.state]
+        var fields: [String: String?] = [:]
         if challenge.responseMode == "direct_post" {
+            fields["state"] = challenge.state
             fields["vp_token"] = vpToken
         } else if challenge.responseMode == "iar-post" {
+            fields["state"] = challenge.state
             fields["auth_session"] = challenge.authSession
             if case let .authorizationCode(issuerState) = transaction.grant {
                 fields["issuer_state"] = issuerState
@@ -642,13 +676,23 @@ public actor OariWorkspaceW3CBackend {
             )
             fields["authorization_details"] = String(decoding: authorizationDetails, as: UTF8.self)
             fields["openid4vp_presentation"] = vpToken
-        } else {
+        } else if challenge.responseMode == "ia_post" {
             fields["auth_session"] = challenge.authSession
             guard let tokenObject = try JSONSerialization.jsonObject(with: Data(vpToken.utf8)) as? [String: Any] else {
                 throw WorkspaceBackendError.invalidPresentationResponse
             }
-            let wrapped = try JSONSerialization.data(withJSONObject: ["vp_token": tokenObject])
+            var responseObject: [String: Any] = ["vp_token": tokenObject]
+            if let state = challenge.state { responseObject["state"] = state }
+            let wrapped = try JSONSerialization.data(withJSONObject: responseObject)
             fields["openid4vp_response"] = String(decoding: wrapped, as: UTF8.self)
+        } else if challenge.responseMode == "ia_post.jwt" {
+            throw WorkspaceBackendError.invalidPresentationChallenge(
+                reason: "encrypted ia_post.jwt response generation is not implemented"
+            )
+        } else {
+            throw WorkspaceBackendError.invalidPresentationChallenge(
+                reason: "unsupported response_mode \(challenge.responseMode)"
+            )
         }
         let responseEndpoint = challenge.responseURI ?? challenge.authorizationEndpoint
         let response: Data
@@ -718,6 +762,8 @@ public actor OariWorkspaceW3CBackend {
                 "grant_type": "authorization_code",
                 "code": code,
                 "code_verifier": authorizationCodeVerifiers[id],
+                "client_id": authorizationClientID,
+                "redirect_uri": authorizationRedirectURI.absoluteString,
             ]
         }
         let issuerMetadata = transaction.issuerMetadata
@@ -1488,7 +1534,8 @@ public actor OariWorkspaceW3CBackend {
             "issuer_state": issuerState,
             "interaction_types_supported": interactionTypes.joined(separator: ","),
             "response_type": "code",
-            "client_id": "redirect_uri:\(endpoint.absoluteString)",
+            "client_id": authorizationClientID,
+            "redirect_uri": authorizationRedirectURI.absoluteString,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
             "authorization_details": String(decoding: authorizationDetails, as: UTF8.self),
@@ -2013,12 +2060,14 @@ private struct DisplayImage: Decodable {
 private struct AuthorizationMetadata: Decodable {
     let tokenEndpoint: String
     let authorizationEndpoint: String?
+    let authorizationChallengeEndpoint: String?
     let dpopSigningAlgorithms: [String]?
     let clientAttestationAlgorithms: [String]?
     let tokenEndpointAuthenticationMethods: [String]?
     enum CodingKeys: String, CodingKey {
         case tokenEndpoint = "token_endpoint"
         case authorizationEndpoint = "authorization_endpoint"
+        case authorizationChallengeEndpoint = "authorization_challenge_endpoint"
         case dpopSigningAlgorithms = "dpop_signing_alg_values_supported"
         case clientAttestationAlgorithms = "client_attestation_signing_alg_values_supported"
         case tokenEndpointAuthenticationMethods = "token_endpoint_auth_methods_supported"

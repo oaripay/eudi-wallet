@@ -98,7 +98,7 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
             return .presentationRequired(try await backend.beginPresentationRequired(
                 id: id,
                 allowUntrusted: allowUntrusted,
-                interactionTypes: ["openid4vp_presentation"]
+                interactionTypes: ["urn:openid:dcp:ia:openid4vp_presentation"]
             ))
         }
         let credentials = try await backend.issue(

@@ -471,6 +471,17 @@ struct OariWorkspaceW3CBackendTests {
         )
         #expect(challenge.responseMode == "ia_post")
         #expect(challenge.dcqlQuery["credentials"] != nil)
+        let initial = try #require((await transport.requests).first { request in
+            request.url.path == "/authorize-challenge" &&
+                String(decoding: request.body ?? Data(), as: UTF8.self).contains("issuer_state=")
+        })
+        let initialBody = String(decoding: try #require(initial.body), as: UTF8.self)
+        let initialFields = Dictionary(uniqueKeysWithValues: try #require(
+            URLComponents(string: "?\(initialBody)")?.queryItems
+        ).compactMap { item in item.value.map { (item.name, $0) } })
+        #expect(initialFields["interaction_types_supported"] == "urn:openid:dcp:ia:openid4vp_presentation")
+        #expect(initialFields["client_id"] == "oari-development-wallet")
+        #expect(initialFields["redirect_uri"] == "https://oari.io/oauth/callback")
         #expect(try await backend.submitPresentation(
             id: offer.id,
             vpToken: #"{"pid":["valid.pid.vp"]}"#
@@ -487,6 +498,11 @@ struct OariWorkspaceW3CBackendTests {
         let response = try #require(JSONSerialization.jsonObject(with: Data(wrapped.utf8)) as? [String: Any])
         let vpToken = try #require(response["vp_token"] as? [String: [String]])
         #expect(vpToken == ["pid": ["valid.pid.vp"]])
+        #expect(response["state"] as? String == "vp-state")
+        #expect(fields["auth_session"] == "auth-session")
+        #expect(fields["vp_token"] == nil)
+        #expect(fields["openid4vp_presentation"] == nil)
+        #expect(Set(fields.keys) == ["auth_session", "openid4vp_response"])
         #expect(try await backend.issue(id: offer.id, allowUntrusted: false, transactionCode: nil).count == 1)
     }
 
@@ -634,11 +650,6 @@ struct OariWorkspaceW3CBackendTests {
         _ = try await backend.beginPresentationRequired(
             id: offer.id,
             allowUntrusted: false,
-            interactionTypes: ["openid4vp_presentation"]
-        )
-        _ = try await backend.beginPresentationRequired(
-            id: offer.id,
-            allowUntrusted: false,
             interactionTypes: ["urn:openid:dcp:ia:openid4vp_presentation"]
         )
         let request = try await backend.prepareStoredPIDPresentation(id: offer.id)
@@ -654,7 +665,7 @@ struct OariWorkspaceW3CBackendTests {
         let keyBinding = String(components[4])
         let keyBindingPayload = try Self.jwtPayload(keyBinding)
         #expect(keyBindingPayload["nonce"] as? String == "vp-nonce")
-        #expect(keyBindingPayload["aud"] as? String == "https://issuer.example/authorize-challenge")
+        #expect(keyBindingPayload["aud"] as? String == "ia:https://issuer.example")
         let withoutKeyBinding = components.dropLast().joined(separator: "~") + "~"
         let expectedHash = Data(SHA256.hash(data: Data(withoutKeyBinding.utf8))).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
@@ -718,8 +729,7 @@ struct OariWorkspaceW3CBackendTests {
         let offer = try await Self.authorizationOffer(backend)
         _ = try await backend.beginPresentationRequired(
             id: offer.id,
-            allowUntrusted: false,
-            interactionTypes: ["openid4vp_presentation"]
+            allowUntrusted: false
         )
         let request = try await backend.prepareStoredPIDPresentation(id: offer.id)
         let token = try await backend.storedPIDPresentationToken(
@@ -730,11 +740,11 @@ struct OariWorkspaceW3CBackendTests {
         let vpJWT = try #require(object["pid"]?.first)
         let payload = try Self.jwtPayload(vpJWT)
         #expect(payload["nonce"] as? String == "vp-nonce")
+        #expect(payload["aud"] as? String == "ia:https://issuer.example/authorize-challenge")
         let vp = try #require(payload["vp"] as? [String: Any])
-        #expect(vp["@context"] as? [String] == ["https://www.w3.org/ns/credentials/v2"])
-        let presentedCredentials = try #require(vp["verifiableCredential"] as? [[String: Any]])
-        #expect(presentedCredentials.first?["type"] as? String == "EnvelopedVerifiableCredential")
-        #expect(presentedCredentials.first?["id"] as? String == "data:application/vc+jwt,\(credential)")
+        #expect(vp["@context"] as? [String] == ["https://www.w3.org/2018/credentials/v1"])
+        let presentedCredentials = try #require(vp["verifiableCredential"] as? [String])
+        #expect(presentedCredentials == [credential])
     }
 
     @Test("Stored W3C credential deletion is idempotent")
@@ -1009,7 +1019,7 @@ private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
             {"credential_endpoint":"https://issuer.example/credential","authorization_servers":["https://issuer.example"],"credential_configurations_supported":{"oari-v2":{"format":"\(credentialFormat)","display":[{"name":"OARI Legal Person ID","locale":"en","description":"Legal person credential","background_color":"#003366","text_color":"#ffffff","logo":{"uri":"https://assets.example/logo.png","alt_text":"OARI mark"},"background_image":{"uri":"https://assets.example/background.png"}}]}}}
             """
         case "/.well-known/oauth-authorization-server":
-            response = #"{"token_endpoint":"https://issuer.example/token"}"#
+            response = #"{"authorization_challenge_endpoint":"https://issuer.example/authorize-challenge","token_endpoint":"https://issuer.example/token"}"#
         case "/token":
             response = #"{"access_token":"access","c_nonce":"nonce-1"}"#
         case "/authorize-challenge", "/authorize":
@@ -1030,7 +1040,7 @@ private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
                 return WorkspaceHTTPResponse(
                     statusCode: 403,
                     body: Data("""
-                    {"error":"insufficient_authorization","interaction_type_required":"urn:openid:dcp:ia:openid4vp_presentation","auth_session":"auth-session","openid4vp_request":{"response_type":"vp_token","response_mode":"ia_post","nonce":"vp-nonce","dcql_query":{"credentials":[\(query)]}}}
+                    {"error":"insufficient_authorization","interaction_type_required":"urn:openid:dcp:ia:openid4vp_presentation","auth_session":"auth-session","openid4vp_request":{"response_type":"vp_token","response_mode":"ia_post","nonce":"vp-nonce","state":"vp-state","dcql_query":{"credentials":[\(query)]}}}
                     """.utf8)
                 )
             }
