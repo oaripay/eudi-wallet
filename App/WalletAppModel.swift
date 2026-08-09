@@ -18,6 +18,7 @@ final class WalletAppModel: ObservableObject {
 
     @Published private(set) var credentials: [CredentialRecord] = []
     @Published private(set) var auditEvents: [AuditEvent] = []
+    @Published private(set) var pendingExternalURL: URL?
     @Published private(set) var isAuditHistoryLoading = false
     @Published private(set) var hasLoadedAuditHistory = false
     @Published var theme: OariTheme {
@@ -357,6 +358,10 @@ final class WalletAppModel: ObservableObject {
         handleScannedCode(url.absoluteString)
     }
 
+    func clearPendingExternalURL() {
+        pendingExternalURL = nil
+    }
+
     func handleScannedCode(_ code: String) {
         scanInput = code
         classifyScan()
@@ -640,11 +645,12 @@ final class WalletAppModel: ObservableObject {
                 guard let id = activeOpenID4VCInteractionID, let openID4VCWallet else {
                     throw EbsiCredentialError.backendUnavailable
                 }
-                try await openID4VCWallet.completePresentation(
+                let response = try await openID4VCWallet.completePresentation(
                     id: id,
                     selectedClaimIDs: accepted ? selectedClaimIDs : [],
                     userAccepted: accepted
                 )
+                pendingExternalURL = response
                 activeStandaloneOpenID4VPPresentation = false
                 activeOpenID4VCInteractionID = nil
                 selectedClaimIDs = []

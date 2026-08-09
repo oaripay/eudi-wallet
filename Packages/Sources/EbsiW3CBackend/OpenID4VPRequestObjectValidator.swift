@@ -10,6 +10,8 @@ public struct VerifiedOpenID4VPRequestObject: Equatable, Sendable {
     public let nonce: String
     public let state: String?
     public let dcqlQuery: [String: AnySendableJSON]
+    /// Presentation signing algorithms advertised by the verifier, keyed by credential format.
+    public let vpFormatsSupported: [String: Set<String>]?
     /// DID that controlled the verification method used for the Request Object.
     public let signingDID: String?
     public let issuedAt: Date?
@@ -24,6 +26,7 @@ public struct VerifiedOpenID4VPRequestObject: Equatable, Sendable {
         nonce: String,
         state: String?,
         dcqlQuery: [String: AnySendableJSON],
+        vpFormatsSupported: [String: Set<String>]? = nil,
         signingDID: String? = nil,
         issuedAt: Date? = nil,
         expiresAt: Date? = nil
@@ -36,6 +39,7 @@ public struct VerifiedOpenID4VPRequestObject: Equatable, Sendable {
         self.nonce = nonce
         self.state = state
         self.dcqlQuery = dcqlQuery
+        self.vpFormatsSupported = vpFormatsSupported
         self.signingDID = signingDID
         self.issuedAt = issuedAt
         self.expiresAt = expiresAt
@@ -62,12 +66,23 @@ public struct NativeOpenID4VPRequestObjectValidator: OpenID4VPRequestObjectValid
               let clientID = payload["client_id"]?.string,
                let responseMode = payload["response_mode"]?.string,
                let nonce = payload["nonce"]?.string,
-              !nonce.isEmpty,
-              let dcqlQuery = payload["dcql_query"]?.object,
-              let kid = header["kid"]?.string,
-              let did = Self.did(from: payload["iss"]?.string ?? kid) else {
+               let dcqlQuery = payload["dcql_query"]?.object,
+               let kid = header["kid"]?.string else {
             throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request object was malformed")
         }
+        guard let signingDID = Self.signingDID(from: clientID) else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "unsupported client_id prefix")
+        }
+        guard Self.isDIDURL(kid, under: signingDID) else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request kid was not bound to client_id")
+        }
+        guard payload["transaction_data"] == nil else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "transaction_data is not supported")
+        }
+        guard Self.isValidURLSafeValue(nonce), Self.hasValidOptionalURLSafeValue(payload["state"]) else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request nonce or state was invalid")
+        }
+        let vpFormatsSupported = try Self.vpFormatsSupported(from: payload["client_metadata"])
         let timestamp = Int(date.timeIntervalSince1970)
         if case let .number(issuedAt)? = payload["iat"], Int(issuedAt) > timestamp + 60 {
             throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request object was issued in the future")
@@ -77,24 +92,40 @@ public struct NativeOpenID4VPRequestObjectValidator: OpenID4VPRequestObjectValid
         }
         let document: DIDDocument
         do {
-            document = try await resolver.resolve(did)
+            document = try await resolver.resolve(signingDID)
         } catch {
             throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request issuer DID could not be resolved")
         }
-        let methods = try document.verificationMethod.map { method in
-            guard method.publicKeyJwk.crv == "P-256", let y = method.publicKeyJwk.y else {
-                throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request used an unsupported key")
-            }
-            return EbsiVerificationMethod(
-                id: method.id,
-                controller: method.controller,
-                key: .p256(
-                    x: try Self.requiredBase64URL(method.publicKeyJwk.x),
-                    y: try Self.requiredBase64URL(y)
-                ),
-                relationships: document.authentication.contains(method.id) ? [.authentication] : []
-            )
+        guard document.id == signingDID else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "resolved DID document id did not match client_id")
         }
+        let methodIDs = document.verificationMethod.map(\.id)
+        guard Set(methodIDs).count == methodIDs.count else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "resolved DID document contained duplicate verification method ids")
+        }
+        guard let methodIndex = methodIDs.firstIndex(of: kid) else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request kid was not found in the DID document")
+        }
+        let selected = document.verificationMethod[methodIndex]
+        let authentication = Set(document.authentication.map { Self.normalizedReference($0, documentID: document.id) })
+        guard authentication.contains(kid),
+              selected.controller == signingDID,
+              selected.publicKeyJwk.kty == "EC",
+              selected.publicKeyJwk.crv == "P-256",
+              let y = selected.publicKeyJwk.y else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request used an unsupported authentication key")
+        }
+        let xData = try Self.requiredBase64URL(selected.publicKeyJwk.x)
+        let yData = try Self.requiredBase64URL(y)
+        guard xData.count == 32, yData.count == 32 else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request key was malformed")
+        }
+        let methods = [EbsiVerificationMethod(
+            id: kid,
+            controller: selected.controller,
+            key: .p256(x: xData, y: yData),
+            relationships: [.authentication]
+        )]
         let verified: VerifiedEbsiJWS
         do {
             verified = try EbsiJWSVerifier().verify(
@@ -103,8 +134,8 @@ public struct NativeOpenID4VPRequestObjectValidator: OpenID4VPRequestObjectValid
                 requirements: EbsiJWSRequirements(
                     allowedAlgorithms: [.es256],
                     requiredRelationship: .authentication,
-                    expectedController: did,
-                    expectedIssuer: payload["iss"]?.string,
+                    expectedController: signingDID,
+                    expectedIssuer: nil,
                     validationDate: date
                 )
             )
@@ -113,13 +144,6 @@ public struct NativeOpenID4VPRequestObjectValidator: OpenID4VPRequestObjectValid
         }
         guard verified.methodID == kid else {
             throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request kid was not bound to its issuer")
-        }
-        if clientID.hasPrefix("decentralized_identifier:") {
-            guard clientID == "decentralized_identifier:\(did)" else {
-                throw OpenID4VCBackendError.invalidPresentationChallenge(
-                    reason: "decentralized_identifier client_id was not bound to the signing DID"
-                )
-            }
         }
         return VerifiedOpenID4VPRequestObject(
             clientID: clientID,
@@ -130,15 +154,80 @@ public struct NativeOpenID4VPRequestObjectValidator: OpenID4VPRequestObjectValid
             nonce: nonce,
             state: payload["state"]?.string,
             dcqlQuery: dcqlQuery,
-            signingDID: did,
+            vpFormatsSupported: vpFormatsSupported,
+            signingDID: signingDID,
             issuedAt: payload["iat"]?.numericValue.map { Date(timeIntervalSince1970: $0) },
             expiresAt: payload["exp"]?.numericValue.map { Date(timeIntervalSince1970: $0) }
         )
     }
 
-    private static func did(from value: String) -> String? {
-        guard value.hasPrefix("did:") else { return nil }
-        return value.split(separator: "#", maxSplits: 1).first.map(String.init)
+    private static func signingDID(from clientID: String) -> String? {
+        let prefix = "decentralized_identifier:"
+        guard clientID.hasPrefix(prefix) else { return nil }
+        let did = String(clientID.dropFirst(prefix.count))
+        guard did.hasPrefix("did:"), did.count > 4,
+              !did.contains(where: { $0 == "#" || $0 == "/" || $0 == "?" || $0.isWhitespace }),
+              did.unicodeScalars.allSatisfy({ $0.isASCII }) else { return nil }
+        return did
+    }
+
+    private static func isDIDURL(_ kid: String, under did: String) -> Bool {
+        let prefix = did + "#"
+        guard kid.hasPrefix(prefix), kid.count > prefix.count else { return false }
+        let fragment = kid.dropFirst(prefix.count)
+        return !fragment.contains("#") && fragment.unicodeScalars.allSatisfy { $0.isASCII && !$0.properties.isWhitespace }
+    }
+
+    private static func normalizedReference(_ reference: String, documentID: String) -> String {
+        reference.hasPrefix("#") ? documentID + reference : reference
+    }
+
+    private static func isValidURLSafeValue(_ value: String) -> Bool {
+        guard (1...512).contains(value.utf8.count) else { return false }
+        return value.unicodeScalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 0x30...0x39, 0x41...0x5A, 0x61...0x7A, 0x2D, 0x2E, 0x5F, 0x7E: true
+            default: false
+            }
+        }
+    }
+
+    private static func hasValidOptionalURLSafeValue(_ value: AnySendableJSON?) -> Bool {
+        guard let value else { return true }
+        guard let string = value.string else { return false }
+        return isValidURLSafeValue(string)
+    }
+
+    private static func vpFormatsSupported(
+        from clientMetadata: AnySendableJSON?
+    ) throws -> [String: Set<String>]? {
+        guard let clientMetadata else { return nil }
+        guard let metadata = clientMetadata.object else { throw malformedMetadata() }
+        guard let formatsValue = metadata["vp_formats_supported"] else { return nil }
+        guard let formats = formatsValue.object else { throw malformedMetadata() }
+        var result: [String: Set<String>] = [:]
+        for (format, value) in formats {
+            guard !format.isEmpty, let parameters = value.object else { throw malformedMetadata() }
+            let preferredNames: [String]
+            switch format {
+            case "dc+sd-jwt":
+                preferredNames = ["kb-jwt_alg_values", "kb_jwt_alg_values", "kb-jwt_alg_values_supported"]
+            default:
+                preferredNames = ["alg_values", "alg_values_supported"]
+            }
+            var algorithms = Set<String>()
+            for name in preferredNames where parameters[name] != nil {
+                guard case let .array(values)? = parameters[name],
+                      values.allSatisfy({ $0.string != nil }) else { throw malformedMetadata() }
+                algorithms.formUnion(values.compactMap(\.string))
+            }
+            result[format] = algorithms
+        }
+        return result
+    }
+
+    private static func malformedMetadata() -> OpenID4VCBackendError {
+        .invalidPresentationChallenge(reason: "signed request client_metadata was malformed")
     }
 
     private static func requiredBase64URL(_ value: String) throws -> Data {

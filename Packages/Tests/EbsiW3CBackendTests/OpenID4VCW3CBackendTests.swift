@@ -7,7 +7,7 @@ import TrustDomain
 import WalletDomain
 
 struct OpenID4VCW3CBackendTests {
-    @Test("Draft 17 QESAC uses token identifier, proofs, DPoP and response encryption")
+    @Test("Draft 17 QESAC uses token identifier, proofs and response encryption")
     func draft17QESACRequest() async throws {
         let transport = Draft13OpenID4VCTransport()
         let security = RecordingOID4VCIClientSecurity()
@@ -27,6 +27,8 @@ struct OpenID4VCW3CBackendTests {
         _ = try await backend.issue(id: offer.id, allowUntrusted: false, transactionCode: nil)
 
         let requests = await transport.requests
+        let token = try #require(requests.first { $0.url.path.hasSuffix("/token") })
+        #expect(token.headers["DPoP"] == nil)
         let credential = try #require(requests.first { $0.url.path.hasSuffix("/credential") })
         let body = try #require(JSONSerialization.jsonObject(with: credential.body ?? Data()) as? [String: Any])
         #expect(body["credential_identifier"] as? String == "authorized-pid")
@@ -35,11 +37,12 @@ struct OpenID4VCW3CBackendTests {
         #expect(body["proof"] == nil)
         #expect((body["proofs"] as? [String: Any])?["jwt"] != nil)
         #expect(body["credential_response_encryption"] != nil)
-        #expect(credential.headers["Authorization"] == "DPoP access-token")
-        #expect(credential.headers["DPoP"] != nil)
+        #expect(credential.headers["Authorization"] == "Bearer access-token")
+        #expect(credential.headers["DPoP"] == nil)
+        #expect(await security.dpopAccessTokens.isEmpty)
     }
 
-    @Test("Draft issuance uses DPoP, identifier-only request and encrypted response", arguments: ["draft-13", "draft-18"])
+    @Test("Draft issuance uses identifier-only request and encrypted response", arguments: ["draft-13", "draft-18"])
     func draftIssuance(revision: String) async throws {
         let usesLegacyDiscovery = revision == "draft-18"
         let transport = Draft13OpenID4VCTransport(legacyWellKnownOnly: usesLegacyDiscovery)
@@ -68,11 +71,11 @@ struct OpenID4VCW3CBackendTests {
         #expect(try await store.credentials().count == 1)
         let requests = await transport.requests
         let token = try #require(requests.first { $0.url.path.hasSuffix("/token") })
-        #expect(token.headers["DPoP"] == "dpop-token")
+        #expect(token.headers["DPoP"] == nil)
         #expect(token.headers["OAuth-Client-Attestation"] == nil)
         let credential = try #require(requests.first { $0.url.path.hasSuffix("/credential") })
-        #expect(credential.headers["Authorization"] == "DPoP access-token")
-        #expect(credential.headers["DPoP"] == "dpop-access-token")
+        #expect(credential.headers["Authorization"] == "Bearer access-token")
+        #expect(credential.headers["DPoP"] == nil)
         let credentialBody = try #require(credential.body)
         let body = try #require(
             JSONSerialization.jsonObject(with: credentialBody) as? [String: Any]
@@ -88,7 +91,7 @@ struct OpenID4VCW3CBackendTests {
         #expect(proofPayload["exp"] as? Int == 1_800_000_300)
         #expect(proofPayload["nonce"] as? String == "credential-nonce")
         #expect(body["credential_response_encryption"] != nil)
-        #expect(await security.dpopAccessTokens == [nil, "access-token"])
+        #expect(await security.dpopAccessTokens.isEmpty)
         #expect(await security.decryptionCalls == 1)
         let issuerMetadataPath = usesLegacyDiscovery
             ? "/service/\(revision)/.well-known/openid-credential-issuer"
@@ -103,7 +106,7 @@ struct OpenID4VCW3CBackendTests {
 
     @Test("Draft issuance signs a proof without nonce when token omits c_nonce")
     func draftMissingNonce() async throws {
-        let response = #"{"access_token":"access-token","token_type":"DPoP","authorization_details":[{"credential_configuration_id":"pid-config","credential_identifiers":["authorized-pid"]}]}"#
+        let response = #"{"access_token":"access-token","token_type":"Bearer","authorization_details":[{"credential_configuration_id":"pid-config","credential_identifiers":["authorized-pid"]}]}"#
         let transport = Draft13OpenID4VCTransport(tokenResponse: response)
         let backend = OpenID4VCW3CBackend(
             transport: transport,
@@ -194,7 +197,7 @@ struct OpenID4VCW3CBackendTests {
 
     @Test("Draft issuance reports the stage and coding path for malformed token JSON")
     func draftMalformedTokenValue() async throws {
-        let response = #"{"access_token":"access-token","token_type":"DPoP","c_nonce":123}"#
+        let response = #"{"access_token":"access-token","token_type":"Bearer","c_nonce":123}"#
         try await assertRejectedDraftToken(
             response,
             expected: .decodingFailed(
@@ -207,7 +210,7 @@ struct OpenID4VCW3CBackendTests {
 
     @Test("Draft issuance accepts one token-authorized identifier despite configuration mismatch")
     func draftMismatchedAuthorization() async throws {
-        let response = #"{"access_token":"access-token","token_type":"DPoP","c_nonce":"credential-nonce","authorization_details":[{"credential_configuration_id":"other-config","credential_identifiers":["unauthorized-pid","authorized-fallback"]}]}"#
+        let response = #"{"access_token":"access-token","token_type":"Bearer","c_nonce":"credential-nonce","authorization_details":[{"credential_configuration_id":"other-config","credential_identifiers":["unauthorized-pid","authorized-fallback"]}]}"#
         let transport = Draft13OpenID4VCTransport(
             tokenResponse: response,
             rejectedCredentialIdentifier: "unauthorized-pid"
@@ -241,7 +244,7 @@ struct OpenID4VCW3CBackendTests {
 
     @Test("Draft issuance accepts one metadata-proven configuration alias")
     func draftEquivalentConfigurationAlias() async throws {
-        let response = #"{"access_token":"access-token","token_type":"DPoP","c_nonce":"credential-nonce","authorization_details":[{"credential_configuration_id":"pid-alias","credential_identifiers":["authorized-alias"]}]}"#
+        let response = #"{"access_token":"access-token","token_type":"Bearer","c_nonce":"credential-nonce","authorization_details":[{"credential_configuration_id":"pid-alias","credential_identifiers":["authorized-alias"]}]}"#
         let transport = Draft13OpenID4VCTransport(tokenResponse: response)
         let backend = OpenID4VCW3CBackend(
             transport: transport,
@@ -264,7 +267,7 @@ struct OpenID4VCW3CBackendTests {
 
     @Test("Draft issuance matches an offered credential identifier when configuration ID is absent")
     func draftIdentifierWithoutConfigurationID() async throws {
-        let response = #"{"access_token":"access-token","token_type":"DPoP","c_nonce":"credential-nonce","authorization_details":[{"credential_identifiers":["pid-config"]}]}"#
+        let response = #"{"access_token":"access-token","token_type":"Bearer","c_nonce":"credential-nonce","authorization_details":[{"credential_identifiers":["pid-config"]}]}"#
         let transport = Draft13OpenID4VCTransport(tokenResponse: response)
         let backend = OpenID4VCW3CBackend(
             transport: transport,
@@ -286,7 +289,7 @@ struct OpenID4VCW3CBackendTests {
 
     @Test("Draft issuance prefers exact authorization and ignores additional aliases")
     func draftExactConfigurationWithAdditionalAliases() async throws {
-        let response = #"{"access_token":"access-token","token_type":"DPoP","c_nonce":"credential-nonce","authorization_details":[{"credential_configuration_id":"pid-config","credential_identifiers":["exact"]},{"credential_configuration_id":"pid-alias","credential_identifiers":["alias"]},{"credential_configuration_id":"other-config","credential_identifiers":["other"]}]}"#
+        let response = #"{"access_token":"access-token","token_type":"Bearer","c_nonce":"credential-nonce","authorization_details":[{"credential_configuration_id":"pid-config","credential_identifiers":["exact"]},{"credential_configuration_id":"pid-alias","credential_identifiers":["alias"]},{"credential_configuration_id":"other-config","credential_identifiers":["other"]}]}"#
         let transport = Draft13OpenID4VCTransport(tokenResponse: response)
         let backend = OpenID4VCW3CBackend(
             transport: transport,
@@ -308,7 +311,7 @@ struct OpenID4VCW3CBackendTests {
 
     @Test("Draft issuance rejects multiple aliases when no exact authorization exists")
     func draftAmbiguousConfigurationAliases() async throws {
-        let response = #"{"access_token":"access-token","token_type":"DPoP","c_nonce":"credential-nonce","authorization_details":[{"credential_configuration_id":"pid-alias","credential_identifiers":["alias-one"]},{"credential_configuration_id":"pid-alias-two","credential_identifiers":["alias-two"]}]}"#
+        let response = #"{"access_token":"access-token","token_type":"Bearer","c_nonce":"credential-nonce","authorization_details":[{"credential_configuration_id":"pid-alias","credential_identifiers":["alias-one"]},{"credential_configuration_id":"pid-alias-two","credential_identifiers":["alias-two"]}]}"#
         try await assertRejectedDraftToken(
             response,
             expected: .credentialAuthorizationMismatch(
@@ -320,13 +323,13 @@ struct OpenID4VCW3CBackendTests {
 
     @Test("Draft issuance rejects explicitly empty authorization details")
     func draftEmptyAuthorizationDetails() async throws {
-        let response = #"{"access_token":"access-token","token_type":"DPoP","c_nonce":"credential-nonce","authorization_details":[]}"#
+        let response = #"{"access_token":"access-token","token_type":"Bearer","c_nonce":"credential-nonce","authorization_details":[]}"#
         try await assertRejectedDraftToken(response, expected: .missingCredentialAuthorization)
     }
 
     @Test("Draft issuance falls back to offered identifier only when authorization details are absent")
     func draftAbsentAuthorizationDetailsFallback() async throws {
-        let response = #"{"access_token":"access-token","token_type":"DPoP","c_nonce":"credential-nonce"}"#
+        let response = #"{"access_token":"access-token","token_type":"Bearer","c_nonce":"credential-nonce"}"#
         let transport = Draft13OpenID4VCTransport(tokenResponse: response)
         let backend = OpenID4VCW3CBackend(
             transport: transport,
@@ -717,7 +720,7 @@ struct OpenID4VCW3CBackendTests {
         ])
     }
 
-    @Test("IAR compact signed request rejects unsupported claim-less DCQL")
+    @Test("IAR compact signed request rejects malformed DCQL identifier")
     func iGrantCompactChallenge() async throws {
         let transport = FixtureOpenID4VCTransport(iGrantCompactPresentation: true)
         let backend = OpenID4VCW3CBackend(
@@ -731,8 +734,8 @@ struct OpenID4VCW3CBackendTests {
             presentationRequestValidator: FixturePresentationRequestValidator()
         )
         let offer = try await Self.authorizationOffer(backend)
-        await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(
-            reason: "DCQL credential query was unsupported"
+        await #expect(throws: OpenID4VPDCQLError.invalidID(
+            value: "Presentation Definition 1", context: "credential 0"
         )) {
             _ = try await backend.beginPresentationRequired(
                 id: offer.id,
@@ -952,16 +955,17 @@ struct OpenID4VCW3CBackendTests {
             "type": ["VerifiableCredential", "PersonIdentificationData"],
             "credentialSubject": ["id": holder, "given_name": "Ada", "family_name": "Lovelace"],
         ])
+        let stored = StoredEbsiCredential(
+            profileID: "oari-ebsi-vcdm2-vc-jwt",
+            representation: .vcdm2Jwt,
+            rawCredential: Data(credential.utf8),
+            holderKeyReference: key.id.rawValue.uuidString
+        )
         let backend = OpenID4VCW3CBackend(
             transport: transport,
             trustEvaluator: TrustedIssuerEvaluator(),
             keyProvider: keys,
-            credentialStore: FixtureCredentialStore(values: [StoredEbsiCredential(
-                profileID: "oari-ebsi-vcdm2-vc-jwt",
-                representation: .vcdm2Jwt,
-                rawCredential: Data(credential.utf8),
-                holderKeyReference: key.id.rawValue.uuidString
-            )]),
+            credentialStore: FixtureCredentialStore(values: [stored]),
             credentialValidator: FixtureCredentialValidator(),
             profile: try .vcdm2JWTVC(),
             presentationRequestValidator: FixturePresentationRequestValidator()
@@ -969,11 +973,12 @@ struct OpenID4VCW3CBackendTests {
         let clientID = "decentralized_identifier:did:key:verifier"
         let deepLink = "openid4vp://?client_id=\(clientID)&request_uri=https%3A%2F%2Fissuer.example%2Fopenid4vp%2Frequest"
         let request = try await backend.beginStoredOpenID4VPPresentation(uri: deepLink)
-        try await backend.completeStoredOpenID4VPPresentation(
+        let redirectURI = try await backend.completeStoredOpenID4VPPresentation(
             id: request.id,
             selectedClaimIDs: Set(request.claims.map(\.id)),
             userAccepted: true
         )
+        #expect(redirectURI == URL(string: "https://verifier.example/done"))
         let post = try #require((await transport.requests).last { $0.url.path == "/openid4vp/response" })
         let fields = Dictionary(uniqueKeysWithValues: try #require(
             URLComponents(string: "?\(String(decoding: post.body ?? Data(), as: UTF8.self))")?.queryItems
@@ -996,6 +1001,160 @@ struct OpenID4VCW3CBackendTests {
         #expect(enveloped["@context"] as? [String] == ["https://www.w3.org/ns/credentials/v2"])
         #expect(enveloped["type"] as? [String] == ["EnvelopedVerifiableCredential"])
         #expect(enveloped["id"] as? String == "data:application/vc+jwt,\(credential)")
+
+        let rejectingBackend = OpenID4VCW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: keys,
+            credentialStore: FixtureCredentialStore(values: [stored]),
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .vcdm2JWTVC(),
+            presentationRequestValidator: FixturePresentationRequestValidator()
+        )
+        let rejectedRequest = try await rejectingBackend.beginStoredOpenID4VPPresentation(uri: deepLink)
+        let rejectionRedirect = try await rejectingBackend.completeStoredOpenID4VPPresentation(
+            id: rejectedRequest.id, selectedClaimIDs: [], userAccepted: false
+        )
+        #expect(rejectionRedirect == URL(string: "https://verifier.example/done"))
+        let rejection = try #require((await transport.requests).last { $0.url.path == "/openid4vp/response" })
+        let rejectionFields = Dictionary(uniqueKeysWithValues: try #require(
+            URLComponents(string: "?\(String(decoding: rejection.body ?? Data(), as: UTF8.self))")?.queryItems
+        ).compactMap { item in item.value.map { (item.name, $0) } })
+        #expect(rejectionFields == ["error": "access_denied", "state": "vp-state"])
+        await #expect(throws: OpenID4VCBackendError.unknownTransaction) {
+            _ = try await rejectingBackend.completeStoredOpenID4VPPresentation(
+                id: rejectedRequest.id, selectedClaimIDs: [], userAccepted: false
+            )
+        }
+    }
+
+    @Test("Standalone envelope enforces request source and request_uri_method singletons")
+    func standaloneEnvelopeValidation() async throws {
+        let transport = StandaloneEnvelopeTransport(response: .init(statusCode: 500, body: Data()))
+        let backend = try Self.standaloneEnvelopeBackend(transport: transport)
+        let base = "openid4vp://?client_id=decentralized_identifier:did:key:verifier"
+
+        await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(
+            reason: "OpenID4VP envelope must contain exactly one of request or request_uri"
+        )) {
+            _ = try await backend.beginStoredOpenID4VPPresentation(uri: base)
+        }
+        await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(
+            reason: "duplicate request_uri parameter"
+        )) {
+            _ = try await backend.beginStoredOpenID4VPPresentation(
+                uri: base + "&request_uri=https://issuer.example/a&request_uri=https://issuer.example/b"
+            )
+        }
+        await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(
+            reason: "request_uri_method requires request_uri"
+        )) {
+            _ = try await backend.beginStoredOpenID4VPPresentation(uri: base + "&request=x.y.z&request_uri_method=get")
+        }
+        for valuelessMethod in ["&request_uri_method", "&request_uri_method="] {
+            await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(
+                reason: "request_uri_method was empty"
+            )) {
+                _ = try await backend.beginStoredOpenID4VPPresentation(
+                    uri: base + "&request_uri=https://issuer.example/request" + valuelessMethod
+                )
+            }
+        }
+        await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(
+            reason: "request_uri_method post is not supported"
+        )) {
+            _ = try await backend.beginStoredOpenID4VPPresentation(
+                uri: base + "&request_uri=https://issuer.example/request&request_uri_method=post"
+            )
+        }
+        await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(
+            reason: "unsupported request_uri_method put"
+        )) {
+            _ = try await backend.beginStoredOpenID4VPPresentation(
+                uri: base + "&request_uri=https://issuer.example/request&request_uri_method=put"
+            )
+        }
+        #expect(await transport.requestCount == 0)
+    }
+
+    @Test("request_uri requires its JWT media type while inline request bypasses fetch")
+    func standaloneRequestRetrievalContract() async throws {
+        let jwt = try Self.standaloneRequestJWT()
+        let wrongType = StandaloneEnvelopeTransport(response: .init(
+            statusCode: 200, body: Data(jwt.utf8), headers: ["Content-Type": "application/jwt"]
+        ))
+        let fetchedBackend = try Self.standaloneEnvelopeBackend(transport: wrongType)
+        await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(
+            reason: "request_uri response Content-Type was not application/oauth-authz-req+jwt"
+        )) {
+            _ = try await fetchedBackend.beginStoredOpenID4VPPresentation(
+                uri: "openid4vp://?client_id=decentralized_identifier:did:key:verifier&request_uri=https://issuer.example/request"
+            )
+        }
+
+        let upperBoundary = StandaloneEnvelopeTransport(response: .init(
+            statusCode: 299,
+            body: Data(jwt.utf8),
+            headers: ["cOnTeNt-TyPe": "Application/OAuth-Authz-Req+JWT; charset=UTF-8"]
+        ))
+        let upperBoundaryBackend = try Self.standaloneEnvelopeBackend(transport: upperBoundary)
+        await #expect(throws: OpenID4VCBackendError.presentationCredentialUnavailable) {
+            _ = try await upperBoundaryBackend.beginStoredOpenID4VPPresentation(
+                uri: "openid4vp://?client_id=decentralized_identifier:did:key:verifier&request_uri=https://issuer.example/request&request_uri_method=get"
+            )
+        }
+
+        let neverFetch = StandaloneEnvelopeTransport(response: .init(statusCode: 500, body: Data()))
+        let inlineBackend = try Self.standaloneEnvelopeBackend(transport: neverFetch)
+        let encoded = try #require(jwt.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed))
+        await #expect(throws: OpenID4VCBackendError.presentationCredentialUnavailable) {
+            _ = try await inlineBackend.beginStoredOpenID4VPPresentation(
+                uri: "openid4vp://?client_id=decentralized_identifier:did:key:verifier&request=\(encoded)"
+            )
+        }
+        #expect(await neverFetch.requestCount == 0)
+    }
+
+    @Test("Standalone decentralized_identifier requests require matching ES256 verifier metadata before preparation")
+    func standaloneRequiresVerifierMetadata() async throws {
+        let cases: [(metadata: [String: Any]?, reason: String)] = [
+            (nil, "verifier metadata did not support ES256 for the requested presentation format"),
+            (["vp_formats_supported": [:]], "verifier metadata did not support ES256 for the requested presentation format"),
+            (["vp_formats_supported": ["jwt_vc_json": ["alg_values": ["ES384"]]]], "verifier metadata did not support ES256 for the requested presentation format"),
+        ]
+        for test in cases {
+            let backend = try Self.standaloneEnvelopeBackend(
+                transport: StandaloneEnvelopeTransport(response: .init(statusCode: 500, body: Data()))
+            )
+            let jwt = try Self.standaloneRequestJWT(clientMetadata: test.metadata)
+            let encoded = try #require(jwt.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed))
+            await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(reason: test.reason)) {
+                _ = try await backend.beginStoredOpenID4VPPresentation(
+                    uri: "openid4vp://?client_id=decentralized_identifier:did:key:verifier&request=\(encoded)"
+                )
+            }
+        }
+    }
+
+    @Test("Standalone signed response_uri must be strict HTTPS before replay or preparation")
+    func standaloneRejectsUnsafeSignedResponseURI() async throws {
+        for responseURI in [
+            "https://user@issuer.example/response", "https://issuer.example/response#fragment",
+            "https:///response",
+        ] {
+            let backend = try Self.standaloneEnvelopeBackend(
+                transport: StandaloneEnvelopeTransport(response: .init(statusCode: 500, body: Data()))
+            )
+            let jwt = try Self.standaloneRequestJWT(responseURI: responseURI)
+            let encoded = try #require(jwt.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed))
+            await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(
+                reason: "unsupported standalone response mode or response URI"
+            )) {
+                _ = try await backend.beginStoredOpenID4VPPresentation(
+                    uri: "openid4vp://?client_id=decentralized_identifier:did:key:verifier&request=\(encoded)"
+                )
+            }
+        }
     }
 
     @Test("Stored W3C credential deletion is idempotent")
@@ -1022,6 +1181,45 @@ struct OpenID4VCW3CBackendTests {
 
     private static func jwtPayload(_ compact: String) throws -> [String: Any] {
         try jwtSegment(compact, index: 1)
+    }
+
+    private static func standaloneRequestJWT(
+        clientMetadata: [String: Any]? = ["vp_formats_supported": [
+            "jwt_vc_json": ["alg_values": ["ES256"]],
+        ]],
+        responseURI: String = "https://issuer.example/response"
+    ) throws -> String {
+        let issuedAt = Int(Date().timeIntervalSince1970)
+        var payload: [String: Any] = [
+            "aud": "https://self-issued.me/v2",
+            "client_id": "decentralized_identifier:did:key:verifier",
+            "response_type": "vp_token",
+            "response_mode": "direct_post",
+            "response_uri": responseURI,
+            "nonce": UUID().uuidString,
+            "iat": issuedAt,
+            "exp": issuedAt + 300,
+            "dcql_query": ["credentials": [[
+                "id": "pid", "format": "jwt_vc_json",
+                "meta": ["type_values": [["VerifiableCredential"]]],
+            ]]],
+        ]
+        payload["client_metadata"] = clientMetadata
+        return try compactJWT(payload: payload)
+    }
+
+    private static func standaloneEnvelopeBackend(
+        transport: any OpenID4VCHTTPTransport
+    ) throws -> OpenID4VCW3CBackend {
+        OpenID4VCW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(),
+            credentialStore: FixtureCredentialStore(),
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .vcdm11Jwt(),
+            presentationRequestValidator: FixturePresentationRequestValidator()
+        )
     }
 
     private static func jwtHeader(_ compact: String) throws -> [String: Any] {
@@ -1276,6 +1474,20 @@ private actor DraftIARFallbackTransport: OpenID4VCHTTPTransport {
     }
 }
 
+private actor StandaloneEnvelopeTransport: OpenID4VCHTTPTransport {
+    private let response: OpenID4VCHTTPResponse
+    private(set) var requestCount = 0
+
+    init(response: OpenID4VCHTTPResponse) { self.response = response }
+
+    func send(
+        url: URL, method: String, headers: [String: String], body: Data?
+    ) async throws -> OpenID4VCHTTPResponse {
+        requestCount += 1
+        return response
+    }
+}
+
 private actor FixtureOpenID4VCTransport: OpenID4VCHTTPTransport {
     static let png = Data([
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -1361,9 +1573,17 @@ private actor FixtureOpenID4VCTransport: OpenID4VCHTTPTransport {
             {"credentials":[{"credential":"\(credentialResponse)"}]}
             """
         case "/openid4vp/request":
-            response = Self.standalonePresentationRequest(format: presentationFormat)
+            return OpenID4VCHTTPResponse(
+                statusCode: 200,
+                body: Data(Self.standalonePresentationRequest(format: presentationFormat).utf8),
+                headers: ["content-type": "Application/OAuth-Authz-Req+JWT; charset=UTF-8"]
+            )
         case "/openid4vp/response":
-            response = "{}"
+            return OpenID4VCHTTPResponse(
+                statusCode: 200,
+                body: Data(#"{"redirect_uri":"https://verifier.example/done"}"#.utf8),
+                headers: ["Content-Type": "application/json; charset=utf-8"]
+            )
         case "/logo.png", "/background.png":
             return OpenID4VCHTTPResponse(
                 statusCode: 200,
@@ -1426,7 +1646,7 @@ private actor Draft13OpenID4VCTransport: OpenID4VCHTTPTransport {
     private let plaintextCredentialResponse: Bool
 
     init(
-        tokenResponse: String = #"{"access_token":"access-token","token_type":"DPoP","c_nonce":"credential-nonce","authorization_details":[{"type":"openid_credential","credential_configuration_id":"pid-config","credential_identifiers":["authorized-pid"]}]}"#,
+        tokenResponse: String = #"{"access_token":"access-token","token_type":"Bearer","c_nonce":"credential-nonce","authorization_details":[{"type":"openid_credential","credential_configuration_id":"pid-config","credential_identifiers":["authorized-pid"]}]}"#,
         allowsAnonymousAuthentication: Bool = true,
         supportsES256Attestation: Bool = true,
         advertisesDPoP: Bool = true,
@@ -1615,6 +1835,25 @@ private struct FixturePresentationRequestValidator: OpenID4VPRequestObjectValida
         let expiresAt: Date? = if case let .number(value)? = payload["exp"] {
             Date(timeIntervalSince1970: value)
         } else { nil }
+        var vpFormatsSupported: [String: Set<String>]?
+        if let metadata = payload["client_metadata"]?.object {
+            vpFormatsSupported = [:]
+            if let advertisedFormats = metadata["vp_formats_supported"]?.object {
+                for (format, parameters) in advertisedFormats {
+                    let names = format == "dc+sd-jwt"
+                        ? ["kb-jwt_alg_values", "kb_jwt_alg_values", "kb-jwt_alg_values_supported"]
+                        : ["alg_values", "alg_values_supported"]
+                    let parameterObject = parameters.object ?? [:]
+                    var algorithms = Set<String>()
+                    for name in names {
+                        if case let .array(values)? = parameterObject[name] {
+                            algorithms.formUnion(values.compactMap { $0.string })
+                        }
+                    }
+                    vpFormatsSupported?[format] = algorithms
+                }
+            }
+        }
         return VerifiedOpenID4VPRequestObject(
             clientID: clientID,
             audience: payload["aud"]?.string,
@@ -1624,6 +1863,7 @@ private struct FixturePresentationRequestValidator: OpenID4VPRequestObjectValida
             nonce: nonce,
             state: payload["state"]?.string,
             dcqlQuery: dcqlQuery,
+            vpFormatsSupported: vpFormatsSupported,
             signingDID: signingDID,
             issuedAt: issuedAt,
             expiresAt: expiresAt

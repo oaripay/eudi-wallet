@@ -2,6 +2,7 @@ import OariDesignSystem
 import SwiftUI
 
 struct WalletRootView: View {
+    @Environment(\.openURL) private var openURL
     @ObservedObject var model: WalletAppModel
     @State private var isCameraPresented = false
 
@@ -80,6 +81,11 @@ struct WalletRootView: View {
             }
             .presentationDetents([.medium, .large])
             .interactiveDismissDisabled()
+        }
+        .onChange(of: model.pendingExternalURL) { _, url in
+            guard let url else { return }
+            openURL(url)
+            model.clearPendingExternalURL()
         }
     }
 }

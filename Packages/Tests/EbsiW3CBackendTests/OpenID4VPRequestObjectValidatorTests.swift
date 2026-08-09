@@ -15,13 +15,15 @@ struct OpenID4VPRequestObjectValidatorTests {
             key: key,
             header: ["alg": "ES256", "typ": "oauth-authz-req+jwt", "kid": kid],
             payload: [
-                "iss": did,
-                "client_id": "redirect_uri:https://verifier.example/callback",
+                "client_id": "decentralized_identifier:\(did)",
                 "response_type": "vp_token",
                 "response_mode": "ia_post",
                 "nonce": "nonce-value",
                 "exp": Int(Date().timeIntervalSince1970) + 300,
                 "dcql_query": ["credentials": [["id": "pid", "format": "dc+sd-jwt"]]],
+                "client_metadata": ["vp_formats_supported": [
+                    "dc+sd-jwt": ["kb-jwt_alg_values": ["ES256"]],
+                ]],
             ]
         )
         let request = try await NativeOpenID4VPRequestObjectValidator(
@@ -29,6 +31,8 @@ struct OpenID4VPRequestObjectValidatorTests {
         ).validate(compactJWT: jwt, at: Date())
         #expect(request.nonce == "nonce-value")
         #expect(request.responseMode == "ia_post")
+        #expect(request.signingDID == did)
+        #expect(request.vpFormatsSupported?["dc+sd-jwt"] == ["ES256"])
     }
 
     @Test("Tampered presentation request is rejected")
@@ -41,8 +45,7 @@ struct OpenID4VPRequestObjectValidatorTests {
             key: key,
             header: ["alg": "ES256", "typ": "oauth-authz-req+jwt", "kid": kid],
             payload: [
-                "iss": did,
-                "client_id": "redirect_uri:https://verifier.example/callback",
+                "client_id": "decentralized_identifier:\(did)",
                 "response_type": "vp_token",
                 "response_mode": "ia_post",
                 "nonce": "nonce-value",
@@ -80,11 +83,155 @@ struct OpenID4VPRequestObjectValidatorTests {
             ]
         )
         await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(
-            reason: "decentralized_identifier client_id was not bound to the signing DID"
+            reason: "signed request kid was not bound to client_id"
         )) {
             _ = try await NativeOpenID4VPRequestObjectValidator(
                 resolver: KeyDIDResolver()
             ).validate(compactJWT: jwt, at: Date())
+        }
+    }
+
+    @Test("Only the decentralized_identifier client ID prefix is supported")
+    func rejectsUnsupportedClientIDPrefixes() async throws {
+        let key = P256.Signing.PrivateKey()
+        let did = try KeyDIDResolver().derive(publicKeyX963: key.publicKey.x963Representation)
+        let document = try await KeyDIDResolver().resolve(did)
+        let kid = try #require(document.authentication.first)
+        for clientID in ["did:key:without-prefix", "redirect_uri:https://evil.example/callback", "https://evil.example"] {
+            let jwt = try requestJWT(key: key, kid: kid, clientID: clientID)
+            await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(reason: "unsupported client_id prefix")) {
+                _ = try await NativeOpenID4VPRequestObjectValidator(resolver: KeyDIDResolver())
+                    .validate(compactJWT: jwt, at: Date())
+            }
+        }
+    }
+
+    @Test("iss is ignored, including when absent or mismatched")
+    func ignoresIssuerClaim() async throws {
+        let key = P256.Signing.PrivateKey()
+        let did = try KeyDIDResolver().derive(publicKeyX963: key.publicKey.x963Representation)
+        let document = try await KeyDIDResolver().resolve(did)
+        let kid = try #require(document.authentication.first)
+        for issuer: Any? in [nil, "did:key:attacker"] {
+            var payload = requestPayload(clientID: "decentralized_identifier:\(did)")
+            if let issuer { payload["iss"] = issuer }
+            let jwt = try Self.sign(
+                key: key,
+                header: ["alg": "ES256", "typ": "oauth-authz-req+jwt", "kid": kid],
+                payload: payload
+            )
+            let verified = try await NativeOpenID4VPRequestObjectValidator(resolver: KeyDIDResolver())
+                .validate(compactJWT: jwt, at: Date())
+            #expect(verified.signingDID == did)
+        }
+    }
+
+    @Test("Resolved document ID must exactly match the client DID")
+    func rejectsWrongDocumentID() async throws {
+        let key = P256.Signing.PrivateKey()
+        let did = try KeyDIDResolver().derive(publicKeyX963: key.publicKey.x963Representation)
+        let document = try await KeyDIDResolver().resolve(did)
+        let kid = try #require(document.authentication.first)
+        let wrongDocument = DIDDocument(
+            id: "did:key:wrong-document",
+            verificationMethod: document.verificationMethod,
+            authentication: document.authentication,
+            assertionMethod: document.assertionMethod
+        )
+        let jwt = try requestJWT(key: key, kid: kid, clientID: "decentralized_identifier:\(did)")
+        await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(
+            reason: "resolved DID document id did not match client_id"
+        )) {
+            _ = try await NativeOpenID4VPRequestObjectValidator(resolver: FixedResolver(document: wrongDocument))
+                .validate(compactJWT: jwt, at: Date())
+        }
+    }
+
+    @Test("Relative authentication references are normalized")
+    func acceptsRelativeAuthenticationReference() async throws {
+        let key = P256.Signing.PrivateKey()
+        let did = try KeyDIDResolver().derive(publicKeyX963: key.publicKey.x963Representation)
+        let document = try await KeyDIDResolver().resolve(did)
+        let kid = try #require(document.authentication.first)
+        let relativeAuthentication = String(kid.dropFirst(did.count))
+        let relativeDocument = DIDDocument(
+            id: did,
+            verificationMethod: document.verificationMethod,
+            authentication: [relativeAuthentication],
+            assertionMethod: document.assertionMethod
+        )
+        let jwt = try requestJWT(key: key, kid: kid, clientID: "decentralized_identifier:\(did)")
+        let verified = try await NativeOpenID4VPRequestObjectValidator(
+            resolver: FixedResolver(document: relativeDocument)
+        ).validate(compactJWT: jwt, at: Date())
+        #expect(verified.signingDID == did)
+    }
+
+    @Test("Duplicate verification method IDs are rejected")
+    func rejectsDuplicateVerificationMethodIDs() async throws {
+        let key = P256.Signing.PrivateKey()
+        let did = try KeyDIDResolver().derive(publicKeyX963: key.publicKey.x963Representation)
+        let document = try await KeyDIDResolver().resolve(did)
+        let kid = try #require(document.authentication.first)
+        let method = try #require(document.verificationMethod.first)
+        let duplicateDocument = DIDDocument(
+            id: did,
+            verificationMethod: [method, method],
+            authentication: document.authentication,
+            assertionMethod: document.assertionMethod
+        )
+        let jwt = try requestJWT(key: key, kid: kid, clientID: "decentralized_identifier:\(did)")
+        await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(
+            reason: "resolved DID document contained duplicate verification method ids"
+        )) {
+            _ = try await NativeOpenID4VPRequestObjectValidator(
+                resolver: FixedResolver(document: duplicateDocument)
+            ).validate(compactJWT: jwt, at: Date())
+        }
+    }
+
+    @Test("Unsupported transaction data is rejected explicitly")
+    func rejectsTransactionData() async throws {
+        let key = P256.Signing.PrivateKey()
+        let did = try KeyDIDResolver().derive(publicKeyX963: key.publicKey.x963Representation)
+        let document = try await KeyDIDResolver().resolve(did)
+        let kid = try #require(document.authentication.first)
+        var payload = requestPayload(clientID: "decentralized_identifier:\(did)")
+        payload["transaction_data"] = []
+        let jwt = try Self.sign(
+            key: key,
+            header: ["alg": "ES256", "typ": "oauth-authz-req+jwt", "kid": kid],
+            payload: payload
+        )
+        await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(reason: "transaction_data is not supported")) {
+            _ = try await NativeOpenID4VPRequestObjectValidator(resolver: KeyDIDResolver())
+                .validate(compactJWT: jwt, at: Date())
+        }
+    }
+
+    @Test("Nonce and state are bounded URL-safe ASCII")
+    func rejectsInvalidNonceAndState() async throws {
+        let key = P256.Signing.PrivateKey()
+        let did = try KeyDIDResolver().derive(publicKeyX963: key.publicKey.x963Representation)
+        let document = try await KeyDIDResolver().resolve(did)
+        let kid = try #require(document.authentication.first)
+        let invalidValues = ["", "contains space", "é", String(repeating: "a", count: 513)]
+        for field in ["nonce", "state"] {
+            for value in invalidValues {
+                var payload = requestPayload(clientID: "decentralized_identifier:\(did)")
+                payload[field] = value
+                let jwt = try Self.sign(
+                    key: key,
+                    header: ["alg": "ES256", "typ": "oauth-authz-req+jwt", "kid": kid],
+                    payload: payload
+                )
+                await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(
+                    reason: "signed request nonce or state was invalid"
+                )) {
+                    _ = try await NativeOpenID4VPRequestObjectValidator(resolver: KeyDIDResolver())
+                        .validate(compactJWT: jwt, at: Date())
+                }
+            }
         }
     }
 
@@ -122,4 +269,28 @@ struct OpenID4VPRequestObjectValidatorTests {
             .replacingOccurrences(of: "=", with: "")
         return "\(encodedHeader).\(encodedPayload).\(signature)"
     }
+
+    private func requestJWT(key: P256.Signing.PrivateKey, kid: String, clientID: String) throws -> String {
+        try Self.sign(
+            key: key,
+            header: ["alg": "ES256", "typ": "oauth-authz-req+jwt", "kid": kid],
+            payload: requestPayload(clientID: clientID)
+        )
+    }
+
+    private func requestPayload(clientID: String) -> [String: Any] {
+        [
+            "client_id": clientID,
+            "response_mode": "direct_post",
+            "nonce": "nonce-value",
+            "state": "state-value",
+            "exp": Int(Date().timeIntervalSince1970) + 300,
+            "dcql_query": ["credentials": [["id": "pid"]]],
+        ]
+    }
+}
+
+private struct FixedResolver: DIDResolver {
+    let document: DIDDocument
+    func resolve(_ did: String) async throws -> DIDDocument { document }
 }

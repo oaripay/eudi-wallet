@@ -743,16 +743,21 @@ public actor OpenID4VCW3CBackend {
                 guard query.vctValues.contains(parsed.vct) else { continue }
                 var disclosures: [String: String] = [:]
                 var satisfies = true
-                for path in query.claimPaths {
+                for requestedClaim in query.claims {
+                    let path = requestedClaim.path
                     guard path.count == 1, let name = path.first else {
                         satisfies = false
                         break
                     }
                     if let disclosure = parsed.disclosures[name] {
-                        claims.append(Self.presentationClaim(path: path, value: disclosure.displayValue))
-                        disclosures[path.joined(separator: ".")] = disclosure.encoded
+                        claims.append(Self.presentationClaim(
+                            id: requestedClaim.id, path: path, value: disclosure.displayValue
+                        ))
+                        disclosures[requestedClaim.id] = disclosure.encoded
                     } else if let value = parsed.payload[name]?.displayString {
-                        claims.append(Self.presentationClaim(path: path, value: value))
+                        claims.append(Self.presentationClaim(
+                            id: requestedClaim.id, path: path, value: value
+                        ))
                     } else {
                         satisfies = false
                         break
@@ -766,12 +771,15 @@ public actor OpenID4VCW3CBackend {
                 let document = try EbsiCredentialInspector().inspectCompactJWT(compact, profile: profile)
                 guard Self.matchesTypeValues(query.typeValues, document: document) else { continue }
                 var satisfies = true
-                for path in query.claimPaths {
+                for requestedClaim in query.claims {
+                    let path = requestedClaim.path
                     guard let value = Self.value(at: path, in: document)?.displayString else {
                         satisfies = false
                         break
                     }
-                    claims.append(Self.presentationClaim(path: path, value: value))
+                    claims.append(Self.presentationClaim(
+                        id: requestedClaim.id, path: path, value: value
+                    ))
                 }
                 guard satisfies else { continue }
                 kind = credential.representation == .vcdm2Jwt ? .jwtVC20(compact) : .jwtVC11(compact)
@@ -798,22 +806,70 @@ public actor OpenID4VCW3CBackend {
         guard let components = URLComponents(string: uri),
               components.scheme?.lowercased() == "openid4vp",
               let queryItems = components.queryItems,
-              let outerClientID = try Self.singleQueryValue(named: "client_id", in: queryItems),
-              let requestURIValue = try Self.singleQueryValue(named: "request_uri", in: queryItems),
-              let requestURI = URL(string: requestURIValue),
-              requestURI.scheme?.lowercased() == "https",
               let presentationRequestValidator else {
-            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "OpenID4VP request URI was malformed")
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "OpenID4VP request envelope was malformed")
         }
-        let requestData = try await successfulRequest(
-            requestURI,
-            method: "GET",
-            headers: ["Accept": "application/oauth-authz-req+jwt"],
-            body: nil,
-            allowedOrigins: [try Self.origin(of: requestURI)]
-        )
-        guard let compactRequest = String(data: requestData, encoding: .utf8), !compactRequest.isEmpty else {
-            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "request_uri returned an empty Request Object")
+        let singletonNames = [
+            "client_id", "request", "request_uri", "request_uri_method", "response_type",
+            "response_mode", "response_uri", "nonce", "state", "dcql_query",
+        ]
+        for name in singletonNames { _ = try Self.singleQueryValue(named: name, in: queryItems) }
+        guard let outerClientID = try Self.singleQueryValue(named: "client_id", in: queryItems),
+              !outerClientID.isEmpty else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "OpenID4VP client_id was missing")
+        }
+        let inlineRequest = try Self.singleQueryValue(named: "request", in: queryItems)
+        let requestURIValue = try Self.singleQueryValue(named: "request_uri", in: queryItems)
+        guard (inlineRequest == nil) != (requestURIValue == nil) else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(
+                reason: "OpenID4VP envelope must contain exactly one of request or request_uri"
+            )
+        }
+        let hasRequestURIMethod = queryItems.contains { $0.name == "request_uri_method" }
+        let requestURIMethod = try Self.singleQueryValue(named: "request_uri_method", in: queryItems)
+        if hasRequestURIMethod, requestURIMethod?.isEmpty != false {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "request_uri_method was empty")
+        }
+        if requestURIValue == nil, requestURIMethod != nil {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "request_uri_method requires request_uri")
+        }
+        if let requestURIMethod {
+            if requestURIMethod == "post" {
+                throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "request_uri_method post is not supported")
+            }
+            guard requestURIMethod == "get" else {
+                throw OpenID4VCBackendError.invalidPresentationChallenge(
+                    reason: "unsupported request_uri_method \(requestURIMethod)"
+                )
+            }
+        }
+        let compactRequest: String
+        if let inlineRequest {
+            guard !inlineRequest.isEmpty else {
+                throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "inline request was empty")
+            }
+            compactRequest = inlineRequest
+        } else {
+            guard let requestURIValue, let requestURI = URL(string: requestURIValue),
+                  requestURI.scheme?.lowercased() == "https" else {
+                throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "request_uri was malformed")
+            }
+            let response = try await successfulHTTPResponse(
+                requestURI,
+                method: "GET",
+                headers: ["Accept": "application/oauth-authz-req+jwt"],
+                body: nil,
+                allowedOrigins: [try Self.origin(of: requestURI)]
+            )
+            guard Self.baseMediaType(of: response) == "application/oauth-authz-req+jwt" else {
+                throw OpenID4VCBackendError.invalidPresentationChallenge(
+                    reason: "request_uri response Content-Type was not application/oauth-authz-req+jwt"
+                )
+            }
+            guard let value = String(data: response.body, encoding: .utf8), !value.isEmpty else {
+                throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "request_uri returned an empty Request Object")
+            }
+            compactRequest = value
         }
         let verified = try await presentationRequestValidator.validate(compactJWT: compactRequest, at: now())
         try Self.requireOuterValuesMatchSigned(queryItems, signed: verified)
@@ -833,11 +889,20 @@ public actor OpenID4VCW3CBackend {
               verified.responseType == "vp_token",
               verified.responseMode == "direct_post",
               let responseURIValue = verified.responseURI,
-              let responseURI = URL(string: responseURIValue),
-               responseURI.scheme?.lowercased() == "https" else {
+               let responseURI = URL(string: responseURIValue),
+               responseURI.scheme?.lowercased() == "https",
+               responseURI.host != nil,
+               responseURI.user == nil, responseURI.password == nil,
+               responseURI.fragment == nil else {
             throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "unsupported standalone response mode or response URI")
         }
-        _ = try Self.presentationQuery(from: verified.dcqlQuery)
+        let query = try Self.presentationQuery(from: verified.dcqlQuery)
+        guard let formats = verified.vpFormatsSupported,
+              formats[query.format]?.contains("ES256") == true else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(
+                reason: "verifier metadata did not support ES256 for the requested presentation format"
+            )
+        }
         let digest = Data(SHA256.hash(data: Data(compactRequest.utf8))).base64URLEncodedString()
         try await presentationReplayProtection.consume(
             requestDigest: digest,
@@ -975,12 +1040,22 @@ public actor OpenID4VCW3CBackend {
         id: UUID,
         selectedClaimIDs: Set<String>,
         userAccepted: Bool
-    ) async throws {
+    ) async throws -> URL? {
         guard userAccepted else {
+            guard let context = interactiveAuthorizationContexts[id],
+                  context.expiresAt > now(),
+                  context.challenge.responseMode == "direct_post",
+                  let responseURI = context.challenge.responseURI else {
+                throw OpenID4VCBackendError.unknownTransaction
+            }
+            let redirectURI = try await submitStandaloneDirectPost(
+                responseURI: responseURI,
+                fields: ["error": "access_denied", "state": context.challenge.state]
+            )
             preparedPIDPresentations[id] = nil
             interactiveAuthorizationContexts[id] = nil
             transactionHolderIdentities[id] = nil
-            return
+            return redirectURI
         }
         guard let context = interactiveAuthorizationContexts[id],
               context.expiresAt > now(),
@@ -989,30 +1064,46 @@ public actor OpenID4VCW3CBackend {
             throw OpenID4VCBackendError.unknownTransaction
         }
         let token = try await storedPIDPresentationToken(id: id, selectedClaimIDs: selectedClaimIDs)
-        do {
-            _ = try await successfulRequest(
-                responseURI,
-                method: "POST",
-                headers: ["Content-Type": "application/x-www-form-urlencoded"],
-                body: form([
-                    "vp_token": token,
-                    "state": context.challenge.state,
-                ]),
-                allowedOrigins: [try Self.origin(of: responseURI)]
-            )
-        } catch let error as OpenID4VCBackendError {
-            if case let .remoteHTTPError(status, detail) = error {
-                throw OpenID4VCBackendError.presentationSubmissionHTTPError(
-                    method: "POST",
-                    path: responseURI.path,
-                    status: status,
-                    detail: detail
-                )
-            }
-            throw error
-        }
+        let redirectURI = try await submitStandaloneDirectPost(
+            responseURI: responseURI,
+            fields: ["vp_token": token, "state": context.challenge.state]
+        )
         interactiveAuthorizationContexts[id] = nil
         transactionHolderIdentities[id] = nil
+        return redirectURI
+    }
+
+    private func submitStandaloneDirectPost(
+        responseURI: URL,
+        fields: [String: String?]
+    ) async throws -> URL? {
+        try Self.validateHTTPS(responseURI)
+        let response = try await transport.send(
+            url: responseURI,
+            method: "POST",
+            headers: ["Content-Type": "application/x-www-form-urlencoded"],
+            body: form(fields)
+        )
+        guard response.body.count <= 1_048_576 else { throw OpenID4VCBackendError.invalidResponse }
+        guard response.statusCode == 200 else {
+            let detail = (try? JSONDecoder().decode(RemoteHTTPError.self, from: response.body))?.detail
+                ?? String(data: response.body, encoding: .utf8)
+            throw OpenID4VCBackendError.presentationSubmissionHTTPError(
+                method: "POST", path: responseURI.path, status: response.statusCode, detail: detail
+            )
+        }
+        guard Self.baseMediaType(of: response) == "application/json",
+              let object = try? JSONSerialization.jsonObject(with: response.body),
+              let dictionary = object as? [String: Any] else {
+            throw OpenID4VCBackendError.invalidPresentationResponse
+        }
+        guard let value = dictionary["redirect_uri"] else { return nil }
+        guard let string = value as? String, let url = URL(string: string),
+              url.scheme?.lowercased() == "https", url.host != nil,
+              url.user == nil, url.password == nil, url.fragment == nil else {
+            throw OpenID4VCBackendError.invalidPresentationResponse
+        }
+        return url
     }
 
     public func submitPresentation(
@@ -1706,33 +1797,17 @@ public actor OpenID4VCW3CBackend {
         format: String,
         vctValues: Set<String>,
         typeValues: [[String]],
-        claimPaths: [[String]]
+        claims: [(id: String, path: [String])]
     ) {
-        guard dcqlQuery["credential_sets"] == nil else {
-            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "DCQL credential_sets are not supported")
-        }
-        guard Set(dcqlQuery.keys).isSubset(of: ["credentials"]),
-              case let .array(credentials)? = dcqlQuery["credentials"],
-              credentials.count == 1,
-              case let .object(query) = credentials[0] else {
-            throw OpenID4VCBackendError.invalidPresentationChallenge(
-                reason: "exactly one DCQL credential query is supported"
-            )
-        }
-        guard Set(query.keys).isSubset(of: ["id", "format", "meta", "claims"]),
-              let format = query["format"]?.string,
-              let id = query["id"]?.string, !id.isEmpty,
-              case let .array(claims)? = query["claims"], !claims.isEmpty else {
-            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "DCQL credential query was unsupported")
-        }
+        let parsed = try OpenID4VPDCQLQuery.parse(dcqlQuery)
+        try parsed.requireCurrentlySupportedEvaluation()
+        let query = parsed.credentials[0]
+        let format = query.format
+        let id = query.id
         guard format == "dc+sd-jwt" || format == "jwt_vc_json" else {
             throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "DCQL credential format was unsupported")
         }
-        let meta = query["meta"]?.object ?? [:]
-        let allowedMetaKeys: Set<String> = format == "dc+sd-jwt" ? ["vct_values"] : ["type_values"]
-        guard Set(meta.keys).isSubset(of: allowedMetaKeys) else {
-            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "DCQL credential metadata was unsupported")
-        }
+        let meta = query.meta
             let vcts: Set<String>
             if case let .array(values)? = meta["vct_values"] {
                 let decoded = values.compactMap(\.string)
@@ -1756,19 +1831,26 @@ public actor OpenID4VCW3CBackend {
             } else {
                 typeValues = []
             }
-            let paths = claims.compactMap { claim -> [String]? in
-                guard case let .object(value) = claim,
-                      Set(value.keys) == ["path"],
-                      case let .array(path)? = value["path"] else { return nil }
-                let decoded = path.compactMap(\.string)
-                return decoded.count == path.count && !decoded.isEmpty ? decoded : nil
+            if query.claims.contains(where: { $0.values != nil }) {
+                throw OpenID4VPDCQLError.unsupportedClaimValueEvaluation
             }
-            guard paths.count == claims.count, !paths.isEmpty,
-                  format != "dc+sd-jwt" || !vcts.isEmpty,
+            let claims = try query.claims.map { claim -> (id: String, path: [String]) in
+                let path = try claim.path.map { component -> String in
+                    guard case let .string(value) = component else {
+                        throw OpenID4VPDCQLError.unsupportedPathStructure(claimIdentity: claim.id)
+                    }
+                    return value
+                }
+                if format == "dc+sd-jwt", path.count != 1 {
+                    throw OpenID4VPDCQLError.unsupportedPathStructure(claimIdentity: claim.id)
+                }
+                return (claim.id, path)
+            }
+            guard format != "dc+sd-jwt" || !vcts.isEmpty,
                   format != "jwt_vc_json" || !typeValues.isEmpty else {
                 throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "DCQL claim constraints were unsupported")
             }
-            return (id, format, vcts, typeValues, paths)
+            return (id, format, vcts, typeValues, claims)
     }
 
     private static func requireUnsignedMatchesSigned(
@@ -1851,11 +1933,12 @@ public actor OpenID4VCW3CBackend {
     }
 
     private static func presentationClaim(
+        id: String,
         path: [String],
         value: String
     ) -> DCQLRequestedClaim {
         DCQLRequestedClaim(
-            id: path.joined(separator: "."),
+            id: id,
             path: path,
             value: value,
             required: true
@@ -2309,6 +2392,18 @@ public actor OpenID4VCW3CBackend {
         body: Data?,
         allowedOrigins: Set<String>
     ) async throws -> Data {
+        try await successfulHTTPResponse(
+            url, method: method, headers: headers, body: body, allowedOrigins: allowedOrigins
+        ).body
+    }
+
+    private func successfulHTTPResponse(
+        _ url: URL,
+        method: String,
+        headers: [String: String],
+        body: Data?,
+        allowedOrigins: Set<String>
+    ) async throws -> OpenID4VCHTTPResponse {
         try Self.validateHTTPS(url)
         guard allowedOrigins.contains(try Self.origin(of: url)) else {
             throw OpenID4VCBackendError.unsafeEndpoint
@@ -2325,7 +2420,15 @@ public actor OpenID4VCW3CBackend {
                 ?? String(data: response.body, encoding: .utf8)
             throw OpenID4VCBackendError.remoteHTTPError(status: response.statusCode, detail: detail)
         }
-        return response.body
+        return response
+    }
+
+    private static func baseMediaType(of response: OpenID4VCHTTPResponse) -> String? {
+        response.headers.first {
+            $0.key.caseInsensitiveCompare("Content-Type") == .orderedSame
+        }?.value.split(separator: ";", maxSplits: 1).first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
     }
 
     private static func validateHTTPS(_ url: URL) throws {

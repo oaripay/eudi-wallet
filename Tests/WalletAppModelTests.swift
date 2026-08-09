@@ -909,8 +909,9 @@ private actor FixtureOpenID4VCWallet: OpenID4VCOperating {
         id: UUID,
         selectedClaimIDs: Set<String>,
         userAccepted: Bool
-    ) async throws {
+    ) async throws -> URL? {
         completedStandaloneClaimIDs.append(selectedClaimIDs)
+        return nil
     }
     func continueInteraction(
         id: UUID,

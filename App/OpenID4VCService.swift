@@ -37,7 +37,7 @@ protocol OpenID4VCOperating: Sendable {
         id: UUID,
         selectedClaimIDs: Set<String>,
         userAccepted: Bool
-    ) async throws
+    ) async throws -> URL?
     func continueInteraction(
         id: UUID,
         allowUntrusted: Bool,
@@ -105,8 +105,8 @@ actor LiveOpenID4VCService: OpenID4VCOperating {
         id: UUID,
         selectedClaimIDs: Set<String>,
         userAccepted: Bool
-    ) async throws {
-        try await backend.completeStoredOpenID4VPPresentation(
+    ) async throws -> URL? {
+        let redirectURI = try await backend.completeStoredOpenID4VPPresentation(
             id: id,
             selectedClaimIDs: selectedClaimIDs,
             userAccepted: userAccepted
@@ -120,6 +120,7 @@ actor LiveOpenID4VCService: OpenID4VCOperating {
             policy: .development,
             policyVersion: AuditPolicyVersion(rawValue: 1)
         ))
+        return redirectURI
     }
 
     func continueInteraction(
