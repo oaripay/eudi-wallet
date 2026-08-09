@@ -230,12 +230,14 @@ public actor OariWorkspaceW3CBackend {
     private let clientSecurity: (any OID4VCIClientSecurity)?
     private let transportProfileRegistry: OID4VCITransportProfileRegistry
     private let holderIdentityProvider: any W3CHolderIdentityProviding
+    private let presentationRequestValidator: (any WorkspacePresentationRequestValidating)?
     private let authorizationClientID: String
     private let authorizationRedirectURI: URL
     private let now: @Sendable () -> Date
     private var transactions: [UUID: Transaction] = [:]
     private var authorizationCodes: [UUID: String] = [:]
     private var authorizationCodeVerifiers: [UUID: String] = [:]
+    private var authorizationStates: [UUID: String] = [:]
     private var trustConsents: Set<UUID> = []
     private var presentationChallenges: [UUID: WorkspacePresentationChallenge] = [:]
     private var presentationChallengeTasks: [UUID: Task<WorkspacePresentationChallenge, Error>] = [:]
@@ -254,6 +256,7 @@ public actor OariWorkspaceW3CBackend {
         clientSecurity: (any OID4VCIClientSecurity)? = nil,
         transportProfileRegistry: OID4VCITransportProfileRegistry = .finalOnly,
         holderIdentityProvider: (any W3CHolderIdentityProviding)? = nil,
+        presentationRequestValidator: (any WorkspacePresentationRequestValidating)? = nil,
         authorizationClientID: String = "oari-development-wallet",
         authorizationRedirectURI: URL = URL(string: "https://oari.io/oauth/callback")!,
         now: @escaping @Sendable () -> Date = Date.init
@@ -270,6 +273,7 @@ public actor OariWorkspaceW3CBackend {
             keyProvider: keyProvider,
             referenceStore: InMemoryW3CHolderKeyReferenceStore()
         )
+        self.presentationRequestValidator = presentationRequestValidator
         self.authorizationClientID = authorizationClientID
         self.authorizationRedirectURI = authorizationRedirectURI
         self.now = now
@@ -377,6 +381,14 @@ public actor OariWorkspaceW3CBackend {
         ]
     ) async throws -> WorkspacePresentationChallenge {
         if let context = interactiveAuthorizationContexts[id] {
+            guard context.expiresAt > now() else {
+                interactiveAuthorizationContexts[id] = nil
+                presentationChallenges[id] = nil
+                preparedPIDPresentations[id] = nil
+                authorizationCodeVerifiers[id] = nil
+                authorizationStates[id] = nil
+                throw WorkspaceBackendError.invalidPresentationChallenge(reason: "authorization session expired")
+            }
             return context.challenge
         }
         if let task = presentationChallengeTasks[id] {
@@ -394,7 +406,8 @@ public actor OariWorkspaceW3CBackend {
             let challenge = try await task.value
             let context = InteractiveAuthorizationContext(
                 generationID: UUID(),
-                challenge: challenge
+                challenge: challenge,
+                expiresAt: now().addingTimeInterval(300)
             )
             interactiveAuthorizationContexts[id] = context
             presentationChallenges[id] = challenge
@@ -427,6 +440,7 @@ public actor OariWorkspaceW3CBackend {
         let authorizationServer = URL(
             string: transaction.issuerMetadata.authorizationServers?.first ?? transaction.issuer.absoluteString
         ) ?? transaction.issuer
+        let authorizationServerOrigin = try Self.origin(of: authorizationServer)
         let metadataURL = try Self.wellKnownURL(
             name: "oauth-authorization-server",
             issuer: authorizationServer
@@ -438,9 +452,15 @@ public actor OariWorkspaceW3CBackend {
             standardURL: metadataURL,
             stage: "authorization server metadata"
         )
+        if let metadataIssuer = metadata.issuer,
+           URL(string: metadataIssuer) != authorizationServer {
+            throw WorkspaceBackendError.invalidPresentationChallenge(
+                reason: "authorization server metadata issuer did not match the selected server"
+            )
+        }
         if let publishedEndpoint = metadata.authorizationChallengeEndpoint,
            let url = URL(string: publishedEndpoint),
-           try Self.origin(of: url) == Self.origin(of: transaction.issuer) {
+           try Self.origin(of: url) == authorizationServerOrigin {
             endpoint = url
             requestMethod = "POST"
             requestURL = endpoint
@@ -467,7 +487,7 @@ public actor OariWorkspaceW3CBackend {
         } else {
             if let value = metadata.authorizationEndpoint,
                let url = URL(string: value),
-               try Self.origin(of: url) == Self.origin(of: transaction.issuer) {
+               try Self.origin(of: url) == authorizationServerOrigin {
                 endpoint = url
                 requestMethod = "GET"
                 let fields = try interactiveAuthorizationRequestFields(
@@ -496,7 +516,9 @@ public actor OariWorkspaceW3CBackend {
                 ])
             }
         }
-        guard try Self.origin(of: endpoint) == Self.origin(of: transaction.issuer) else {
+        let endpointOrigin = try Self.origin(of: endpoint)
+        let issuerOrigin = try Self.origin(of: transaction.issuer)
+        guard endpointOrigin == authorizationServerOrigin || endpointOrigin == issuerOrigin else {
             throw WorkspaceBackendError.unsafeEndpoint
         }
         let raw = try await transport.send(
@@ -536,7 +558,20 @@ public actor OariWorkspaceW3CBackend {
                 reason: "response did not contain openid4vp_request"
             )
         }
-        let signedClaims = try request.requestJWT.map(Self.decodeSignedPresentationRequest)
+        let signedClaims: VerifiedWorkspacePresentationRequest?
+        if let requestJWT = request.requestJWT {
+            guard let presentationRequestValidator else {
+                throw WorkspaceBackendError.invalidPresentationChallenge(
+                    reason: "signed request verification is not configured"
+                )
+            }
+            signedClaims = try await presentationRequestValidator.validate(
+                compactJWT: requestJWT,
+                at: now()
+            )
+        } else {
+            signedClaims = nil
+        }
         guard let responseMode = request.responseMode ?? request.requestObject?.responseMode ?? signedClaims?.responseMode,
               let nonce = request.nonce ?? request.requestObject?.nonce ?? signedClaims?.nonce,
               !nonce.isEmpty,
@@ -577,7 +612,7 @@ public actor OariWorkspaceW3CBackend {
     }
 
     public func prepareStoredPIDPresentation(id: UUID) async throws -> WorkspacePIDPresentationRequest {
-        guard let context = interactiveAuthorizationContexts[id] else {
+        guard let context = interactiveAuthorizationContexts[id], context.expiresAt > now() else {
             throw WorkspaceBackendError.unknownTransaction
         }
         let challenge = context.challenge
@@ -656,6 +691,7 @@ public actor OariWorkspaceW3CBackend {
         selectedClaimIDs: Set<String>
     ) async throws -> String {
         guard let context = interactiveAuthorizationContexts[id],
+              context.expiresAt > now(),
               let prepared = preparedPIDPresentations.removeValue(forKey: id),
               prepared.authorizationGenerationID == context.generationID,
               prepared.requiredClaimIDs.isSubset(of: selectedClaimIDs),
@@ -717,6 +753,7 @@ public actor OariWorkspaceW3CBackend {
     ) async throws -> String {
         guard let transaction = transactions[id],
               let context = interactiveAuthorizationContexts[id],
+              context.expiresAt > now(),
               trustConsents.contains(id) else {
             throw WorkspaceBackendError.unknownTransaction
         }
@@ -773,7 +810,7 @@ public actor OariWorkspaceW3CBackend {
                 method: "POST",
                 headers: ["Content-Type": "application/x-www-form-urlencoded"],
                 body: form(fields),
-                allowedOrigins: [try Self.origin(of: transaction.issuer)]
+                allowedOrigins: [try Self.origin(of: responseEndpoint)]
             )
         } catch let error as WorkspaceBackendError {
             if case let .remoteHTTPError(status, detail) = error {
@@ -791,6 +828,9 @@ public actor OariWorkspaceW3CBackend {
             from: response,
             stage: "presentation authorization response"
         )
+        guard let expectedState = authorizationStates[id], code.state == expectedState else {
+            throw WorkspaceBackendError.authorizationFailed
+        }
         guard let value = code.authorizationCode ?? code.code, !value.isEmpty else {
             throw WorkspaceBackendError.invalidPresentationResponse
         }
@@ -1131,6 +1171,7 @@ public actor OariWorkspaceW3CBackend {
         transactions[id] = nil
         authorizationCodes[id] = nil
         authorizationCodeVerifiers[id] = nil
+        authorizationStates[id] = nil
         interactiveAuthorizationContexts[id] = nil
         presentationChallengeTasks.removeValue(forKey: id)?.cancel()
         transactionHolderIdentities[id] = nil
@@ -1543,6 +1584,7 @@ public actor OariWorkspaceW3CBackend {
         transactions[id] = nil
         authorizationCodes[id] = nil
         authorizationCodeVerifiers[id] = nil
+        authorizationStates[id] = nil
         presentationChallenges[id] = nil
         presentationChallengeTasks.removeValue(forKey: id)?.cancel()
         interactiveAuthorizationContexts[id] = nil
@@ -1596,6 +1638,8 @@ public actor OariWorkspaceW3CBackend {
     ) throws -> [String: String?] {
         let verifier = Self.base64URL(Data((UUID().uuidString + UUID().uuidString).utf8))
         authorizationCodeVerifiers[id] = verifier
+        let state = authorizationStates[id] ?? UUID().uuidString.lowercased()
+        authorizationStates[id] = state
         let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URLEncodedString()
         let authorizationDetails = try JSONSerialization.data(
             withJSONObject: configurationIDs.map { configurationID in
@@ -1608,6 +1652,7 @@ public actor OariWorkspaceW3CBackend {
             "response_type": "code",
             "client_id": authorizationClientID,
             "redirect_uri": authorizationRedirectURI.absoluteString,
+            "state": state,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
             "authorization_details": String(decoding: authorizationDetails, as: UTF8.self),
@@ -1956,14 +2001,17 @@ private struct PreparedW3CPresentation: Sendable {
 private struct InteractiveAuthorizationContext: Sendable {
     let generationID: UUID
     let challenge: WorkspacePresentationChallenge
+    let expiresAt: Date
 }
 
 private struct AuthorizationCodeResponse: Decodable {
     let authorizationCode: String?
     let code: String?
+    let state: String?
     enum CodingKeys: String, CodingKey {
         case authorizationCode = "authorization_code"
         case code
+        case state
     }
 }
 
@@ -2136,6 +2184,7 @@ private struct DisplayImage: Decodable {
 }
 
 private struct AuthorizationMetadata: Decodable {
+    let issuer: String?
     let tokenEndpoint: String
     let authorizationEndpoint: String?
     let authorizationChallengeEndpoint: String?
@@ -2143,6 +2192,7 @@ private struct AuthorizationMetadata: Decodable {
     let clientAttestationAlgorithms: [String]?
     let tokenEndpointAuthenticationMethods: [String]?
     enum CodingKeys: String, CodingKey {
+        case issuer
         case tokenEndpoint = "token_endpoint"
         case authorizationEndpoint = "authorization_endpoint"
         case authorizationChallengeEndpoint = "authorization_challenge_endpoint"

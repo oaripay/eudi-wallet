@@ -439,7 +439,8 @@ struct OariWorkspaceW3CBackendTests {
             keyProvider: FixtureKeyProvider(),
             credentialStore: FixtureCredentialStore(),
             credentialValidator: FixtureCredentialValidator(),
-            profile: try .oariVcdm2Jwt()
+            profile: try .oariVcdm2Jwt(),
+            presentationRequestValidator: FixturePresentationRequestValidator()
         )
         let offer = try await backend.resolveOffer(
             "openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffer"
@@ -459,7 +460,8 @@ struct OariWorkspaceW3CBackendTests {
             keyProvider: FixtureKeyProvider(),
             credentialStore: FixtureCredentialStore(),
             credentialValidator: FixtureCredentialValidator(),
-            profile: try .oariVcdm2Jwt()
+            profile: try .oariVcdm2Jwt(),
+            presentationRequestValidator: FixturePresentationRequestValidator()
         )
         let json = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["oari-v2"],"grants":{"authorization_code":{"issuer_state":"issuer-state"}}}"#
         let encoded = json.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
@@ -583,7 +585,8 @@ struct OariWorkspaceW3CBackendTests {
             credentialStore: FixtureCredentialStore(),
             credentialValidator: FixtureCredentialValidator(),
             profile: try .dcSdJWTVC(),
-            transportProfileRegistry: .developmentDraftCompatibility
+            transportProfileRegistry: .developmentDraftCompatibility,
+            presentationRequestValidator: FixturePresentationRequestValidator()
         )
         let offer = try await Self.authorizationOffer(backend)
         let challenge = try await backend.beginPresentationRequired(
@@ -1033,6 +1036,7 @@ private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
     private let credentialFormat: String
     private let credentialResponse: String
     private let iGrantCompactPresentation: Bool
+    private var authorizationState: String?
 
     init(
         presentationFormat: String = "dc+sd-jwt",
@@ -1061,6 +1065,9 @@ private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
             response = #"{"access_token":"access","c_nonce":"nonce-1"}"#
         case "/authorize-challenge", "/authorize":
             if String(decoding: body ?? Data(), as: UTF8.self).contains("issuer_state") {
+                let encoded = String(decoding: body ?? Data(), as: UTF8.self)
+                authorizationState = URLComponents(string: "?\(encoded)")?.queryItems?
+                    .first(where: { $0.name == "state" })?.value
                 if url.path == "/authorize" {
                     if iGrantCompactPresentation {
                         return WorkspaceHTTPResponse(
@@ -1081,7 +1088,9 @@ private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
                     """.utf8)
                 )
             }
-            response = #"{"authorization_code":"auth-code","code":"auth-code"}"#
+            response = """
+            {"authorization_code":"auth-code","code":"auth-code","state":"\(authorizationState ?? "")"}
+            """
         case "/credential":
             response = """
             {"credentials":[{"credential":"\(credentialResponse)"}]}
@@ -1277,6 +1286,32 @@ private actor FixtureCredentialValidator: WorkspaceCredentialValidating {
         #expect(!expectedIssuer.isEmpty)
         #expect(!expectedHolderDID.isEmpty)
         return expectedIssuer
+    }
+}
+
+private struct FixturePresentationRequestValidator: WorkspacePresentationRequestValidating {
+    func validate(compactJWT: String, at date: Date) async throws -> VerifiedWorkspacePresentationRequest {
+        let parts = compactJWT.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { throw WorkspaceBackendError.invalidResponse }
+        var base64 = String(parts[1]).replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+        guard let data = Data(base64Encoded: base64) else { throw WorkspaceBackendError.invalidResponse }
+        let payload = try JSONDecoder().decode([String: AnySendableJSON].self, from: data)
+        guard let clientID = payload["client_id"]?.string,
+              let responseMode = payload["response_mode"]?.string,
+              let nonce = payload["nonce"]?.string,
+              let dcqlQuery = payload["dcql_query"]?.object else {
+            throw WorkspaceBackendError.invalidResponse
+        }
+        return VerifiedWorkspacePresentationRequest(
+            clientID: clientID,
+            responseMode: responseMode,
+            responseURI: payload["response_uri"]?.string,
+            nonce: nonce,
+            state: payload["state"]?.string,
+            dcqlQuery: dcqlQuery
+        )
     }
 }
 

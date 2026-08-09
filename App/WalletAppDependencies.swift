@@ -128,6 +128,9 @@ struct WalletAppDependencies: Sendable {
                     keyStore: keyStore
                 )
                 let workspaceTransport = URLSessionWorkspaceTransport()
+                let workspaceDIDResolver = CompositeDIDResolver(
+                    ebsi: EBSIDIDResolver(client: registryClient)
+                )
                 let w3cKeyProvider = DeviceBoundKeyProvider(
                     applicationTagPrefix: "io.oari.wallet.ebsi.key"
                 )
@@ -149,9 +152,7 @@ struct WalletAppDependencies: Sendable {
                     keyProvider: w3cKeyProvider,
                     credentialStore: ebsiStore,
                     credentialValidator: NativeWorkspaceCredentialValidator(
-                        resolver: CompositeDIDResolver(
-                            ebsi: EBSIDIDResolver(client: registryClient)
-                        ),
+                        resolver: workspaceDIDResolver,
                         transport: workspaceTransport,
                         allowsDIDIssuerDelegation: true
                     ),
@@ -164,6 +165,9 @@ struct WalletAppDependencies: Sendable {
                     ),
                     transportProfileRegistry: .developmentDraftCompatibility,
                     holderIdentityProvider: holderIdentityProvider,
+                    presentationRequestValidator: NativeWorkspacePresentationRequestValidator(
+                        resolver: workspaceDIDResolver
+                    ),
                     authorizationClientID: walletClientID,
                     authorizationRedirectURI: walletAuthorizationRedirectURI
                 )
