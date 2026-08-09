@@ -87,6 +87,33 @@ struct WalletAppModelTests {
         #expect(await restartedAuthenticator.callCount == 1)
     }
 
+    @Test("Enabling App Lock authentication does not present the foreground lock screen")
+    func appLockSetupAuthenticationDoesNotBlock() async {
+        let suiteName = "WalletAppModelTests.app-lock-setup-auth.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let authenticator = SuspendingAppLockAuthenticator()
+        let model = WalletAppModel(showsOnboarding: true, userDefaults: defaults)
+        await model.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), appLockAuthenticator: authenticator,
+            eudiWallet: nil, eudiAvailability: .configurationRequired("Unavailable"), ebsiWallet: nil
+        )))
+
+        let setup = Task { await model.configureAppLock(enabled: true) }
+        await authenticator.waitForCallCount(1)
+        #expect(model.appLockState == .authenticating)
+        #expect(!model.requiresForegroundUnlock)
+        #expect(!model.isAppLockBlocking)
+        await model.handleScenePhase(.inactive)
+        await model.handleScenePhase(.active)
+        #expect(await authenticator.callCount == 1)
+        await authenticator.completeNext()
+        await setup.value
+        #expect(model.appLockState == .unlocked)
+        #expect(!model.isAppLockBlocking)
+    }
+
     @Test("Declined or failed App Lock setup never enables the lock")
     func appLockSetupFailure() async {
         let suiteName = "WalletAppModelTests.app-lock-failure.\(UUID().uuidString)"

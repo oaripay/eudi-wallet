@@ -27,6 +27,7 @@ final class WalletAppModel: ObservableObject {
     @Published private(set) var scanResult: ScanResult = .idle
     @Published private(set) var loadingState: LoadingState = .idle
     @Published private(set) var appLockState: AppLockState
+    @Published private(set) var requiresForegroundUnlock: Bool
     @Published private(set) var lifecyclePhase: AppLifecyclePhase = .active
     @Published private(set) var appLockAuthenticationKind: DeviceAuthenticationKind = .unavailable
     @Published private(set) var appLockSetupError: String?
@@ -69,7 +70,9 @@ final class WalletAppModel: ObservableObject {
         userDefaults: UserDefaults = .standard
     ) {
         self.userDefaults = userDefaults
-        appLockState = userDefaults.bool(forKey: Self.appLockEnabledKey) ? .locked(nil) : .disabled
+        let appLockEnabled = userDefaults.bool(forKey: Self.appLockEnabledKey)
+        appLockState = appLockEnabled ? .locked(nil) : .disabled
+        requiresForegroundUnlock = appLockEnabled
         theme = userDefaults.string(forKey: Self.themePreferenceKey)
             .flatMap(OariTheme.init(rawValue:)) ?? .system
         self.allowedHosts = allowedHosts
@@ -108,10 +111,7 @@ final class WalletAppModel: ObservableObject {
         }
     }
     var isAppLockBlocking: Bool {
-        switch appLockState {
-        case .locked, .authenticating, .unavailable: true
-        case .disabled, .unlocked: false
-        }
+        requiresForegroundUnlock
     }
     var isPrivacyCoverVisible: Bool {
         lifecyclePhase == .background
@@ -220,6 +220,7 @@ final class WalletAppModel: ObservableObject {
                 activeAuthenticationID = nil
                 userDefaults.set(true, forKey: Self.appLockEnabledKey)
                 userDefaults.set(true, forKey: Self.appLockSetupCompletedKey)
+                requiresForegroundUnlock = false
                 appLockState = .unlocked
                 showsAppLockSetup = false
             } catch {
@@ -243,6 +244,7 @@ final class WalletAppModel: ObservableObject {
                 activeAuthenticationID = nil
                 userDefaults.set(false, forKey: Self.appLockEnabledKey)
                 userDefaults.set(true, forKey: Self.appLockSetupCompletedKey)
+                requiresForegroundUnlock = false
                 appLockState = .disabled
             } catch {
                 guard activeAuthenticationID == requestID else { return }
@@ -255,6 +257,7 @@ final class WalletAppModel: ObservableObject {
     func declineAppLockSetup() {
         userDefaults.set(false, forKey: Self.appLockEnabledKey)
         userDefaults.set(true, forKey: Self.appLockSetupCompletedKey)
+        requiresForegroundUnlock = false
         appLockState = .disabled
         appLockSetupError = nil
         showsAppLockSetup = false
@@ -262,6 +265,7 @@ final class WalletAppModel: ObservableObject {
 
     func unlockApp() async {
         guard isAppLockEnabled else {
+            requiresForegroundUnlock = false
             appLockState = .disabled
             return
         }
@@ -290,6 +294,7 @@ final class WalletAppModel: ObservableObject {
                   lifecyclePhase != .background,
                   isAppLockEnabled else { return }
             activeAuthenticationID = nil
+            requiresForegroundUnlock = false
             appLockState = .unlocked
         } catch {
             guard activeAuthenticationID == requestID else { return }
@@ -309,13 +314,15 @@ final class WalletAppModel: ObservableObject {
         case .background:
             backgroundGeneration += 1
             activeAuthenticationID = nil
+            requiresForegroundUnlock = isAppLockEnabled
             appLockState = isAppLockEnabled ? .locked(nil) : .disabled
         case .active:
             guard isAppLockEnabled else {
+                requiresForegroundUnlock = false
                 appLockState = .disabled
                 return
             }
-            guard appLockState != .unlocked, appLockState != .authenticating else { return }
+            guard requiresForegroundUnlock, appLockState != .authenticating else { return }
             await unlockApp()
         }
     }

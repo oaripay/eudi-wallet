@@ -33,12 +33,15 @@ struct OariWalletApp: App {
             }
             .preferredColorScheme(model.theme.colorScheme)
             .onOpenURL(perform: model.handleIncomingURL)
-            .fullScreenCover(isPresented: Binding(
-                get: { model.isPrivacyCoverVisible || model.isAppLockBlocking },
-                set: { _ in }
-            )) {
-                WalletPrivacyCover(model: model)
-                    .interactiveDismissDisabled()
+            .overlay {
+                if scenePhase != .active || model.isAppLockBlocking {
+                    WalletPrivacyShield(
+                        model: model,
+                        isSpinning: scenePhase != .active || model.appLockState == .authenticating
+                    )
+                        .transition(.identity)
+                        .zIndex(100)
+                }
             }
             .sheet(isPresented: $model.showsAppLockSetup) {
                 WalletAppLockSetupView(model: model, allowsDismissal: false)
@@ -116,7 +119,7 @@ private struct WalletStartupSplash: View {
         .accessibilityLabel("Oari Wallet is preparing your secure wallet")
         .onAppear {
             guard !reduceMotion else { return }
-            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { rotation = 360 }
+            withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) { rotation = 360 }
         }
     }
 }

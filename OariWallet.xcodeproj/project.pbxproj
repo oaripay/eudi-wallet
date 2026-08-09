@@ -496,7 +496,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = io.oari.wallet.tests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OARIWallet.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OARIWallet";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OariWallet.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OariWallet";
 			};
 			name = Debug;
 		};
@@ -614,7 +614,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = io.oari.wallet.tests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OARIWallet.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OARIWallet";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OariWallet.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OariWallet";
 			};
 			name = Release;
 		};
@@ -743,7 +743,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = io.oari.wallet.tests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OARIWallet.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OARIWallet";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OariWallet.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/OariWallet";
 			};
 			name = ReleaseTesting;
 		};
