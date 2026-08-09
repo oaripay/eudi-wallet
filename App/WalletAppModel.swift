@@ -490,6 +490,11 @@ final class WalletAppModel: ObservableObject {
     }
 
     func startEudiPresentationForEbsi(_ challenge: WorkspacePresentationChallenge) async {
+        guard activeEbsiInteractionID == challenge.id else {
+            eudiFlow = .failed("The issuer authorization challenge is stale. Start the credential offer again.")
+            return
+        }
+        activeEbsiChallenge = challenge
         let requestedVCTs = Self.requestedVCTs(in: challenge.dcqlQuery)
         let requestedFormats = Self.requestedFormats(in: challenge.dcqlQuery)
         let hasMatchingEudiPID = requestedVCTs.isEmpty || walletDocumentSummaries.values.contains { document in
@@ -519,7 +524,6 @@ final class WalletAppModel: ObservableObject {
             return
         }
         activeWorkspacePresentation = false
-        activeEbsiChallenge = challenge
         guard let signedRequest = challenge.signedRequest else {
             eudiFlow = .failed("The issuer did not provide the signed PID presentation request required by Wallet Kit.")
             return
@@ -626,7 +630,9 @@ final class WalletAppModel: ObservableObject {
         eudiFlow = .working(accepted ? "Sharing approved claims…" : "Declining the request…")
         do {
             if activeWorkspacePresentation {
-                guard let id = activeEbsiInteractionID, let ebsiWallet else {
+                guard let id = activeEbsiChallenge?.id,
+                      id == activeEbsiInteractionID,
+                      let ebsiWallet else {
                     throw EbsiCredentialError.backendUnavailable
                 }
                 let result = try await ebsiWallet.completePIDPresentation(
@@ -679,7 +685,9 @@ final class WalletAppModel: ObservableObject {
                 activePendingIssuance = nil
                 eudiFlow = .completed(accepted ? "Approved claims were shared." : "Request declined. Nothing was shared.")
             case let .externalAuthorization(code):
-                guard let id = activeEbsiInteractionID, let ebsiWallet else {
+                guard let id = activeEbsiChallenge?.id,
+                      id == activeEbsiInteractionID,
+                      let ebsiWallet else {
                     eudiFlow = .failed("The EBSI authorization transaction expired.")
                     return
                 }
@@ -930,6 +938,8 @@ final class WalletAppModel: ObservableObject {
                     ?? "The issuer returned HTTP \(status)."
             case .clientSecurityUnavailable:
                 return "The issuer requires DPoP, client attestation, or encrypted credential responses that are unavailable."
+            case .holderIdentityRecoveryRequired:
+                return "The canonical W3C holder key is missing. Reset the development W3C wallet data before continuing."
             }
         }
         if let error = error as? EbsiCredentialError {

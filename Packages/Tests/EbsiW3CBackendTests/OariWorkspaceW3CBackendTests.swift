@@ -506,6 +506,29 @@ struct OariWorkspaceW3CBackendTests {
         #expect(try await backend.issue(id: offer.id, allowUntrusted: false, transactionCode: nil).count == 1)
     }
 
+    @Test("Interactive authorization challenge creation is single-flight")
+    func presentationChallengeSingleFlight() async throws {
+        let transport = FixtureWorkspaceTransport()
+        let backend = OariWorkspaceW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(),
+            credentialStore: FixtureCredentialStore(),
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .oariVcdm2Jwt()
+        )
+        let offer = try await Self.authorizationOffer(backend)
+        async let first = backend.beginPresentationRequired(id: offer.id, allowUntrusted: false)
+        async let second = backend.beginPresentationRequired(id: offer.id, allowUntrusted: false)
+        let (firstChallenge, secondChallenge) = try await (first, second)
+        #expect(firstChallenge == secondChallenge)
+        let requests = (await transport.requests).filter { request in
+            request.url.path == "/authorize-challenge" &&
+                String(decoding: request.body ?? Data(), as: UTF8.self).contains("issuer_state=")
+        }
+        #expect(requests.count == 1)
+    }
+
     @Test("Authorization-code offer resolves signed draft PID presentation challenge")
     func authorizationDraftPresentation() async throws {
         let transport = FixtureWorkspaceTransport()
@@ -688,6 +711,7 @@ struct OariWorkspaceW3CBackendTests {
 
     @Test("Stored jwt_vc_json credential creates a holder-signed JWT VP")
     func storedJWTVCPresentation() async throws {
+        let transport = FixtureWorkspaceTransport(presentationFormat: "jwt_vc_json")
         let keys = FixtureKeyProvider()
         let key = try await keys.createKey(
             purpose: .credentialBinding,
@@ -719,7 +743,7 @@ struct OariWorkspaceW3CBackendTests {
             holderKeyReference: key.id.rawValue.uuidString
         )
         let backend = OariWorkspaceW3CBackend(
-            transport: FixtureWorkspaceTransport(presentationFormat: "jwt_vc_json"),
+            transport: transport,
             trustEvaluator: TrustedIssuerEvaluator(),
             keyProvider: keys,
             credentialStore: FixtureCredentialStore(values: [stored]),
@@ -745,6 +769,19 @@ struct OariWorkspaceW3CBackendTests {
         #expect(vp["@context"] as? [String] == ["https://www.w3.org/2018/credentials/v1"])
         let presentedCredentials = try #require(vp["verifiableCredential"] as? [String])
         #expect(presentedCredentials == [credential])
+        _ = try await backend.submitPresentation(id: offer.id, vpToken: token)
+        let post = try #require((await transport.requests).last { request in
+            String(decoding: request.body ?? Data(), as: UTF8.self).contains("openid4vp_response=")
+        })
+        let form = String(decoding: try #require(post.body), as: UTF8.self)
+        let fields = Dictionary(uniqueKeysWithValues: try #require(
+            URLComponents(string: "?\(form)")?.queryItems
+        ).compactMap { item in item.value.map { (item.name, $0) } })
+        let wrapped = try #require(fields["openid4vp_response"])
+        let response = try #require(JSONSerialization.jsonObject(with: Data(wrapped.utf8)) as? [String: Any])
+        let submitted = try #require(response["vp_token"] as? [String: [String]])
+        let submittedJWT = try #require(submitted["pid"]?.first)
+        #expect(try Self.jwtPayload(submittedJWT)["nonce"] as? String == "vp-nonce")
     }
 
     @Test("Stored W3C credential deletion is idempotent")

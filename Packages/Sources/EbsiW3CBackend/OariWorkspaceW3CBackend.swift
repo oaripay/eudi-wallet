@@ -198,6 +198,7 @@ public enum WorkspaceBackendError: Error, Equatable, Sendable {
     case remoteOAuthError(code: String, detail: String?)
     case remoteHTTPError(status: Int, detail: String?)
     case clientSecurityUnavailable
+    case holderIdentityRecoveryRequired
 }
 
 public actor OariWorkspaceW3CBackend {
@@ -228,6 +229,7 @@ public actor OariWorkspaceW3CBackend {
     private let profiles: [EbsiCredentialProfile]
     private let clientSecurity: (any OID4VCIClientSecurity)?
     private let transportProfileRegistry: OID4VCITransportProfileRegistry
+    private let holderIdentityProvider: any W3CHolderIdentityProviding
     private let authorizationClientID: String
     private let authorizationRedirectURI: URL
     private let now: @Sendable () -> Date
@@ -236,7 +238,10 @@ public actor OariWorkspaceW3CBackend {
     private var authorizationCodeVerifiers: [UUID: String] = [:]
     private var trustConsents: Set<UUID> = []
     private var presentationChallenges: [UUID: WorkspacePresentationChallenge] = [:]
+    private var presentationChallengeTasks: [UUID: Task<WorkspacePresentationChallenge, Error>] = [:]
+    private var interactiveAuthorizationContexts: [UUID: InteractiveAuthorizationContext] = [:]
     private var preparedPIDPresentations: [UUID: PreparedW3CPresentation] = [:]
+    private var transactionHolderIdentities: [UUID: W3CHolderIdentity] = [:]
 
     public init(
         transport: any WorkspaceHTTPTransport,
@@ -248,6 +253,7 @@ public actor OariWorkspaceW3CBackend {
         additionalProfiles: [EbsiCredentialProfile] = [],
         clientSecurity: (any OID4VCIClientSecurity)? = nil,
         transportProfileRegistry: OID4VCITransportProfileRegistry = .finalOnly,
+        holderIdentityProvider: (any W3CHolderIdentityProviding)? = nil,
         authorizationClientID: String = "oari-development-wallet",
         authorizationRedirectURI: URL = URL(string: "https://oari.io/oauth/callback")!,
         now: @escaping @Sendable () -> Date = Date.init
@@ -260,6 +266,10 @@ public actor OariWorkspaceW3CBackend {
         self.profiles = [profile] + additionalProfiles
         self.clientSecurity = clientSecurity
         self.transportProfileRegistry = transportProfileRegistry
+        self.holderIdentityProvider = holderIdentityProvider ?? PersistentW3CHolderIdentityProvider(
+            keyProvider: keyProvider,
+            referenceStore: InMemoryW3CHolderKeyReferenceStore()
+        )
         self.authorizationClientID = authorizationClientID
         self.authorizationRedirectURI = authorizationRedirectURI
         self.now = now
@@ -360,6 +370,44 @@ public actor OariWorkspaceW3CBackend {
     }
 
     public func beginPresentationRequired(
+        id: UUID,
+        allowUntrusted: Bool,
+        interactionTypes: [String] = [
+            "urn:openid:dcp:ia:openid4vp_presentation",
+        ]
+    ) async throws -> WorkspacePresentationChallenge {
+        if let context = interactiveAuthorizationContexts[id] {
+            return context.challenge
+        }
+        if let task = presentationChallengeTasks[id] {
+            return try await task.value
+        }
+        let task = Task { [self] in
+            try await createPresentationChallenge(
+                id: id,
+                allowUntrusted: allowUntrusted,
+                interactionTypes: interactionTypes
+            )
+        }
+        presentationChallengeTasks[id] = task
+        do {
+            let challenge = try await task.value
+            let context = InteractiveAuthorizationContext(
+                generationID: UUID(),
+                challenge: challenge
+            )
+            interactiveAuthorizationContexts[id] = context
+            presentationChallenges[id] = challenge
+            presentationChallengeTasks[id] = nil
+            return challenge
+        } catch {
+            presentationChallengeTasks[id] = nil
+            authorizationCodeVerifiers[id] = nil
+            throw error
+        }
+    }
+
+    private func createPresentationChallenge(
         id: UUID,
         allowUntrusted: Bool,
         interactionTypes: [String] = [
@@ -491,6 +539,7 @@ public actor OariWorkspaceW3CBackend {
         let signedClaims = try request.requestJWT.map(Self.decodeSignedPresentationRequest)
         guard let responseMode = request.responseMode ?? request.requestObject?.responseMode ?? signedClaims?.responseMode,
               let nonce = request.nonce ?? request.requestObject?.nonce ?? signedClaims?.nonce,
+              !nonce.isEmpty,
               let dcqlQuery = request.dcqlQuery ?? request.requestObject?.dcqlQuery ?? signedClaims?.dcqlQuery else {
             throw WorkspaceBackendError.invalidPresentationChallenge(
                 reason: "request did not contain response_mode, nonce, and dcql_query"
@@ -503,30 +552,39 @@ public actor OariWorkspaceW3CBackend {
                     : "unsupported response_mode \(responseMode)"
             )
         }
+        let requestedResponseURI = request.responseURI ?? request.requestObject?.responseURI ?? signedClaims?.responseURI
+        if let requestedResponseURI,
+           let url = URL(string: requestedResponseURI),
+           url != endpoint {
+            throw WorkspaceBackendError.invalidPresentationChallenge(
+                reason: "ia_post response_uri did not match authorization_challenge_endpoint"
+            )
+        }
         let challenge = WorkspacePresentationChallenge(
             id: id,
             authorizationEndpoint: endpoint,
             authSession: authSession,
             interactionType: expectedInteractionType,
             responseMode: responseMode,
-            responseURI: (request.responseURI ?? request.requestObject?.responseURI ?? signedClaims?.responseURI).flatMap(URL.init(string:)),
+            responseURI: endpoint,
             nonce: nonce,
             state: request.state ?? request.requestObject?.state ?? signedClaims?.state,
             dcqlQuery: dcqlQuery,
             signedRequest: request.request,
             clientID: request.clientID ?? request.requestObject?.clientID ?? signedClaims?.clientID
         )
-        presentationChallenges[id] = challenge
         return challenge
     }
 
     public func prepareStoredPIDPresentation(id: UUID) async throws -> WorkspacePIDPresentationRequest {
-        guard let challenge = presentationChallenges[id] else {
+        guard let context = interactiveAuthorizationContexts[id] else {
             throw WorkspaceBackendError.unknownTransaction
         }
+        let challenge = context.challenge
+        let holderIdentity = try await holderIdentity(for: id)
         let query = try Self.presentationQuery(from: challenge.dcqlQuery)
         let credentials = try await credentialStore.credentials()
-        for credential in credentials {
+        for credential in credentials where credential.holderKeyReference == holderIdentity.keyID.rawValue.uuidString {
             var claims: [WorkspacePIDPresentationClaim] = []
             let kind: PreparedW3CPresentation.Kind
             switch (query.format, credential.representation) {
@@ -572,6 +630,7 @@ public actor OariWorkspaceW3CBackend {
             }
             preparedPIDPresentations[id] = PreparedW3CPresentation(
                 credential: credential,
+                authorizationGenerationID: context.generationID,
                 kind: kind,
                 requiredClaimIDs: Set(claims.map(\.id)),
                 queryID: query.id
@@ -585,16 +644,25 @@ public actor OariWorkspaceW3CBackend {
         throw WorkspaceBackendError.presentationCredentialUnavailable
     }
 
+    private func holderIdentity(for transactionID: UUID) async throws -> W3CHolderIdentity {
+        if let identity = transactionHolderIdentities[transactionID] { return identity }
+        let identity = try await holderIdentityProvider.loadOrCreateIdentity()
+        transactionHolderIdentities[transactionID] = identity
+        return identity
+    }
+
     public func storedPIDPresentationToken(
         id: UUID,
         selectedClaimIDs: Set<String>
     ) async throws -> String {
-        guard let challenge = presentationChallenges[id],
+        guard let context = interactiveAuthorizationContexts[id],
               let prepared = preparedPIDPresentations.removeValue(forKey: id),
+              prepared.authorizationGenerationID == context.generationID,
               prepared.requiredClaimIDs.isSubset(of: selectedClaimIDs),
               let keyUUID = UUID(uuidString: prepared.credential.holderKeyReference) else {
             throw WorkspaceBackendError.invalidPresentationResponse
         }
+        let challenge = context.challenge
         let keyID = KeyID(rawValue: keyUUID)
         let presentation: String
         switch prepared.kind {
@@ -648,10 +716,11 @@ public actor OariWorkspaceW3CBackend {
         vpToken: String
     ) async throws -> String {
         guard let transaction = transactions[id],
-              let challenge = presentationChallenges[id],
+              let context = interactiveAuthorizationContexts[id],
               trustConsents.contains(id) else {
             throw WorkspaceBackendError.unknownTransaction
         }
+        let challenge = context.challenge
         var fields: [String: String?] = [:]
         if challenge.responseMode == "direct_post" {
             fields["state"] = challenge.state
@@ -694,7 +763,9 @@ public actor OariWorkspaceW3CBackend {
                 reason: "unsupported response_mode \(challenge.responseMode)"
             )
         }
-        let responseEndpoint = challenge.responseURI ?? challenge.authorizationEndpoint
+        let responseEndpoint = challenge.responseMode == "ia_post" || challenge.responseMode == "ia_post.jwt"
+            ? challenge.authorizationEndpoint
+            : (challenge.responseURI ?? challenge.authorizationEndpoint)
         let response: Data
         do {
             response = try await successfulRequest(
@@ -725,6 +796,7 @@ public actor OariWorkspaceW3CBackend {
         }
         authorizationCodes[id] = value
         presentationChallenges[id] = nil
+        interactiveAuthorizationContexts[id] = nil
         return value
     }
 
@@ -833,15 +905,9 @@ public actor OariWorkspaceW3CBackend {
             allowedOrigins: [try Self.origin(of: authorizationServer)]
         )
         let token = try Self.decode(TokenResponse.self, from: tokenResponse, stage: "token response")
-        let key = try await keyProvider.createKey(
-            purpose: .credentialBinding,
-            algorithm: .es256,
-            requiresUserPresence: true,
-            protection: .secureEnclavePreferred
-        )
-        let publicKey = try await keyProvider.publicKey(id: key.id)
-        let holderDID = try KeyDIDResolver().derive(publicKeyX963: publicKey.x963Representation)
-        let method = try await KeyDIDResolver().resolve(holderDID).assertionMethod.first!
+        let holderIdentity = try await holderIdentity(for: id)
+        let holderDID = holderIdentity.did
+        let method = holderIdentity.assertionMethod
         var results: [WorkspaceIssuedCredential] = []
         let configurationIDs: [String]
         var draftAuthorizationDetails: [String: TokenResponse.AuthorizationDetail] = [:]
@@ -937,7 +1003,7 @@ public actor OariWorkspaceW3CBackend {
                 identifierCandidates = [nil]
             }
             let proof = try await proofJWT(
-                key: key,
+                keyID: holderIdentity.keyID,
                 kid: method,
                 issuer: holderDID,
                 audience: transaction.issuer.absoluteString,
@@ -1025,7 +1091,7 @@ public actor OariWorkspaceW3CBackend {
                     profileID: selectedProfile.id,
                     representation: selectedProfile.representation,
                     rawCredential: raw,
-                    holderKeyReference: key.id.rawValue.uuidString,
+                    holderKeyReference: holderIdentity.keyID.rawValue.uuidString,
                     receivedAt: now()
                 )
                 try await credentialStore.save(stored)
@@ -1065,6 +1131,9 @@ public actor OariWorkspaceW3CBackend {
         transactions[id] = nil
         authorizationCodes[id] = nil
         authorizationCodeVerifiers[id] = nil
+        interactiveAuthorizationContexts[id] = nil
+        presentationChallengeTasks.removeValue(forKey: id)?.cancel()
+        transactionHolderIdentities[id] = nil
         trustConsents.remove(id)
         return results
     }
@@ -1475,7 +1544,10 @@ public actor OariWorkspaceW3CBackend {
         authorizationCodes[id] = nil
         authorizationCodeVerifiers[id] = nil
         presentationChallenges[id] = nil
+        presentationChallengeTasks.removeValue(forKey: id)?.cancel()
+        interactiveAuthorizationContexts[id] = nil
         preparedPIDPresentations[id] = nil
+        transactionHolderIdentities[id] = nil
         trustConsents.remove(id)
     }
 
@@ -1543,7 +1615,7 @@ public actor OariWorkspaceW3CBackend {
     }
 
     private func proofJWT(
-        key: KeyRecord,
+        keyID: KeyID,
         kid: String,
         issuer: String,
         audience: String,
@@ -1561,7 +1633,7 @@ public actor OariWorkspaceW3CBackend {
         let encodedPayload = try Self.base64JSON(payload)
         let input = Data("\(header).\(encodedPayload)".utf8)
         let signature = try await keyProvider.sign(SigningRequest(
-            keyID: key.id,
+            keyID: keyID,
             payload: input,
             userAuthenticationReason: "Sign EBSI credential proof",
             signatureFormat: .joseRaw
@@ -1875,9 +1947,15 @@ private struct PreparedW3CPresentation: Sendable {
     }
 
     let credential: StoredEbsiCredential
+    let authorizationGenerationID: UUID
     let kind: Kind
     let requiredClaimIDs: Set<String>
     let queryID: String
+}
+
+private struct InteractiveAuthorizationContext: Sendable {
+    let generationID: UUID
+    let challenge: WorkspacePresentationChallenge
 }
 
 private struct AuthorizationCodeResponse: Decodable {

@@ -64,6 +64,8 @@ struct WalletAppDependencies: Sendable {
                 directory: root.appendingPathComponent("audit", isDirectory: true),
                 keyStore: keyStore
             )
+            let walletClientID = "oari-development-wallet"
+            let walletAuthorizationRedirectURI = URL(string: "https://oari.io/oauth/callback")!
             let eudiWallet: (any EudiWalletOperating)?
             let eudiAvailability: EudiWalletAvailability
             do {
@@ -73,8 +75,8 @@ struct WalletAppDependencies: Sendable {
                     approvedSHA256Digests: [EudiTrustAnchorSource.sha256Digest(of: DevelopmentEudiProfile.trustAnchorDER)]
                 )
                 let eudiConfiguration = try EudiOperationalConfiguration(
-                    clientID: "oari-development-wallet",
-                    authorizationRedirectURI: URL(string: "https://oari.io/oauth/callback")!,
+                    clientID: walletClientID,
+                    authorizationRedirectURI: walletAuthorizationRedirectURI,
                     attestationProvider: DevelopmentEudiAttestationProvider(),
                     auditRepository: auditRepository,
                     auditPolicy: .development,
@@ -126,6 +128,13 @@ struct WalletAppDependencies: Sendable {
                     keyStore: keyStore
                 )
                 let workspaceTransport = URLSessionWorkspaceTransport()
+                let w3cKeyProvider = DeviceBoundKeyProvider(
+                    applicationTagPrefix: "io.oari.wallet.ebsi.key"
+                )
+                let holderIdentityProvider = PersistentW3CHolderIdentityProvider(
+                    keyProvider: w3cKeyProvider,
+                    referenceStore: KeychainW3CHolderIdentityReferenceStore()
+                )
                 let ebsiBackend = OariWorkspaceW3CBackend(
                     transport: workspaceTransport,
                     trustEvaluator: configuration.ebsiLocalAuthorityEnabled
@@ -137,7 +146,7 @@ struct WalletAppDependencies: Sendable {
                             tirBaseURL: ebsiEndpoint.trustedIssuersRegistryURL,
                             transport: workspaceTransport
                         ),
-                    keyProvider: DeviceBoundKeyProvider(applicationTagPrefix: "io.oari.wallet.ebsi.key"),
+                    keyProvider: w3cKeyProvider,
                     credentialStore: ebsiStore,
                     credentialValidator: NativeWorkspaceCredentialValidator(
                         resolver: CompositeDIDResolver(
@@ -154,8 +163,9 @@ struct WalletAppDependencies: Sendable {
                         )
                     ),
                     transportProfileRegistry: .developmentDraftCompatibility,
-                    authorizationClientID: configuration.eudiConfiguration.clientID,
-                    authorizationRedirectURI: configuration.eudiConfiguration.authorizationRedirectURI
+                    holderIdentityProvider: holderIdentityProvider,
+                    authorizationClientID: walletClientID,
+                    authorizationRedirectURI: walletAuthorizationRedirectURI
                 )
                 ebsiWallet = LiveWorkspaceEbsiWalletService(
                     backend: ebsiBackend,
