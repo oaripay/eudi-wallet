@@ -69,7 +69,7 @@ endpoint instead.
 
 - EUDI mdoc and SD-JWT VC through Wallet Kit.
 - W3C VCDM 1.1 JWT VC formats where the issuer metadata advertises them.
-- OARI VCDM 2.0 `application/vc+jwt` profile.
+- W3C VCDM 2.0 `application/vc+jwt` profile.
 - OpenID4VCI pre-authorized and authorization-code transaction models.
 - OpenID4VP/DCQL consent and development trust warnings.
 - Workspace final/draft interaction profiles where a counterpart fixture is enabled.
@@ -113,19 +113,3 @@ python3 Scripts/check_tracked_secrets.py
 
 ReleaseTesting is run once per completed milestone with a reused DerivedData directory;
 it is not run after every edit.
-
-## Security and release gates
-
-Development trust warnings do not replace cryptographic validation. Production needs
-separate approved trust anchors, attestation, issuer/verifier profiles, provisioning,
-physical-device Secure Enclave/biometric/camera/BLE testing, AASA verification,
-penetration testing, legal review, signing and certification evidence.
-
-See:
-
-- `AGENTS.md` — iterator execution contract;
-- `docs/IMPLEMENTATION-PLAN.md` — ordered delivery loops;
-- `docs/ITERATOR-EBSI-W3C-PLAN.md` — consolidated EBSI/W3C development milestone;
-- `docs/EBSI_PROFILE_MATRIX.md` — explicit W3C/EBSI profile matrix;
-- `docs/EVIDENCE.md` — verification ledger and remaining gates;
-- `docs/WALLET_KIT_REVIEW.md` — pinned SDK and ownership review.
