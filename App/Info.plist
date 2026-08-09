@@ -39,6 +39,8 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>OARI Wallet uses Bluetooth to securely exchange mobile documents with nearby devices during wallet presentations.</string>
 	<key>NSCameraUsageDescription</key>

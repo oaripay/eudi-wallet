@@ -59,27 +59,28 @@ targets:
     info:
       path: App/Info.plist
       properties:
-         CFBundleDisplayName: Oari Wallet
-         CFBundleShortVersionString: "0.1.0"
-         CFBundleVersion: "1"
-         UILaunchScreen:
-           UIColorName: LaunchBackground
-           UIImageName: OariMark
-           UIImageRespectsSafeAreaInsets: true
-         UIApplicationSceneManifest:
-           UIApplicationSupportsMultipleScenes: false
-         UISupportedInterfaceOrientations:
-           - UIInterfaceOrientationPortrait
-         NSFaceIDUsageDescription: Authenticate before sharing credentials or approving sensitive wallet actions.
-         NSCameraUsageDescription: Scan credential offers and presentation requests.
-         NSBluetoothAlwaysUsageDescription: OARI Wallet uses Bluetooth to securely exchange mobile documents with nearby devices during wallet presentations.
-         CFBundleURLTypes:
-           - CFBundleURLName: io.oari.wallet.openid4vp
-             CFBundleURLSchemes:
-               - openid4vp
-           - CFBundleURLName: io.oari.wallet.openid4vci
-             CFBundleURLSchemes:
-               - openid-credential-offer
+        CFBundleDisplayName: Oari Wallet
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+          UIImageName: OariMark
+          UIImageRespectsSafeAreaInsets: true
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSFaceIDUsageDescription: Authenticate before sharing credentials or approving sensitive wallet actions.
+        NSCameraUsageDescription: Scan credential offers and presentation requests.
+        NSBluetoothAlwaysUsageDescription: OARI Wallet uses Bluetooth to securely exchange mobile documents with nearby devices during wallet presentations.
+        ITSAppUsesNonExemptEncryption: false
+        CFBundleURLTypes:
+          - CFBundleURLName: io.oari.wallet.openid4vp
+            CFBundleURLSchemes:
+              - openid4vp
+          - CFBundleURLName: io.oari.wallet.openid4vci
+            CFBundleURLSchemes:
+              - openid-credential-offer
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.oari.wallet
