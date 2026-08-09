@@ -648,7 +648,7 @@ public actor OariWorkspaceW3CBackend {
                 }
                 guard satisfies else { continue }
                 kind = .sdJWT(issuerJWT: parsed.issuerJWT, disclosures: disclosures)
-            case ("jwt_vc_json", .jwtVcJson):
+            case ("jwt_vc_json", .jwtVcJson), ("jwt_vc_json", .vcdm2Jwt):
                 guard let profile = profiles.first(where: { $0.id == credential.profileID }) else { continue }
                 let compact = String(decoding: credential.rawCredential, as: UTF8.self)
                 let document = try EbsiCredentialInspector().inspectCompactJWT(compact, profile: profile)
@@ -662,7 +662,7 @@ public actor OariWorkspaceW3CBackend {
                     claims.append(Self.presentationClaim(path: path, value: value))
                 }
                 guard satisfies else { continue }
-                kind = .jwtVC(compact)
+                kind = credential.representation == .vcdm2Jwt ? .jwtVC20(compact) : .jwtVC11(compact)
             default:
                 continue
             }
@@ -680,6 +680,66 @@ public actor OariWorkspaceW3CBackend {
             )
         }
         throw WorkspaceBackendError.presentationCredentialUnavailable
+    }
+
+    public func beginStoredOpenID4VPPresentation(uri: String) async throws -> WorkspacePIDPresentationRequest {
+        guard let components = URLComponents(string: uri),
+              components.scheme?.lowercased() == "openid4vp",
+              let outerClientID = components.queryItems?.first(where: { $0.name == "client_id" })?.value,
+              let requestURIValue = components.queryItems?.first(where: { $0.name == "request_uri" })?.value,
+              let requestURI = URL(string: requestURIValue),
+              requestURI.scheme?.lowercased() == "https",
+              let presentationRequestValidator else {
+            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "OpenID4VP request URI was malformed")
+        }
+        let requestData = try await successfulRequest(
+            requestURI,
+            method: "GET",
+            headers: ["Accept": "application/oauth-authz-req+jwt"],
+            body: nil,
+            allowedOrigins: [try Self.origin(of: requestURI)]
+        )
+        guard let compactRequest = String(data: requestData, encoding: .utf8), !compactRequest.isEmpty else {
+            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "request_uri returned an empty Request Object")
+        }
+        let verified = try await presentationRequestValidator.validate(compactJWT: compactRequest, at: now())
+        guard verified.clientID == outerClientID else {
+            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "outer and signed client_id values did not match")
+        }
+        guard verified.audience == "https://self-issued.me/v2",
+              verified.responseType == "vp_token",
+              verified.responseMode == "direct_post",
+              let responseURIValue = verified.responseURI,
+              let responseURI = URL(string: responseURIValue),
+              responseURI.scheme?.lowercased() == "https" else {
+            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "unsupported standalone response mode or response URI")
+        }
+        let id = UUID()
+        let challenge = WorkspacePresentationChallenge(
+            id: id,
+            authorizationEndpoint: responseURI,
+            authSession: nil,
+            interactionType: "openid4vp_presentation",
+            responseMode: verified.responseMode,
+            responseURI: responseURI,
+            nonce: verified.nonce,
+            state: verified.state,
+            dcqlQuery: verified.dcqlQuery,
+            signedRequest: compactRequest,
+            clientID: verified.clientID
+        )
+        interactiveAuthorizationContexts[id] = InteractiveAuthorizationContext(
+            generationID: UUID(),
+            challenge: challenge,
+            expiresAt: now().addingTimeInterval(300)
+        )
+        do {
+            return try await prepareStoredPIDPresentation(id: id)
+        } catch {
+            interactiveAuthorizationContexts[id] = nil
+            transactionHolderIdentities[id] = nil
+            throw error
+        }
     }
 
     private func holderIdentity(for transactionID: UUID) async throws -> W3CHolderIdentity {
@@ -704,9 +764,16 @@ public actor OariWorkspaceW3CBackend {
         let challenge = context.challenge
         let keyID = KeyID(rawValue: keyUUID)
         let presentation: String
+        let audience: String
+        if challenge.responseMode == "ia_post" {
+            audience = "ia:\(try Self.origin(of: challenge.authorizationEndpoint))"
+        } else if let clientID = challenge.clientID, !clientID.isEmpty {
+            audience = clientID
+        } else {
+            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "presentation client_id was missing")
+        }
         switch prepared.kind {
         case let .sdJWT(issuerJWT, disclosures):
-            let audience = "ia:\(try Self.origin(of: challenge.authorizationEndpoint))"
             let selectedDisclosures = disclosures.keys.sorted().compactMap {
                 selectedClaimIDs.contains($0) ? disclosures[$0] : nil
             }
@@ -721,8 +788,7 @@ public actor OariWorkspaceW3CBackend {
                     "sd_hash": Data(SHA256.hash(data: Data(withoutKeyBinding.utf8))).base64URLEncodedString(),
                 ]
             ))
-        case let .jwtVC(compactCredential):
-            let audience = "ia:\(challenge.authorizationEndpoint.absoluteString)"
+        case let .jwtVC11(compactCredential):
             let publicKey = try await keyProvider.publicKey(id: keyID)
             let holder = try KeyDIDResolver().derive(publicKeyX963: publicKey.x963Representation)
             let issuedAt = Int(now().timeIntervalSince1970)
@@ -745,9 +811,77 @@ public actor OariWorkspaceW3CBackend {
                     ],
                 ]
             )
+        case let .jwtVC20(compactCredential):
+            let publicKey = try await keyProvider.publicKey(id: keyID)
+            let holder = try KeyDIDResolver().derive(publicKeyX963: publicKey.x963Representation)
+            let issuedAt = Int(now().timeIntervalSince1970)
+            presentation = try await signedPresentationJWT(
+                keyID: keyID,
+                type: "vp+jwt",
+                contentType: "vp",
+                payload: [
+                    "@context": ["https://www.w3.org/ns/credentials/v2"],
+                    "type": ["VerifiablePresentation"],
+                    "holder": holder,
+                    "verifiableCredential": [[
+                        "@context": ["https://www.w3.org/ns/credentials/v2"],
+                        "type": ["EnvelopedVerifiableCredential"],
+                        "id": "data:application/vc+jwt,\(compactCredential)",
+                    ]],
+                    "iss": holder,
+                    "aud": audience,
+                    "nonce": challenge.nonce,
+                    "iat": issuedAt,
+                    "exp": issuedAt + 300,
+                ]
+            )
         }
         let object = try JSONSerialization.data(withJSONObject: [prepared.queryID: [presentation]])
         return String(decoding: object, as: UTF8.self)
+    }
+
+    public func completeStoredOpenID4VPPresentation(
+        id: UUID,
+        selectedClaimIDs: Set<String>,
+        userAccepted: Bool
+    ) async throws {
+        guard userAccepted else {
+            preparedPIDPresentations[id] = nil
+            interactiveAuthorizationContexts[id] = nil
+            transactionHolderIdentities[id] = nil
+            return
+        }
+        guard let context = interactiveAuthorizationContexts[id],
+              context.expiresAt > now(),
+              context.challenge.responseMode == "direct_post",
+              let responseURI = context.challenge.responseURI else {
+            throw WorkspaceBackendError.unknownTransaction
+        }
+        let token = try await storedPIDPresentationToken(id: id, selectedClaimIDs: selectedClaimIDs)
+        do {
+            _ = try await successfulRequest(
+                responseURI,
+                method: "POST",
+                headers: ["Content-Type": "application/x-www-form-urlencoded"],
+                body: form([
+                    "vp_token": token,
+                    "state": context.challenge.state,
+                ]),
+                allowedOrigins: [try Self.origin(of: responseURI)]
+            )
+        } catch let error as WorkspaceBackendError {
+            if case let .remoteHTTPError(status, detail) = error {
+                throw WorkspaceBackendError.presentationSubmissionHTTPError(
+                    method: "POST",
+                    path: responseURI.path,
+                    status: status,
+                    detail: detail
+                )
+            }
+            throw error
+        }
+        interactiveAuthorizationContexts[id] = nil
+        transactionHolderIdentities[id] = nil
     }
 
     public func submitPresentation(
@@ -1362,6 +1496,11 @@ public actor OariWorkspaceW3CBackend {
         guard case let .array(credentials)? = dcqlQuery["credentials"] else {
             throw WorkspaceBackendError.invalidResponse
         }
+        let supportsRequestedFormat = credentials.contains { credential in
+            guard case let .object(query) = credential, let format = query["format"]?.string else { return false }
+            return format == "dc+sd-jwt" || format == "jwt_vc_json"
+        }
+        guard supportsRequestedFormat else { throw EbsiCredentialError.unsupportedRepresentation }
         for credential in credentials {
             guard case let .object(query) = credential,
                   let format = query["format"]?.string,
@@ -1705,9 +1844,12 @@ public actor OariWorkspaceW3CBackend {
     private func signedPresentationJWT(
         keyID: KeyID,
         type: String,
+        contentType: String? = nil,
         payload: [String: Any]
     ) async throws -> String {
-        let header = try Self.base64JSON(["alg": "ES256", "typ": type])
+        var headerObject = ["alg": "ES256", "typ": type]
+        if let contentType { headerObject["cty"] = contentType }
+        let header = try Self.base64JSON(headerObject)
         let encodedPayload = try Self.base64JSON(payload)
         let signingInput = Data("\(header).\(encodedPayload)".utf8)
         let signature = try await keyProvider.sign(SigningRequest(
@@ -2004,7 +2146,8 @@ private struct SignedPresentationRequest: Decodable {
 private struct PreparedW3CPresentation: Sendable {
     enum Kind: Sendable {
         case sdJWT(issuerJWT: String, disclosures: [String: String])
-        case jwtVC(String)
+        case jwtVC11(String)
+        case jwtVC20(String)
     }
 
     let credential: StoredEbsiCredential

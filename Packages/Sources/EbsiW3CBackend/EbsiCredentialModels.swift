@@ -288,9 +288,9 @@ public enum AnySendableJSON: Codable, Equatable, Sendable {
         }
     }
 
-    var string: String? { if case let .string(value) = self { value } else { nil } }
+    public var string: String? { if case let .string(value) = self { value } else { nil } }
     var numericValue: Double? { if case let .number(value) = self { value } else { nil } }
-    var object: [String: AnySendableJSON]? { if case let .object(value) = self { value } else { nil } }
+    public var object: [String: AnySendableJSON]? { if case let .object(value) = self { value } else { nil } }
     var displayString: String? {
         switch self {
         case let .string(value): value

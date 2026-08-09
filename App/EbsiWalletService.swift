@@ -31,6 +31,12 @@ enum EbsiInteractionCompletion: Equatable, Sendable {
 
 protocol EbsiW3COperating: Sendable {
     func resolveInteraction(uri: String) async throws -> EbsiResolvedInteraction
+    func beginPresentation(uri: String) async throws -> EudiPresentationRequest
+    func completePresentation(
+        id: UUID,
+        selectedClaimIDs: Set<String>,
+        userAccepted: Bool
+    ) async throws
     func continueInteraction(
         id: UUID,
         allowUntrusted: Bool,
@@ -87,6 +93,32 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
             representations: offer.representations
             , credentialDisplay: offer.credentialDisplay
         )
+    }
+
+    func beginPresentation(uri: String) async throws -> EudiPresentationRequest {
+        let request = try await backend.beginStoredOpenID4VPPresentation(uri: uri)
+        return presentationRequest(request)
+    }
+
+    func completePresentation(
+        id: UUID,
+        selectedClaimIDs: Set<String>,
+        userAccepted: Bool
+    ) async throws {
+        try await backend.completeStoredOpenID4VPPresentation(
+            id: id,
+            selectedClaimIDs: selectedClaimIDs,
+            userAccepted: userAccepted
+        )
+        try await audit.append(AuditEvent(
+            operation: .presentation,
+            outcome: userAccepted ? .completed : .cancelled,
+            occurredAt: Date(),
+            counterpartyIdentifierDigest: .sha256("openid4vp"),
+            credentialIDs: [],
+            policy: .development,
+            policyVersion: AuditPolicyVersion(rawValue: 1)
+        ))
     }
 
     func continueInteraction(
@@ -151,6 +183,10 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
 
     func preparePIDPresentation(id: UUID) async throws -> EudiPresentationRequest {
         let request = try await backend.prepareStoredPIDPresentation(id: id)
+        return presentationRequest(request)
+    }
+
+    private func presentationRequest(_ request: WorkspacePIDPresentationRequest) -> EudiPresentationRequest {
         return EudiPresentationRequest(
             id: request.id,
             verifierName: request.verifierName,

@@ -55,6 +55,7 @@ final class WalletAppModel: ObservableObject {
     private var activePendingIssuanceID: UUID?
     private var activePendingIssuance: EudiPendingIssuance?
     private var activeWorkspacePresentation = false
+    private var activeStandaloneWorkspacePresentation = false
     private var appLockAuthenticator: (any AppLockAuthenticating)?
     private var backgroundGeneration = 0
     private var activeAuthenticationID: UUID?
@@ -413,12 +414,23 @@ final class WalletAppModel: ObservableObject {
                 // W3C resolved the offer and owns the remaining issuance flow.
                 return
             case .presentation:
-                guard isEudiOperational, let eudiWallet else {
-                    eudiFlow = .configurationRequired(eudiConfigurationMessage)
-                    return
-                }
                 eudiFlow = .working("Checking the verifier and requested claims…")
                 activePendingIssuanceID = nil
+                if let ebsiWallet {
+                    do {
+                        let request = try await ebsiWallet.beginPresentation(uri: scanInput)
+                        activeEbsiInteractionID = request.id
+                        activeStandaloneWorkspacePresentation = true
+                        selectedClaimIDs = Set(request.claims.filter(\.required).map(\.id))
+                        eudiFlow = .presentationConsent(request)
+                        return
+                    } catch EbsiCredentialError.unsupportedRepresentation {
+                        // Non-W3C presentation formats are owned by Wallet Kit.
+                    }
+                }
+                guard isEudiOperational, let eudiWallet else {
+                    throw EbsiCredentialError.backendUnavailable
+                }
                 let request = try await eudiWallet.beginOpenID4VPPresentation(requestURI: scanInput)
                 selectedClaimIDs = Set(request.claims.filter(\.required).map(\.id))
                 eudiFlow = .presentationConsent(request)
@@ -636,6 +648,21 @@ final class WalletAppModel: ObservableObject {
         }
         eudiFlow = .working(accepted ? "Sharing approved claims…" : "Declining the request…")
         do {
+            if activeStandaloneWorkspacePresentation {
+                guard let id = activeEbsiInteractionID, let ebsiWallet else {
+                    throw EbsiCredentialError.backendUnavailable
+                }
+                try await ebsiWallet.completePresentation(
+                    id: id,
+                    selectedClaimIDs: accepted ? selectedClaimIDs : [],
+                    userAccepted: accepted
+                )
+                activeStandaloneWorkspacePresentation = false
+                activeEbsiInteractionID = nil
+                selectedClaimIDs = []
+                eudiFlow = .completed(accepted ? "Approved claims were shared." : "Request declined. Nothing was shared.")
+                return
+            }
             if activeWorkspacePresentation {
                 guard let id = activeEbsiChallenge?.id,
                       id == activeEbsiInteractionID,
@@ -732,6 +759,7 @@ final class WalletAppModel: ObservableObject {
         activePendingIssuanceID = nil
         activePendingIssuance = nil
         activeWorkspacePresentation = false
+        activeStandaloneWorkspacePresentation = false
         eudiFlow = .idle
     }
 

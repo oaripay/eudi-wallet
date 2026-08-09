@@ -315,6 +315,35 @@ struct WalletAppModelTests {
         #expect(await service.lastSelectedClaims == ["required", "optional"])
     }
 
+    @Test("Standalone W3C OpenID4VP presentation is routed to the credential owner")
+    func w3cStandalonePresentationFlow() async {
+        let request = EudiPresentationRequest(
+            id: UUID(), verifierName: "decentralized_identifier:did:key:verifier",
+            verifierLegalName: nil, verifierCertificateValid: nil,
+            claims: [EudiRequestedClaim(
+                id: "credentialSubject.role", documentID: "w3c", documentType: "W3C credential",
+                displayName: "Business Wallet User", claimPath: ["credentialSubject", "role"],
+                displayValue: "admin", required: true, intentToRetain: false
+            )], warningCount: 0
+        )
+        let backend = FixtureEbsiWallet(
+            outcome: .allow,
+            standalonePresentationRequest: request
+        )
+        let model = WalletAppModel()
+        await model.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), appLockAuthenticator: FixtureAppLockAuthenticator(),
+            eudiWallet: nil, eudiAvailability: .configurationRequired("Unavailable"), ebsiWallet: backend
+        )))
+        model.scanInput = "openid4vp://?client_id=decentralized_identifier%3Adid%3Akey%3Averifier&request_uri=https%3A%2F%2Fwallet.dev.oari.io%2Fopenid4vp%2Frequest%2Fid"
+        await model.reviewScannedRequest()
+        #expect(model.eudiFlow == .presentationConsent(request))
+        await model.submitPresentation(accepted: true)
+        #expect(model.eudiFlow == .completed("Approved claims were shared."))
+        #expect(await backend.completedStandaloneClaimIDs == [["credentialSubject.role"]])
+    }
+
     @Test("Restored pending issuance continues through consent and completion")
     func eudiPendingFlow() async {
         let pending = EudiPendingIssuance(
@@ -767,18 +796,22 @@ private actor FixtureEbsiWallet: EbsiW3COperating {
     let continuation: EbsiInteractionCompletion
     private(set) var completedAuthorizationCodes: [String] = []
     private(set) var completedPIDClaimIDs: [Set<String>] = []
+    private(set) var completedStandaloneClaimIDs: [Set<String>] = []
     private(set) var deletedCredentials: [(UUID, CredentialID)] = []
     let pidPresentationRequest: EudiPresentationRequest?
+    let standalonePresentationRequest: EudiPresentationRequest?
     init(
         outcome: EbsiTrustGateOutcome,
         continuationDelayNanoseconds: UInt64 = 0,
         continuation: EbsiInteractionCompletion = .completed("EBSI development flow completed."),
-        pidPresentationRequest: EudiPresentationRequest? = nil
+        pidPresentationRequest: EudiPresentationRequest? = nil,
+        standalonePresentationRequest: EudiPresentationRequest? = nil
     ) {
         self.outcome = outcome
         self.continuationDelayNanoseconds = continuationDelayNanoseconds
         self.continuation = continuation
         self.pidPresentationRequest = pidPresentationRequest
+        self.standalonePresentationRequest = standalonePresentationRequest
     }
     func resolveInteraction(uri: String) async throws -> EbsiResolvedInteraction {
         EbsiResolvedInteraction(
@@ -791,6 +824,17 @@ private actor FixtureEbsiWallet: EbsiW3COperating {
             configurationIDs: ["oari-v2"], authorizationRequired: true,
             representations: ["application/vc+jwt"], credentialDisplay: [:]
         )
+    }
+    func beginPresentation(uri: String) async throws -> EudiPresentationRequest {
+        guard let standalonePresentationRequest else { throw EbsiCredentialError.unsupportedRepresentation }
+        return standalonePresentationRequest
+    }
+    func completePresentation(
+        id: UUID,
+        selectedClaimIDs: Set<String>,
+        userAccepted: Bool
+    ) async throws {
+        completedStandaloneClaimIDs.append(selectedClaimIDs)
     }
     func continueInteraction(
         id: UUID,

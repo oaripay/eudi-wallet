@@ -3,6 +3,8 @@ import IdentityDomain
 
 public struct VerifiedWorkspacePresentationRequest: Equatable, Sendable {
     public let clientID: String
+    public let audience: String?
+    public let responseType: String?
     public let responseMode: String
     public let responseURI: String?
     public let nonce: String
@@ -11,6 +13,8 @@ public struct VerifiedWorkspacePresentationRequest: Equatable, Sendable {
 
     public init(
         clientID: String,
+        audience: String? = nil,
+        responseType: String? = nil,
         responseMode: String,
         responseURI: String?,
         nonce: String,
@@ -18,6 +22,8 @@ public struct VerifiedWorkspacePresentationRequest: Equatable, Sendable {
         dcqlQuery: [String: AnySendableJSON]
     ) {
         self.clientID = clientID
+        self.audience = audience
+        self.responseType = responseType
         self.responseMode = responseMode
         self.responseURI = responseURI
         self.nonce = nonce
@@ -44,13 +50,20 @@ public struct NativeWorkspacePresentationRequestValidator: WorkspacePresentation
               let payload = try? JSONDecoder().decode([String: AnySendableJSON].self, from: payloadData),
               header["typ"]?.string == "oauth-authz-req+jwt",
               let clientID = payload["client_id"]?.string,
-              let responseMode = payload["response_mode"]?.string,
-              let nonce = payload["nonce"]?.string,
+               let responseMode = payload["response_mode"]?.string,
+               let nonce = payload["nonce"]?.string,
               !nonce.isEmpty,
               let dcqlQuery = payload["dcql_query"]?.object,
               let kid = header["kid"]?.string,
               let did = Self.did(from: payload["iss"]?.string ?? kid) else {
             throw WorkspaceBackendError.invalidPresentationChallenge(reason: "signed request object was malformed")
+        }
+        let timestamp = Int(date.timeIntervalSince1970)
+        if case let .number(issuedAt)? = payload["iat"], Int(issuedAt) > timestamp + 60 {
+            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "signed request object was issued in the future")
+        }
+        if case let .number(expiresAt)? = payload["exp"], Int(expiresAt) <= timestamp {
+            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "signed request object expired")
         }
         let document: DIDDocument
         do {
@@ -93,6 +106,8 @@ public struct NativeWorkspacePresentationRequestValidator: WorkspacePresentation
         }
         return VerifiedWorkspacePresentationRequest(
             clientID: clientID,
+            audience: payload["aud"]?.string,
+            responseType: payload["response_type"]?.string,
             responseMode: responseMode,
             responseURI: payload["response_uri"]?.string,
             nonce: nonce,

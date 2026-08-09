@@ -17,6 +17,7 @@ struct WorkspacePresentationRequestValidatorTests {
             payload: [
                 "iss": did,
                 "client_id": "redirect_uri:https://verifier.example/callback",
+                "response_type": "vp_token",
                 "response_mode": "ia_post",
                 "nonce": "nonce-value",
                 "exp": Int(Date().timeIntervalSince1970) + 300,
@@ -42,6 +43,7 @@ struct WorkspacePresentationRequestValidatorTests {
             payload: [
                 "iss": did,
                 "client_id": "redirect_uri:https://verifier.example/callback",
+                "response_type": "vp_token",
                 "response_mode": "ia_post",
                 "nonce": "nonce-value",
                 "exp": Int(Date().timeIntervalSince1970) + 300,

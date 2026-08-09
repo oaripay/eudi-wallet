@@ -57,7 +57,7 @@
 		021FE192C1057D5360B98083 /* EudiFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EudiFlowView.swift; sourceTree = "<group>"; };
 		07421C4B64D228DC046D3FC5 /* eudi-wallet */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "eudi-wallet"; path = .; sourceTree = SOURCE_ROOT; };
 		0DA4F4FA098A6A9F2A1575D3 /* EbsiWalletService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EbsiWalletService.swift; sourceTree = "<group>"; };
-		12C2443E04EEA39F34D91B6E /* DevelopmentTrustAnchor.der */ = {isa = PBXFileReference; path = DevelopmentTrustAnchor.der; sourceTree = "<group>"; };
+		12C2443E04EEA39F34D91B6E /* DevelopmentTrustAnchor.der */ = {isa = PBXFileReference; lastKnownFileType = file; path = DevelopmentTrustAnchor.der; sourceTree = "<group>"; };
 		286031545802A58CB1A31335 /* WalletUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletUITests.swift; sourceTree = "<group>"; };
 		41B338197E405D85D26A6274 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		4D180A1CE2FC4C7705C09183 /* DevelopmentEudiConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevelopmentEudiConfiguration.swift; sourceTree = "<group>"; };
@@ -73,13 +73,13 @@
 		7B6F76900B66D3073C3CE152 /* AppConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfiguration.swift; sourceTree = "<group>"; };
 		7C930619E1432B0507B293A0 /* WalletKitRuntimeProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletKitRuntimeProbe.swift; sourceTree = "<group>"; };
 		85D309EBDC2A9920E5B60BC6 /* WalletScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletScreens.swift; sourceTree = "<group>"; };
-		97A15E0BE6ACA09A914CCF44 /* OariWallet.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = OariWallet.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		97A15E0BE6ACA09A914CCF44 /* OariWallet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OariWallet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9A28098C49ABBDC5A6B792F5 /* WalletAppModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletAppModelTests.swift; sourceTree = "<group>"; };
-		A173F8F1FF8FA4B69FBCBB21 /* WalletTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = WalletTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A173F8F1FF8FA4B69FBCBB21 /* WalletTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WalletTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		BBDE0CBAB3548D875B281AA6 /* WalletKitIOSIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletKitIOSIntegrationTests.swift; sourceTree = "<group>"; };
 		C45D243F9A227A767B7AC3A2 /* OariWallet.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = OariWallet.entitlements; sourceTree = "<group>"; };
 		C6F7A1429C92D3F4CBCC96B8 /* CameraQRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraQRScannerView.swift; sourceTree = "<group>"; };
-		EE6231651ABE932AFB55827B /* WalletUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = WalletUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		EE6231651ABE932AFB55827B /* WalletUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WalletUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F3D980FA8255B7B04C70751B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -269,7 +269,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 1430;
+				LastUpgradeCheck = 2650;
 				TargetAttributes = {
 					7FC9EF529CECFF96EC7707F3 = {
 						TestTargetID = DB226ABFBC1EC926AA7764CB;
@@ -383,6 +383,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
@@ -432,6 +433,7 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
@@ -465,6 +467,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_ASSET_PATHS = "\"App/Preview Content\"";
+				DEVELOPMENT_TEAM = 5JT6DK4C4M;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -521,6 +524,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
@@ -577,6 +581,7 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
@@ -626,6 +631,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_ASSET_PATHS = "\"App/Preview Content\"";
+				DEVELOPMENT_TEAM = 5JT6DK4C4M;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = App/Info.plist;
@@ -647,6 +653,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
@@ -696,6 +703,7 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
@@ -712,6 +720,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_ASSET_PATHS = "\"App/Preview Content\"";
+				DEVELOPMENT_TEAM = 5JT6DK4C4M;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = NO;

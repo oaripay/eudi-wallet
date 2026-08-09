@@ -792,7 +792,7 @@ struct OariWorkspaceW3CBackendTests {
         let vpJWT = try #require(object["pid"]?.first)
         let payload = try Self.jwtPayload(vpJWT)
         #expect(payload["nonce"] as? String == "vp-nonce")
-        #expect(payload["aud"] as? String == "ia:https://issuer.example/authorize-challenge")
+        #expect(payload["aud"] as? String == "ia:https://issuer.example")
         let vp = try #require(payload["vp"] as? [String: Any])
         #expect(vp["@context"] as? [String] == ["https://www.w3.org/2018/credentials/v1"])
         let presentedCredentials = try #require(vp["verifiableCredential"] as? [String])
@@ -810,6 +810,71 @@ struct OariWorkspaceW3CBackendTests {
         let submitted = try #require(response["vp_token"] as? [String: [String]])
         let submittedJWT = try #require(submitted["pid"]?.first)
         #expect(try Self.jwtPayload(submittedJWT)["nonce"] as? String == "vp-nonce")
+    }
+
+    @Test("Standalone OpenID4VP 1.0 and 1.1 request presents a stored jwt_vc_json credential")
+    func standaloneOpenID4VPPresentation() async throws {
+        let transport = FixtureWorkspaceTransport(presentationFormat: "jwt_vc_json")
+        let keys = FixtureKeyProvider()
+        let key = try await keys.createKey(
+            purpose: .credentialBinding,
+            algorithm: .es256,
+            requiresUserPresence: false,
+            protection: .keychainSoftware
+        )
+        let holder = try KeyDIDResolver().derive(
+            publicKeyX963: try await keys.publicKey(id: key.id).x963Representation
+        )
+        let credential = try Self.compactJWT(payload: [
+            "iss": "did:key:issuer",
+            "sub": holder,
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential", "PersonIdentificationData"],
+            "credentialSubject": ["id": holder, "given_name": "Ada", "family_name": "Lovelace"],
+        ])
+        let backend = OariWorkspaceW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: keys,
+            credentialStore: FixtureCredentialStore(values: [StoredEbsiCredential(
+                profileID: "oari-ebsi-vcdm2-vc-jwt",
+                representation: .vcdm2Jwt,
+                rawCredential: Data(credential.utf8),
+                holderKeyReference: key.id.rawValue.uuidString
+            )]),
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .oariVcdm2Jwt(),
+            presentationRequestValidator: FixturePresentationRequestValidator()
+        )
+        let clientID = "decentralized_identifier:did:key:verifier"
+        let deepLink = "openid4vp://?client_id=\(clientID)&request_uri=https%3A%2F%2Fissuer.example%2Fopenid4vp%2Frequest"
+        let request = try await backend.beginStoredOpenID4VPPresentation(uri: deepLink)
+        try await backend.completeStoredOpenID4VPPresentation(
+            id: request.id,
+            selectedClaimIDs: Set(request.claims.map(\.id)),
+            userAccepted: true
+        )
+        let post = try #require((await transport.requests).last { $0.url.path == "/openid4vp/response" })
+        let fields = Dictionary(uniqueKeysWithValues: try #require(
+            URLComponents(string: "?\(String(decoding: post.body ?? Data(), as: UTF8.self))")?.queryItems
+        ).compactMap { item in item.value.map { (item.name, $0) } })
+        #expect(fields["state"] == "vp-state")
+        let token = try #require(fields["vp_token"])
+        let object = try #require(JSONSerialization.jsonObject(with: Data(token.utf8)) as? [String: [String]])
+        let vpJWT = try #require(object["pid"]?.first)
+        let header = try Self.jwtHeader(vpJWT)
+        #expect(header["typ"] as? String == "vp+jwt")
+        #expect(header["cty"] as? String == "vp")
+        let payload = try Self.jwtPayload(vpJWT)
+        #expect(payload["aud"] as? String == clientID)
+        #expect(payload["nonce"] as? String == "vp-nonce")
+        #expect(payload["vp"] == nil)
+        #expect(payload["@context"] as? [String] == ["https://www.w3.org/ns/credentials/v2"])
+        #expect(payload["type"] as? [String] == ["VerifiablePresentation"])
+        let enveloped = try #require((payload["verifiableCredential"] as? [[String: Any]])?.first)
+        #expect(enveloped["@context"] as? [String] == ["https://www.w3.org/ns/credentials/v2"])
+        #expect(enveloped["type"] as? [String] == ["EnvelopedVerifiableCredential"])
+        #expect(enveloped["id"] as? String == "data:application/vc+jwt,\(credential)")
     }
 
     @Test("Stored W3C credential deletion is idempotent")
@@ -835,9 +900,17 @@ struct OariWorkspaceW3CBackendTests {
     }
 
     private static func jwtPayload(_ compact: String) throws -> [String: Any] {
+        try jwtSegment(compact, index: 1)
+    }
+
+    private static func jwtHeader(_ compact: String) throws -> [String: Any] {
+        try jwtSegment(compact, index: 0)
+    }
+
+    private static func jwtSegment(_ compact: String, index: Int) throws -> [String: Any] {
         let parts = compact.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 3 else { throw WorkspaceBackendError.invalidResponse }
-        var base64 = String(parts[1]).replacingOccurrences(of: "-", with: "+")
+        var base64 = String(parts[index]).replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
         base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
         let data = try #require(Data(base64Encoded: base64))
@@ -1123,14 +1196,19 @@ private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
                 "authorization_code": "auth-code",
                 "code": "auth-code",
             ]
-            if !omitAuthorizationResponseState {
-                authorizationResponse["state"] = authorizationResponseStateOverride ?? authorizationState ?? ""
+            if !omitAuthorizationResponseState,
+               let responseState = authorizationResponseStateOverride ?? authorizationState {
+                authorizationResponse["state"] = responseState
             }
             response = String(decoding: try JSONSerialization.data(withJSONObject: authorizationResponse), as: UTF8.self)
         case "/credential":
             response = """
             {"credentials":[{"credential":"\(credentialResponse)"}]}
             """
+        case "/openid4vp/request":
+            response = Self.standalonePresentationRequest(format: presentationFormat)
+        case "/openid4vp/response":
+            response = "{}"
         case "/logo.png", "/background.png":
             return WorkspaceHTTPResponse(
                 statusCode: 200,
@@ -1151,6 +1229,19 @@ private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
         let query = credentialQuery(format: format)
         let payload = encode("""
         {"client_id":"redirect_uri:https://issuer.example/authorize","response_type":"vp_token","response_mode":"direct_post","response_uri":"https://issuer.example/authorize","nonce":"vp-nonce","state":"auth-session","dcql_query":{"credentials":[\(query)]}}
+        """)
+        return "\(header).\(payload).signature"
+    }
+
+    private static func standalonePresentationRequest(format: String) -> String {
+        func encode(_ value: String) -> String {
+            Data(value.utf8).base64EncodedString().replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        }
+        let header = encode(#"{"alg":"ES256","typ":"oauth-authz-req+jwt","kid":"did:key:verifier#key"}"#)
+        let query = credentialQuery(format: format)
+        let payload = encode("""
+        {"aud":"https://self-issued.me/v2","client_id":"decentralized_identifier:did:key:verifier","response_type":"vp_token","response_mode":"direct_post","response_uri":"https://issuer.example/openid4vp/response","nonce":"vp-nonce","state":"vp-state","dcql_query":{"credentials":[\(query)]},"client_metadata":{"vp_formats_supported":{"jwt_vc_json":{"alg_values":["ES256"]}}}}
         """)
         return "\(header).\(payload).signature"
     }
@@ -1342,6 +1433,8 @@ private struct FixturePresentationRequestValidator: WorkspacePresentationRequest
         }
         return VerifiedWorkspacePresentationRequest(
             clientID: clientID,
+            audience: payload["aud"]?.string,
+            responseType: payload["response_type"]?.string,
             responseMode: responseMode,
             responseURI: payload["response_uri"]?.string,
             nonce: nonce,
