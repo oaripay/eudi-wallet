@@ -469,7 +469,8 @@ public actor OariWorkspaceW3CBackend {
                 issuerState: issuerState,
                 interactionTypes: interactionTypes,
                 endpoint: endpoint,
-                configurationIDs: transaction.configurationIDs
+                configurationIDs: transaction.configurationIDs,
+                includeState: usesDraftInteraction
             )
         } else if let publishedEndpoint = transaction.issuerMetadata.interactiveAuthorizationEndpoint,
                   let url = URL(string: publishedEndpoint),
@@ -482,7 +483,8 @@ public actor OariWorkspaceW3CBackend {
                 issuerState: issuerState,
                 interactionTypes: interactionTypes,
                 endpoint: endpoint,
-                configurationIDs: transaction.configurationIDs
+                configurationIDs: transaction.configurationIDs,
+                includeState: usesDraftInteraction
             )
         } else {
             if let value = metadata.authorizationEndpoint,
@@ -495,7 +497,8 @@ public actor OariWorkspaceW3CBackend {
                     issuerState: issuerState,
                     interactionTypes: interactionTypes,
                     endpoint: endpoint,
-                    configurationIDs: transaction.configurationIDs
+                    configurationIDs: transaction.configurationIDs,
+                    includeState: usesDraftInteraction
                 )
                 var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
                 components?.queryItems = fields.compactMap { key, value in
@@ -828,7 +831,11 @@ public actor OariWorkspaceW3CBackend {
             from: response,
             stage: "presentation authorization response"
         )
-        guard let expectedState = authorizationStates[id], code.state == expectedState else {
+        if let responseState = code.state {
+            guard let expectedState = authorizationStates[id], responseState == expectedState else {
+                throw WorkspaceBackendError.authorizationFailed
+            }
+        } else if challenge.responseMode != "ia_post" {
             throw WorkspaceBackendError.authorizationFailed
         }
         guard let value = code.authorizationCode ?? code.code, !value.isEmpty else {
@@ -1618,14 +1625,16 @@ public actor OariWorkspaceW3CBackend {
         issuerState: String,
         interactionTypes: [String],
         endpoint: URL,
-        configurationIDs: [String]
+        configurationIDs: [String],
+        includeState: Bool
     ) throws -> Data {
         form(try interactiveAuthorizationRequestFields(
             id: id,
             issuerState: issuerState,
             interactionTypes: interactionTypes,
             endpoint: endpoint,
-            configurationIDs: configurationIDs
+            configurationIDs: configurationIDs,
+            includeState: includeState
         ))
     }
 
@@ -1634,12 +1643,19 @@ public actor OariWorkspaceW3CBackend {
         issuerState: String,
         interactionTypes: [String],
         endpoint: URL,
-        configurationIDs: [String]
+        configurationIDs: [String],
+        includeState: Bool
     ) throws -> [String: String?] {
         let verifier = Self.base64URL(Data((UUID().uuidString + UUID().uuidString).utf8))
         authorizationCodeVerifiers[id] = verifier
-        let state = authorizationStates[id] ?? UUID().uuidString.lowercased()
-        authorizationStates[id] = state
+        let state: String?
+        if includeState {
+            state = authorizationStates[id] ?? UUID().uuidString.lowercased()
+            authorizationStates[id] = state
+        } else {
+            state = nil
+            authorizationStates[id] = nil
+        }
         let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URLEncodedString()
         let authorizationDetails = try JSONSerialization.data(
             withJSONObject: configurationIDs.map { configurationID in

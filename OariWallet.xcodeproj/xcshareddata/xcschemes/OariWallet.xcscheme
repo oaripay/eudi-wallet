@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Scheme
-   LastUpgradeVersion = "1430"
+   LastUpgradeVersion = "2650"
    version = "1.3">
    <BuildAction
       parallelizeBuildables = "YES"
@@ -15,7 +15,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "DB226ABFBC1EC926AA7764CB"
-               BuildableName = "OARIWallet.app"
+               BuildableName = "OariWallet.app"
                BlueprintName = "OariWallet"
                ReferencedContainer = "container:OariWallet.xcodeproj">
             </BuildableReference>
@@ -61,7 +61,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "DB226ABFBC1EC926AA7764CB"
-             BuildableName = "OARIWallet.app"
+            BuildableName = "OariWallet.app"
             BlueprintName = "OariWallet"
             ReferencedContainer = "container:OariWallet.xcodeproj">
          </BuildableReference>
@@ -70,7 +70,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "DB226ABFBC1EC926AA7764CB"
-             BuildableName = "OARIWallet.app"
+            BuildableName = "OariWallet.app"
             BlueprintName = "OariWallet"
             ReferencedContainer = "container:OariWallet.xcodeproj">
          </BuildableReference>
@@ -115,7 +115,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "DB226ABFBC1EC926AA7764CB"
-             BuildableName = "OARIWallet.app"
+            BuildableName = "OariWallet.app"
             BlueprintName = "OariWallet"
             ReferencedContainer = "container:OariWallet.xcodeproj">
          </BuildableReference>
@@ -132,7 +132,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "DB226ABFBC1EC926AA7764CB"
-             BuildableName = "OARIWallet.app"
+            BuildableName = "OariWallet.app"
             BlueprintName = "OariWallet"
             ReferencedContainer = "container:OariWallet.xcodeproj">
          </BuildableReference>

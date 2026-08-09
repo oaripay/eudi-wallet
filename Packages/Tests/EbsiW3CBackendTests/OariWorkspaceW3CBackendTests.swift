@@ -453,7 +453,7 @@ struct OariWorkspaceW3CBackendTests {
 
     @Test("Authorization-code offer completes final PID presentation challenge")
     func authorizationPresentation() async throws {
-        let transport = FixtureWorkspaceTransport()
+        let transport = FixtureWorkspaceTransport(omitAuthorizationResponseState: true)
         let backend = OariWorkspaceW3CBackend(
             transport: transport,
             trustEvaluator: TrustedIssuerEvaluator(),
@@ -484,6 +484,8 @@ struct OariWorkspaceW3CBackendTests {
         #expect(initialFields["interaction_types_supported"] == "urn:openid:dcp:ia:openid4vp_presentation")
         #expect(initialFields["client_id"] == "oari-development-wallet")
         #expect(initialFields["redirect_uri"] == "https://oari.io/oauth/callback")
+        #expect(initialFields["state"] == nil)
+        #expect(initialFields["auth_session"] == nil)
         #expect(try await backend.submitPresentation(
             id: offer.id,
             vpToken: #"{"pid":["valid.pid.vp"]}"#
@@ -506,6 +508,29 @@ struct OariWorkspaceW3CBackendTests {
         #expect(fields["openid4vp_presentation"] == nil)
         #expect(Set(fields.keys) == ["auth_session", "openid4vp_response"])
         #expect(try await backend.issue(id: offer.id, allowUntrusted: false, transactionCode: nil).count == 1)
+    }
+
+    @Test("Interactive authorization rejects a mismatched response state")
+    func authorizationPresentationRejectsMismatchedState() async throws {
+        let transport = FixtureWorkspaceTransport(authorizationResponseStateOverride: "wrong-state")
+        let backend = OariWorkspaceW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(),
+            credentialStore: FixtureCredentialStore(),
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .oariVcdm2Jwt(),
+            presentationRequestValidator: FixturePresentationRequestValidator()
+        )
+        let offer = try await Self.authorizationOffer(backend)
+        _ = try await backend.beginPresentationRequired(id: offer.id, allowUntrusted: false)
+
+        await #expect(throws: WorkspaceBackendError.authorizationFailed) {
+            _ = try await backend.submitPresentation(
+                id: offer.id,
+                vpToken: #"{"pid":["valid.pid.vp"]}"#
+            )
+        }
     }
 
     @Test("Interactive authorization challenge creation is single-flight")
@@ -1036,18 +1061,24 @@ private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
     private let credentialFormat: String
     private let credentialResponse: String
     private let iGrantCompactPresentation: Bool
+    private let omitAuthorizationResponseState: Bool
+    private let authorizationResponseStateOverride: String?
     private var authorizationState: String?
 
     init(
         presentationFormat: String = "dc+sd-jwt",
         credentialFormat: String = "application/vc+jwt",
         credentialResponse: String = "header.payload.signature",
-        iGrantCompactPresentation: Bool = false
+        iGrantCompactPresentation: Bool = false,
+        omitAuthorizationResponseState: Bool = false,
+        authorizationResponseStateOverride: String? = nil
     ) {
         self.presentationFormat = presentationFormat
         self.credentialFormat = credentialFormat
         self.credentialResponse = credentialResponse
         self.iGrantCompactPresentation = iGrantCompactPresentation
+        self.omitAuthorizationResponseState = omitAuthorizationResponseState
+        self.authorizationResponseStateOverride = authorizationResponseStateOverride
     }
     func send(url: URL, method: String, headers: [String: String], body: Data?) async throws -> WorkspaceHTTPResponse {
         requests.append(Request(url: url, method: method, headers: headers, body: body))
@@ -1088,9 +1119,14 @@ private actor FixtureWorkspaceTransport: WorkspaceHTTPTransport {
                     """.utf8)
                 )
             }
-            response = """
-            {"authorization_code":"auth-code","code":"auth-code","state":"\(authorizationState ?? "")"}
-            """
+            var authorizationResponse = [
+                "authorization_code": "auth-code",
+                "code": "auth-code",
+            ]
+            if !omitAuthorizationResponseState {
+                authorizationResponse["state"] = authorizationResponseStateOverride ?? authorizationState ?? ""
+            }
+            response = String(decoding: try JSONSerialization.data(withJSONObject: authorizationResponse), as: UTF8.self)
         case "/credential":
             response = """
             {"credentials":[{"credential":"\(credentialResponse)"}]}
