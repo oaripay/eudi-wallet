@@ -26,7 +26,6 @@ Tests/               Unit and iOS integration tests
 UITests/             UI automation
 Packages/Sources/    Domain, Wallet Kit, W3C, vault and design-system modules
 Packages/Tests/      Package-level tests
-Scripts/             Boundary, secret and verification checks
 OariWallet.xcodeproj Generated Xcode project
 ```
 
@@ -154,13 +153,6 @@ Regenerate the project after changing `project.yml`:
 
 ```sh
 xcodegen generate
-```
-
-Run boundary and secret checks:
-
-```sh
-python3 Scripts/verify_wallet_kit_boundaries.py
-python3 Scripts/check_tracked_secrets.py
 ```
 
 `ReleaseTesting` is run once per completed milestone with a reused DerivedData

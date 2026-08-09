@@ -19,12 +19,10 @@ protocol EudiWalletOperating: Sendable {
         selectedClaimIDs: Set<String>,
         userAccepted: Bool
     ) async throws -> EudiPresentationCompletion
-    func loadPendingIssuances() async throws -> [EudiPendingIssuance]
     func loadDocumentSummaries() async throws -> [EudiWalletDocumentSummary]
     func loadStartupSnapshot() async throws -> EudiWalletStartupSnapshot
     func deleteDocument(id: String, status: String) async throws
     func retryDeferredIssuance(issuerName: String, documentID: String) async throws -> EudiWalletDocumentSummary
-    func reconcilePendingOperations() async throws
 }
 
 enum EudiPresentationCompletion: Equatable, Sendable {
@@ -81,9 +79,6 @@ actor LiveEudiWalletService: EudiWalletOperating {
             presentationResult: result
         ))
     }
-    func loadPendingIssuances() async throws -> [EudiPendingIssuance] {
-        try await adapter.loadPendingIssuances()
-    }
     func loadDocumentSummaries() async throws -> [EudiWalletDocumentSummary] {
         try await adapter.loadDocumentSummaries()
     }
@@ -96,7 +91,6 @@ actor LiveEudiWalletService: EudiWalletOperating {
     func retryDeferredIssuance(issuerName: String, documentID: String) async throws -> EudiWalletDocumentSummary {
         try await adapter.retryDeferredIssuance(issuerName: issuerName, documentID: documentID)
     }
-    func reconcilePendingOperations() async throws { try await adapter.reconcilePendingOperations() }
 }
 
 enum EudiWalletAvailability: Equatable, Sendable {

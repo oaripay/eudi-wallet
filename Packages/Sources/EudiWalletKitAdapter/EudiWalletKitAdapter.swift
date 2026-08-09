@@ -2011,30 +2011,6 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
         return operationalConfiguration
     }
 
-    private func recordAudit(
-        operation: AuditOperation,
-        outcome: AuditOutcome,
-        counterparty: String?,
-        disclosedClaimIDs: [String],
-        credentialIDs: [CredentialID] = []
-    ) async throws {
-        guard let configuration = operationalConfiguration else {
-            throw EudiWalletKitAdapterError.missingOperationalConfiguration
-        }
-        do {
-            try await configuration.auditRepository.append(makeAuditEvent(
-                configuration: configuration,
-                operation: operation,
-                outcome: outcome,
-                counterparty: counterparty,
-                disclosedClaimIDs: disclosedClaimIDs,
-                credentialIDs: credentialIDs
-            ))
-        } catch {
-            throw EudiWalletKitAdapterError.auditPersistenceFailedAfterOperation
-        }
-    }
-
     private func makeAuditEvent(
         configuration: EudiOperationalConfiguration,
         operation: AuditOperation,

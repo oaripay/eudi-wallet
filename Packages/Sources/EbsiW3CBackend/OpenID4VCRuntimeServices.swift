@@ -81,35 +81,6 @@ public final class URLSessionOpenID4VCTransport: NSObject, OpenID4VCHTTPTranspor
     }
 }
 
-public struct DevelopmentIssuerOriginTrustEvaluator: CredentialIssuerServiceTrustEvaluating, Sendable {
-    private let trustedOrigins: Set<String>
-    private let evidenceSource: String
-
-    public init(trustedOrigins: Set<String>, evidenceSource: String) {
-        self.trustedOrigins = trustedOrigins
-        self.evidenceSource = evidenceSource
-    }
-
-    public func evaluate(issuer: String, at date: Date) async -> TrustVerdict {
-        guard let url = URL(string: issuer), let scheme = url.scheme, let host = url.host else {
-            return .invalid(reasons: [.malformedEvidence], evidence: [])
-        }
-        let origin = "\(scheme.lowercased())://\(host.lowercased())" +
-            (url.port.map { ":\($0)" } ?? "")
-        let evidence = TrustEvidence(
-            source: .ebsiRegistry,
-            sourceIdentifier: evidenceSource,
-            result: trustedOrigins.contains(origin) ? .valid : .notFound,
-            checkedAt: date,
-            expiresAt: date.addingTimeInterval(300),
-            evidenceDigest: String(repeating: "0", count: 64)
-        )
-        return trustedOrigins.contains(origin)
-            ? .trusted(evidence: [evidence])
-            : .untrusted(reasons: [.issuerNotAccredited], evidence: [evidence])
-    }
-}
-
 /// Trust boundary for the OpenID4VCI HTTPS service itself. Metadata and endpoint
 /// origin binding are enforced by the backend before this evaluator is called;
 /// accreditation of the credential signer is evaluated separately after the
@@ -154,19 +125,6 @@ public struct EBSITIRCredentialSignerTrustEvaluator: CredentialIssuerServiceTrus
         self.tirBaseURL = tirBaseURL
         self.transport = transport
         self.resolver = resolver
-        self.approvedIssuerDIDs = approvedIssuerDIDs
-    }
-
-    /// Kept for source compatibility. Without a DID resolver this evaluator
-    /// fails closed and can never promote registry JSON to trusted evidence.
-    public init(
-        tirBaseURL: URL,
-        transport: any OpenID4VCHTTPTransport,
-        approvedIssuerDIDs: Set<String>? = nil
-    ) {
-        self.tirBaseURL = tirBaseURL
-        self.transport = transport
-        self.resolver = nil
         self.approvedIssuerDIDs = approvedIssuerDIDs
     }
 

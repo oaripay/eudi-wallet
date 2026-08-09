@@ -44,7 +44,6 @@ targets:
     sources:
       - path: App
     resources:
-      - path: App/Resources
       - path: App/PrivacyInfo.xcprivacy
     dependencies:
       - package: OariWalletModules

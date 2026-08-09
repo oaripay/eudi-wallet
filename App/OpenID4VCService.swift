@@ -50,7 +50,6 @@ protocol OpenID4VCOperating: Sendable {
         selectedClaimIDs: Set<String>,
         userAccepted: Bool
     ) async throws -> OpenID4VCInteractionCompletion
-    func submitPIDPresentation(id: UUID, vpToken: String) async throws -> OpenID4VCInteractionCompletion
     func completeAuthorization(id: UUID, code: String) async throws -> OpenID4VCInteractionCompletion
     func deleteCredential(
         backendID: UUID,
@@ -231,7 +230,7 @@ actor LiveOpenID4VCService: OpenID4VCOperating {
         return try await submitPIDPresentation(id: id, vpToken: token)
     }
 
-    func submitPIDPresentation(id: UUID, vpToken: String) async throws -> OpenID4VCInteractionCompletion {
+    private func submitPIDPresentation(id: UUID, vpToken: String) async throws -> OpenID4VCInteractionCompletion {
         _ = try await backend.submitPresentation(id: id, vpToken: vpToken)
         authorizationRequired.remove(id)
         return try await continueInteraction(id: id, allowUntrusted: true, transactionCode: nil)

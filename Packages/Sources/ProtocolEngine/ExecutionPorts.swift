@@ -29,10 +29,6 @@ public protocol PresentationDelivery: Sendable {
     ) async throws
 }
 
-public protocol WalletUnitAttestationProvider: Sendable {
-    func attestation(profile: InteroperabilityProfile, at date: Date) async throws -> String
-}
-
 public enum ProtocolExecutionError: Error, Equatable, Sendable {
     case emptyAuthenticationReason
     case emptyPresentation

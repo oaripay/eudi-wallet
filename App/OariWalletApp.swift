@@ -34,10 +34,10 @@ struct OariWalletApp: App {
             .preferredColorScheme(model.theme.colorScheme)
             .onOpenURL(perform: model.handleIncomingURL)
             .overlay {
-                if scenePhase != .active || model.isAppLockBlocking {
+                if model.shouldShowInactivePrivacyShield || model.isAppLockBlocking {
                     WalletPrivacyShield(
                         model: model,
-                        isSpinning: scenePhase != .active || model.appLockState == .authenticating
+                        isSpinning: model.shouldShowInactivePrivacyShield || model.appLockState == .authenticating
                     )
                         .transition(.identity)
                         .zIndex(100)

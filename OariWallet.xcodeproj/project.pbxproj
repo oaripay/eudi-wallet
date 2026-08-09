@@ -70,13 +70,13 @@
 		7C930619E1432B0507B293A0 /* WalletKitRuntimeProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletKitRuntimeProbe.swift; sourceTree = "<group>"; };
 		85D309EBDC2A9920E5B60BC6 /* WalletScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletScreens.swift; sourceTree = "<group>"; };
 		915D1F8942A0491619265CE7 /* W3CBackendComposition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = W3CBackendComposition.swift; sourceTree = "<group>"; };
-		97A15E0BE6ACA09A914CCF44 /* OariWallet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OariWallet.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		97A15E0BE6ACA09A914CCF44 /* OariWallet.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = OariWallet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9A28098C49ABBDC5A6B792F5 /* WalletAppModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletAppModelTests.swift; sourceTree = "<group>"; };
 		A173F8F1FF8FA4B69FBCBB21 /* WalletTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = WalletTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AFAFE170E7127CBBE3749125 /* OpenID4VCService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenID4VCService.swift; sourceTree = "<group>"; };
 		BBDE0CBAB3548D875B281AA6 /* WalletKitIOSIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletKitIOSIntegrationTests.swift; sourceTree = "<group>"; };
 		C45D243F9A227A767B7AC3A2 /* OariWallet.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = OariWallet.entitlements; sourceTree = "<group>"; };
-		C4BA2AD99BEDFCE67DACB5F3 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		C4BA2AD99BEDFCE67DACB5F3 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		C6F7A1429C92D3F4CBCC96B8 /* CameraQRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraQRScannerView.swift; sourceTree = "<group>"; };
 		E3FC749C5E72A4CAB30AFB3A /* TrustWarningView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrustWarningView.swift; sourceTree = "<group>"; };
 		EE6231651ABE932AFB55827B /* WalletUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = WalletUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -135,13 +135,6 @@
 			);
 			sourceTree = "<group>";
 		};
-		98BED5785EA3047790A732CD /* Resources */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Resources;
-			sourceTree = "<group>";
-		};
 		CEC098C124B80E784FFC1DAE /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -164,7 +157,6 @@
 			isa = PBXGroup;
 			children = (
 				39D80E1AF461583188C1876A /* Preview Content */,
-				98BED5785EA3047790A732CD /* Resources */,
 				7B6F76900B66D3073C3CE152 /* AppConfiguration.swift */,
 				4FFAF173EB43F3748132D89D /* AppIcon.icon */,
 				5D5F89C3D4788628CA6D8014 /* Assets.xcassets */,
@@ -465,7 +457,6 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_ASSET_PATHS = "\"App/Preview Content\"";
-				DEVELOPMENT_TEAM = 5JT6DK4C4M;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -627,7 +618,6 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_ASSET_PATHS = "\"App/Preview Content\"";
-				DEVELOPMENT_TEAM = 5JT6DK4C4M;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = App/Info.plist;
@@ -714,7 +704,6 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_ASSET_PATHS = "\"App/Preview Content\"";
-				DEVELOPMENT_TEAM = 5JT6DK4C4M;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = NO;

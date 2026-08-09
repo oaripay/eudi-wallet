@@ -43,9 +43,9 @@ struct WalletAppModelTests {
         #expect(W3CBackendComposition.authorizationClientID == "io.oari.wallet")
         #expect(W3CBackendComposition.authorizationRedirectURI.absoluteString == "https://oari.io/oauth/callback")
         #expect(try W3CBackendComposition.additionalProfiles().map(\.id) == [
-            "openID4VC-vcdm11-jwt-vc",
+            "ebsi-vcdm11-jwt-vc",
             "ietf-dc-sd-jwt-vc",
-            "openID4VC-vcdm2-sd-jwt",
+            "ebsi-vcdm2-sd-jwt",
         ])
     }
 
@@ -376,7 +376,7 @@ struct WalletAppModelTests {
             eudiWallet: nil, eudiAvailability: .configurationRequired("Unavailable"), openID4VCWallet: backend
         )))
         model.scanInput = "openid4vp://?client_id=decentralized_identifier%3Adid%3Akey%3Averifier&request_uri=https%3A%2F%2Fwallet.dev.oari.io%2Fopenid4vp%2Frequest%2Fid"
-        await model.redeemScannedRequest()
+        await model.reviewScannedRequest()
         #expect(model.eudiFlow == .presentationConsent(request))
         await model.submitPresentation(accepted: true)
         #expect(model.eudiFlow == .completed("Approved claims were shared."))
@@ -557,6 +557,41 @@ struct WalletAppModelTests {
         #expect(await authenticator.callCount == 1)
     }
 
+    @Test("Credential deletion Face ID inactivity does not show the lock shield")
+    func credentialDeletionSuppressesTransientPrivacyShield() async {
+        let backendID = UUID()
+        let record = CredentialRecord(
+            configurationID: "vc", backendID: W3CBackendComposition.backendID,
+            backendDocumentID: backendID.uuidString, displayName: "Credential",
+            format: .jwtVC, profileID: "vcdm2-vc-jwt",
+            issuerIdentifier: "https://issuer.example", createdAt: Date()
+        )
+        let service = FixtureOpenID4VCWallet(outcome: .allow)
+        let authenticator = SuspendingAppLockAuthenticator()
+        let model = WalletAppModel()
+        await model.load(.success(WalletAppDependencies(
+            credentials: FixedMetadataRepository(records: [record]),
+            audit: EmptyAuditRepository(), localAuthenticator: FixtureAuthenticator(),
+            appLockAuthenticator: authenticator, eudiWallet: nil,
+            eudiAvailability: .configurationRequired("Unavailable"), openID4VCWallet: service
+        )))
+        model.selectCredential(record)
+
+        let deletion = Task { await model.deleteSelectedCredential() }
+        await authenticator.waitForCallCount(1)
+        #expect(model.suppressesInactivePrivacyShield)
+        await model.handleScenePhase(.inactive)
+        #expect(!model.shouldShowInactivePrivacyShield)
+        #expect(!model.isAppLockBlocking)
+        await model.handleScenePhase(.active)
+        #expect(!model.suppressesInactivePrivacyShield)
+        await authenticator.completeNext()
+        await deletion.value
+
+        #expect(model.credentialActionState == .completed("Credential removed."))
+        #expect(await service.deletedCredentials.count == 1)
+    }
+
     @Test("Credential deletion cancellation mutates no backend")
     func credentialDeletionAuthenticationFailure() async {
         let record = CredentialRecord(
@@ -703,7 +738,7 @@ struct WalletAppModelTests {
             state: "auth-session",
             dcqlQuery: ["credentials": .array([.object([
                 "id": .string("pid"),
-                "format": .string("dc+sd-jwt"),
+                "format": .string("mso_mdoc"),
                 "meta": .object([
                     "vct_values": .array([.string("urn:eu.europa.ec.eudi:pid:1")]),
                 ]),
@@ -940,9 +975,6 @@ private actor FixtureOpenID4VCWallet: OpenID4VCOperating {
         completedPIDClaimIDs.append(selectedClaimIDs)
         return .completed(userAccepted ? "W3C PID submitted" : "PID request declined")
     }
-    func submitPIDPresentation(id: UUID, vpToken: String) async throws -> OpenID4VCInteractionCompletion {
-        .completed("PID submitted")
-    }
     func completeAuthorization(id: UUID, code: String) async throws -> OpenID4VCInteractionCompletion {
         completedAuthorizationCodes.append(code)
         return .completed("Authorization completed")
@@ -1038,7 +1070,6 @@ private actor FixtureEudiWallet: EudiWalletOperating {
         lastSelectedClaims = selectedClaimIDs
         return completion
     }
-    func loadPendingIssuances() async throws -> [EudiPendingIssuance] { operationCount += 1; return pendingAtLoad }
     func loadDocumentSummaries() async throws -> [EudiWalletDocumentSummary] { operationCount += 1; return summaries }
     func loadStartupSnapshot() async throws -> EudiWalletStartupSnapshot {
         operationCount += 1
@@ -1056,7 +1087,6 @@ private actor FixtureEudiWallet: EudiWalletOperating {
         guard let retryResult else { throw TestFailure.unavailable }
         return retryResult
     }
-    func reconcilePendingOperations() async throws { operationCount += 1 }
 }
 
 private actor EmptyMetadataRepository: CredentialMetadataRepository {

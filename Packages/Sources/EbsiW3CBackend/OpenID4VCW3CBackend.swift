@@ -1772,24 +1772,6 @@ public actor OpenID4VCW3CBackend {
         return url
     }
 
-    private static func decodeSignedPresentationRequest(_ compactJWT: String) throws -> SignedPresentationRequest {
-        let parts = compactJWT.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 3 else {
-            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request was not a compact JWT")
-        }
-        var base64 = String(parts[1]).replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
-        guard let data = Data(base64Encoded: base64) else {
-            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request payload was not valid base64url")
-        }
-        return try Self.decode(
-            SignedPresentationRequest.self,
-            from: data,
-            stage: "signed presentation request"
-        )
-    }
-
     private static func presentationQuery(
         from dcqlQuery: [String: AnySendableJSON]
     ) throws -> (

@@ -30,6 +30,7 @@ final class WalletAppModel: ObservableObject {
     @Published private(set) var appLockState: AppLockState
     @Published private(set) var requiresForegroundUnlock: Bool
     @Published private(set) var lifecyclePhase: AppLifecyclePhase = .active
+    @Published private(set) var suppressesInactivePrivacyShield = false
     @Published private(set) var appLockAuthenticationKind: DeviceAuthenticationKind = .unavailable
     @Published private(set) var appLockSetupError: String?
     @Published var showsAppLockSetup = false
@@ -115,6 +116,10 @@ final class WalletAppModel: ObservableObject {
     }
     var isAppLockBlocking: Bool {
         requiresForegroundUnlock
+    }
+
+    var shouldShowInactivePrivacyShield: Bool {
+        lifecyclePhase != .active && !suppressesInactivePrivacyShield
     }
     var isPrivacyCoverVisible: Bool {
         lifecyclePhase == .background
@@ -317,9 +322,11 @@ final class WalletAppModel: ObservableObject {
         case .background:
             backgroundGeneration += 1
             activeAuthenticationID = nil
+            suppressesInactivePrivacyShield = false
             requiresForegroundUnlock = isAppLockEnabled
             appLockState = isAppLockEnabled ? .locked(nil) : .disabled
         case .active:
+            suppressesInactivePrivacyShield = false
             guard isAppLockEnabled else {
                 requiresForegroundUnlock = false
                 appLockState = .disabled
@@ -446,10 +453,6 @@ final class WalletAppModel: ObservableObject {
         } catch {
             eudiFlow = .failed(Self.safeMessage(error))
         }
-    }
-
-    func redeemScannedRequest() async {
-        await reviewScannedRequest()
     }
 
     func continueAfterOpenID4VCTrustWarning() async {
@@ -835,10 +838,17 @@ final class WalletAppModel: ObservableObject {
             return
         }
         credentialActionState = .working("Authenticating…")
+        let deletionGeneration = backgroundGeneration
+        suppressesInactivePrivacyShield = true
         do {
             try await appLockAuthenticator.authenticateAppLock(
                 reason: "Remove this credential from Oari Wallet"
             )
+            guard backgroundGeneration == deletionGeneration,
+                  lifecyclePhase != .background else {
+                credentialActionState = .failed("Credential removal was cancelled when the app left the foreground.")
+                return
+            }
             credentialActionState = .working("Removing credential…")
             switch target {
             case let .eudi(documentID, service):

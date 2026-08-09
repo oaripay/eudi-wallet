@@ -83,8 +83,3 @@ public struct TrustDecision: Equatable, Sendable {
         }
     }
 }
-
-public protocol TrustEvaluator: Sendable {
-    associatedtype Input: Sendable
-    func evaluate(_ input: Input, profile: InteroperabilityProfile) async -> TrustVerdict
-}

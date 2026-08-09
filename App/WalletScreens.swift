@@ -461,45 +461,6 @@ private struct LocalCredentialImage: View {
     }
 }
 
-private struct CredentialTile: View {
-    @Environment(\.colorScheme) private var scheme
-    let credential: CredentialRecord
-
-    var body: some View {
-        OariCard {
-            VStack(alignment: .leading, spacing: OariSpacing.x3) {
-                OariStatusBadge(statusLabel, kind: statusKind)
-                Text(credential.displayName).font(OariTypography.heading)
-                Text(credential.issuerIdentifier)
-                    .font(OariTypography.technical)
-                    .foregroundStyle(OariColor.textSecondary(scheme))
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(credential.displayName), \(statusLabel)")
-        .accessibilityIdentifier("wallet.credential.\(credential.configurationID)")
-    }
-
-    private var statusLabel: String {
-        switch credential.issuerTrust {
-        case .trusted: "Trusted issuer"
-        case .untrusted: "Issuer not verified"
-        case .invalid: "Invalid issuer"
-        case .indeterminate: "Issuer status unavailable"
-        case .notEvaluated: "Issuer not evaluated"
-        }
-    }
-
-    private var statusKind: OariStatusKind {
-        switch credential.issuerTrust {
-        case .trusted: .trusted
-        case .untrusted, .notEvaluated: .warning
-        case .invalid: .invalid
-        case .indeterminate: .indeterminate
-        }
-    }
-}
-
 struct WalletScannerView: View {
     @Environment(\.colorScheme) private var scheme
     @ObservedObject var model: WalletAppModel
@@ -526,7 +487,7 @@ struct WalletScannerView: View {
                             .onSubmit { inputFocused = false }
                         Button("Redeem") {
                             inputFocused = false
-                            Task { await model.redeemScannedRequest() }
+                            Task { await model.reviewScannedRequest() }
                         }
                         .buttonStyle(OariPrimaryButtonStyle())
                         .disabled(model.scanInput.isEmpty)

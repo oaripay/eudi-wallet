@@ -317,26 +317,6 @@ public struct EbsiCredentialInspector: Sendable {
         }
     }
 
-    public func validateEnvelope(_ credential: Data, profile: EbsiCredentialProfile) throws {
-        switch profile.representation {
-        case .jwtVcJson, .jwtVcJsonLd, .vcdm2Jwt:
-            let compact = String(decoding: credential, as: UTF8.self)
-            _ = try inspectCompactJWT(compact, profile: profile)
-        case .vcdm2SdJwt, .dcSdJwt:
-            guard let issuerJWT = String(decoding: credential, as: UTF8.self).split(separator: "~").first,
-                  let algorithm = try Self.algorithm(in: String(issuerJWT)),
-                  profile.allowedAlgorithms.contains(algorithm) else {
-                throw EbsiCredentialError.algorithmNotAllowed
-            }
-        case .dataIntegrity:
-            let object = try JSONDecoder().decode([String: AnySendableJSON].self, from: credential)
-            guard let cryptosuite = object["proof"]?.object?["cryptosuite"]?.string,
-                  profile.allowedCryptosuites.contains(cryptosuite) else {
-                throw EbsiCredentialError.algorithmNotAllowed
-            }
-        }
-    }
-
     public func inspectSDJWT(
         _ value: String,
         requiresHolderBinding: Bool = true

@@ -84,10 +84,6 @@ public protocol KeyProvider: Sendable {
     func deleteKey(id: KeyID) async throws
 }
 
-public protocol CredentialLifecycle: Sendable {
-    func deleteCredential(id: CredentialID, at date: Date) async throws
-}
-
 public enum WalletRepositoryError: Error, Equatable, Sendable {
     case duplicateCredential
     case credentialNotFound

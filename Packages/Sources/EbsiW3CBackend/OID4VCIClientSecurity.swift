@@ -20,20 +20,6 @@ public struct OID4VCIClientSecurityState: Codable, Equatable, Sendable {
     }
 }
 
-public struct OID4VCIDPoPClaims: Codable, Equatable, Sendable {
-    public let method: String
-    public let targetURI: String
-    public let issuedAt: Date
-    public let identifier: UUID
-
-    public init(method: String, targetURI: String, issuedAt: Date = Date(), identifier: UUID = UUID()) {
-        self.method = method
-        self.targetURI = targetURI
-        self.issuedAt = issuedAt
-        self.identifier = identifier
-    }
-}
-
 public struct OID4VCIResponseEncryptionParameters: Codable, Equatable, Sendable {
     public let algorithm: String
     public let encryption: String
