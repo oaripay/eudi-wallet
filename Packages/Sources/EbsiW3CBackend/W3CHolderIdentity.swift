@@ -79,13 +79,13 @@ public actor PersistentW3CHolderIdentityProvider: W3CHolderIdentityProviding {
             let publicKey = try await keyProvider.publicKey(id: keyID)
             let did = try KeyDIDResolver().derive(publicKeyX963: publicKey.x963Representation)
             guard let assertionMethod = try await KeyDIDResolver().resolve(did).assertionMethod.first else {
-                throw WorkspaceBackendError.holderIdentityRecoveryRequired
+                throw OpenID4VCBackendError.holderIdentityRecoveryRequired
             }
             return W3CHolderIdentity(keyID: keyID, did: did, assertionMethod: assertionMethod)
-        } catch let error as WorkspaceBackendError {
+        } catch let error as OpenID4VCBackendError {
             throw error
         } catch {
-            throw WorkspaceBackendError.holderIdentityRecoveryRequired
+            throw OpenID4VCBackendError.holderIdentityRecoveryRequired
         }
     }
 }

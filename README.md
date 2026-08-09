@@ -1,7 +1,7 @@
 # Oari Wallet
 
 Oari Wallet is a native SwiftUI iOS development wallet for EUDI and
-workspace-backed W3C interoperability testing. The app display name is **Oari
+W3C interoperability testing. The app display name is **Oari
 Wallet**, the technical target is `OariWallet`, and the bundle identifier is
 `io.oari.wallet`.
 
@@ -42,7 +42,7 @@ The pinned EUDI Wallet Kit owns EUDI wallet documents, secure keys, storage,
 SD-JWT, mdoc, OpenID4VCI, OpenID4VP, DCQL, and BLE behavior. Oari owns consent,
 application metadata, redacted audit, lifecycle UI, and recovery coordination.
 
-### Workspace W3C backend
+### Development W3C backend
 
 The development W3C backend speaks to Oari issuer and verifier services through
 explicitly enabled profiles. It owns W3C credentials and stores them encrypted
@@ -62,7 +62,7 @@ separate because they have different protocol and lifecycle responsibilities.
 - OpenID4VCI 1.1 Interactive Authorization using
   `authorization_challenge_endpoint` and `ia_post`.
 - OpenID4VP and DCQL consent with query-ID-based `vp_token` responses.
-- Workspace final and selected draft interaction profiles where an
+- OpenID4VC final and selected draft interaction profiles where an
   interoperability fixture requires them.
 
 For final Interactive Authorization, the initial challenge request carries
@@ -85,41 +85,23 @@ positive and negative interoperability coverage.
   holder DID.
 - Malformed, expired, replayed, or unsupported protocol messages fail closed.
 
-Development trust policy can make missing trust-list or accreditation records a
-warning. It does not disable cryptographic verification.
+Missing signer accreditation can produce an explicit user warning. It never
+disables cryptographic credential verification.
 
 ## Development configuration
 
-Debug and testing builds enable the open interoperability profile by default.
-Valid development issuers and verifiers do not need to appear in a trust list;
-the app presents a warning and requires explicit Continue or Cancel consent.
+The W3C backend uses the same pinned production registry and interoperability
+profile in every build configuration. HTTPS issuer paths ending in `draft-13`,
+`draft-17`, or `draft-18` select the corresponding compatibility contract;
+other issuers use the final contract.
 
 Supported launch arguments:
 
 ```text
---disable-ebsi-development
---enable-local-ebsi-authority
 --fixture production|empty|populated|storage-failure
 --incoming-url <wallet-url>
 --disable-animations
 ```
-
-The local authority can also be enabled with:
-
-```text
-OARI_EBSI_LOCAL_AUTHORITY=1
-```
-
-Its default development offer is:
-
-```text
-http://127.0.0.1:4080/openid/offer/dev-lpid-offer
-```
-
-The authority must be reachable from the simulator or device and started with
-the development signer enabled. A physical device cannot reach a Mac through
-`127.0.0.1`; use an HTTPS development hostname or an explicitly configured LAN
-or tunnel endpoint.
 
 ## QR scanner
 

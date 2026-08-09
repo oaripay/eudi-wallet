@@ -13,7 +13,7 @@ struct WalletAppDependencies: Sendable {
     let appLockAuthenticator: any AppLockAuthenticating
     let eudiWallet: (any EudiWalletOperating)?
     let eudiAvailability: EudiWalletAvailability
-    let ebsiWallet: (any EbsiW3COperating)?
+    let openID4VCWallet: (any OpenID4VCOperating)?
 
     init(
         credentials: any CredentialMetadataRepository,
@@ -22,7 +22,7 @@ struct WalletAppDependencies: Sendable {
         appLockAuthenticator: any AppLockAuthenticating = SystemLocalAuthenticator(),
         eudiWallet: (any EudiWalletOperating)?,
         eudiAvailability: EudiWalletAvailability,
-        ebsiWallet: (any EbsiW3COperating)?
+        openID4VCWallet: (any OpenID4VCOperating)?
     ) {
         self.credentials = credentials
         self.audit = audit
@@ -30,7 +30,7 @@ struct WalletAppDependencies: Sendable {
         self.appLockAuthenticator = appLockAuthenticator
         self.eudiWallet = eudiWallet
         self.eudiAvailability = eudiAvailability
-        self.ebsiWallet = ebsiWallet
+        self.openID4VCWallet = openID4VCWallet
     }
 
     static func make(configuration: AppConfiguration = .current()) -> Result<WalletAppDependencies, Error> {
@@ -64,141 +64,83 @@ struct WalletAppDependencies: Sendable {
                 directory: root.appendingPathComponent("audit", isDirectory: true),
                 keyStore: keyStore
             )
-            let walletClientID = "oari-development-wallet"
-            let walletAuthorizationRedirectURI = URL(string: "https://oari.io/oauth/callback")!
-            let eudiWallet: (any EudiWalletOperating)?
-            let eudiAvailability: EudiWalletAvailability
-            do {
-                let eudiTrustSource = try EudiTrustAnchorSource(
-                    profileID: "oari-development-eudi",
-                    anchors: [DevelopmentEudiProfile.trustAnchorDER],
-                    approvedSHA256Digests: [EudiTrustAnchorSource.sha256Digest(of: DevelopmentEudiProfile.trustAnchorDER)]
-                )
-                let eudiConfiguration = try EudiOperationalConfiguration(
-                    clientID: walletClientID,
-                    authorizationRedirectURI: walletAuthorizationRedirectURI,
-                    attestationProvider: DevelopmentEudiAttestationProvider(),
-                    auditRepository: auditRepository,
-                    auditPolicy: .development,
-                    auditPolicyVersion: AuditPolicyVersion(rawValue: 1),
-                    metadataRepository: metadataRepository,
-                    recoveryStore: try EncryptedWalletOperationRecoveryStore(
-                        directory: root.appendingPathComponent("operation-recovery", isDirectory: true),
-                        keyStore: keyStore
-                    ),
-                    statusProvider: DevelopmentEudiStatusProvider(),
-                    allowedIssuerOrigins: ["https://issuer.example"],
-                    allowedVerifierOrigins: ["https://verifier.example"],
-                    allowedApplicationRedirectOrigins: ["https://oari.io"],
-                    allowUnregisteredDevelopmentCounterparties: configuration.ebsiDevelopmentEnabled
-                )
-                let eudiAdapter = try EudiWalletKitBaseline(
-                    serviceName: "io.oari.wallet.development-eudi"
-                ).makeWallet(
-                    trustSource: eudiTrustSource,
-                    operationalConfiguration: eudiConfiguration
-                )
-                eudiWallet = configuration.ebsiDevelopmentEnabled
-                    ? LiveEudiWalletService(adapter: eudiAdapter)
-                    : nil
-                eudiAvailability = configuration.ebsiDevelopmentEnabled
-                    ? .available
-                    : .configurationRequired("Install an approved staging or production EUDI trust profile to enable wallet operations.")
-            } catch {
-                eudiWallet = nil
-                eudiAvailability = .configurationRequired(
-                    "EUDI Wallet Kit development profile could not be initialized: \(Self.safeDevelopmentError(error))"
-                )
-            }
-            let ebsiWallet: (any EbsiW3COperating)?
-            if configuration.ebsiDevelopmentEnabled {
-                let ebsiEndpoint = try configuration.ebsiLocalAuthorityEnabled
-                    ? EBSIChainEndpoint.localAuthority()
-                    : EBSIChainEndpoint.oariDevelopment()
-                let endpointRegistry = try EBSIEndpointRegistry(
-                    policy: .development,
-                    endpoints: [ebsiEndpoint]
-                )
-                let registryClient = try MultiEndpointEBSIRegistryClient(
-                    registry: endpointRegistry,
-                    httpClient: URLSessionBoundedHTTPSClient()
-                )
-                let ebsiStore = try EncryptedEbsiCredentialStore(
-                    directory: root.appendingPathComponent("ebsi-credentials", isDirectory: true),
-                    keyStore: keyStore
-                )
-                let workspaceTransport = URLSessionWorkspaceTransport()
-                let workspaceDIDResolver = CompositeDIDResolver(
-                    ebsi: EBSIDIDResolver(client: registryClient)
-                )
-                let w3cKeyProvider = DeviceBoundKeyProvider(
-                    applicationTagPrefix: "io.oari.wallet.ebsi.key"
-                )
-                let holderIdentityProvider = PersistentW3CHolderIdentityProvider(
-                    keyProvider: w3cKeyProvider,
-                    referenceStore: KeychainW3CHolderIdentityReferenceStore()
-                )
-                let ebsiBackend = OariWorkspaceW3CBackend(
-                    transport: workspaceTransport,
-                    trustEvaluator: configuration.ebsiLocalAuthorityEnabled
-                        ? DevelopmentIssuerOriginTrustEvaluator(
-                            trustedOrigins: [],
-                            evidenceSource: "local-authority"
-                        )
-                        : WorkspaceTIRTrustEvaluator(
-                            tirBaseURL: ebsiEndpoint.trustedIssuersRegistryURL,
-                            transport: workspaceTransport
-                        ),
-                    keyProvider: w3cKeyProvider,
-                    credentialStore: ebsiStore,
-                    credentialValidator: NativeWorkspaceCredentialValidator(
-                        resolver: workspaceDIDResolver,
-                        transport: workspaceTransport,
-                        allowsDIDIssuerDelegation: true
-                    ),
-                    profile: try .oariVcdm2Jwt(),
-                    additionalProfiles: [try .vcdm11Jwt(), try .dcSdJWTVC(), try .vcdm2SdJWT()],
-                    clientSecurity: DefaultOID4VCIClientSecurity(
-                        keyProvider: DeviceBoundKeyProvider(
-                            applicationTagPrefix: "io.oari.wallet.oid4vci.security"
-                        )
-                    ),
-                    transportProfileRegistry: .developmentDraftCompatibility,
-                    holderIdentityProvider: holderIdentityProvider,
-                    presentationRequestValidator: NativeWorkspacePresentationRequestValidator(
-                        resolver: workspaceDIDResolver
-                    ),
-                    authorizationClientID: walletClientID,
-                    authorizationRedirectURI: walletAuthorizationRedirectURI
-                )
-                ebsiWallet = LiveWorkspaceEbsiWalletService(
-                    backend: ebsiBackend,
-                    metadata: metadataRepository,
-                    audit: auditRepository
-                )
-            } else {
-                ebsiWallet = nil
-            }
+            let eudiWallet: (any EudiWalletOperating)? = nil
+            let eudiAvailability = EudiWalletAvailability.configurationRequired(
+                "Install an approved production EUDI trust profile to enable wallet operations."
+            )
+            let openID4VCWallet = try makeW3CWallet(
+                root: root,
+                keyStore: keyStore,
+                metadataRepository: metadataRepository,
+                auditRepository: auditRepository
+            )
             return WalletAppDependencies(
                 credentials: metadataRepository,
                 audit: auditRepository,
                 localAuthenticator: SystemLocalAuthenticator(),
                 eudiWallet: eudiWallet,
                 eudiAvailability: eudiAvailability,
-                ebsiWallet: ebsiWallet
+                openID4VCWallet: openID4VCWallet
             )
         }
     }
 
-    private static func safeDevelopmentError(_ error: Error) -> String {
-        switch error {
-        case EudiWalletKitAdapterError.initializationFailed:
-            return "Wallet Kit initialization failed"
-        case EudiWalletKitAdapterError.invalidTrustAnchor:
-            return "development trust anchor is invalid"
-        default:
-            return "Wallet Kit configuration is invalid"
-        }
+    private static func makeW3CWallet(
+        root: URL,
+        keyStore: any VaultKeyStore,
+        metadataRepository: any CredentialMetadataRepository,
+        auditRepository: any AuditRepository
+    ) throws -> any OpenID4VCOperating {
+        let composition = try W3CBackendComposition.make()
+        let endpointRegistry = try EBSIEndpointRegistry(
+            policy: composition.environmentPolicy,
+            endpoints: [composition.endpoint],
+            approvedProductionEndpoints: composition.approvedProductionEndpoints
+        )
+        let registryClient = try MultiEndpointEBSIRegistryClient(
+            registry: endpointRegistry,
+            httpClient: URLSessionBoundedHTTPSClient()
+        )
+        let openID4VCStore = try EncryptedEbsiCredentialStore(
+            directory: root.appendingPathComponent("ebsi-credentials", isDirectory: true),
+            keyStore: keyStore
+        )
+        let transport = URLSessionOpenID4VCTransport()
+        let resolver = CompositeDIDResolver(ebsi: EBSIDIDResolver(client: registryClient))
+        let keyProvider = DeviceBoundKeyProvider(applicationTagPrefix: "io.oari.wallet.ebsi.key")
+        let replayProtection = try EncryptedOpenID4VPReplayStore(
+            directory: root.appendingPathComponent("workspace-presentation-replay", isDirectory: true),
+            keyStore: keyStore
+        )
+        let backend = OpenID4VCW3CBackend(
+            transport: transport,
+            trustEvaluator: HTTPSCredentialIssuerServiceTrustEvaluator(),
+            credentialSignerTrustEvaluator: EBSITIRCredentialSignerTrustEvaluator(
+                tirBaseURL: composition.endpoint.trustedIssuersRegistryURL,
+                transport: transport,
+                resolver: resolver
+            ),
+            keyProvider: keyProvider,
+            credentialStore: openID4VCStore,
+            credentialValidator: NativeW3CCredentialValidator(
+                resolver: resolver, transport: transport, allowsDIDIssuerDelegation: true
+            ),
+            profile: try .vcdm2JWTVC(),
+            additionalProfiles: try W3CBackendComposition.additionalProfiles(),
+            clientSecurity: DefaultOID4VCIClientSecurity(
+                keyProvider: DeviceBoundKeyProvider(applicationTagPrefix: "io.oari.wallet.oid4vci.security")
+            ),
+            transportProfileRegistry: composition.transportProfileRegistry,
+            holderIdentityProvider: PersistentW3CHolderIdentityProvider(
+                keyProvider: keyProvider, referenceStore: KeychainW3CHolderIdentityReferenceStore()
+            ),
+            presentationRequestValidator: NativeOpenID4VPRequestObjectValidator(resolver: resolver),
+            presentationReplayProtection: replayProtection,
+            trustEnvironment: composition.environmentPolicy == .production ? .production : .development,
+            authorizationClientID: W3CBackendComposition.authorizationClientID,
+            authorizationRedirectURI: W3CBackendComposition.authorizationRedirectURI
+        )
+        return LiveOpenID4VCService(backend: backend, metadata: metadataRepository, audit: auditRepository)
     }
 
 #if DEBUG
@@ -212,7 +154,7 @@ struct WalletAppDependencies: Sendable {
             localAuthenticator: FixtureLocalAuthenticator(),
             eudiWallet: nil,
             eudiAvailability: .configurationRequired("Preview mode does not contact credential services."),
-            ebsiWallet: nil
+            openID4VCWallet: nil
         )
     }
 
@@ -227,7 +169,7 @@ struct WalletAppDependencies: Sendable {
             cryptographicValidity: .valid,
             issuerTrust: .trusted,
             status: .valid,
-            legalClassification: .oariProvisional,
+            legalClassification: .provisional,
             issuedAt: date,
             expiresAt: date.addingTimeInterval(31_536_000),
             createdAt: date

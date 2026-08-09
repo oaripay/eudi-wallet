@@ -29,7 +29,7 @@ public struct KeychainW3CHolderIdentityReferenceStore: W3CHolderKeyReferenceStor
               let data = item as? Data,
               let value = String(data: data, encoding: .utf8),
               let uuid = UUID(uuidString: value) else {
-            throw WorkspaceBackendError.holderIdentityRecoveryRequired
+            throw OpenID4VCBackendError.holderIdentityRecoveryRequired
         }
         return KeyID(rawValue: uuid)
     }
@@ -44,7 +44,7 @@ public struct KeychainW3CHolderIdentityReferenceStore: W3CHolderKeyReferenceStor
         let update = SecItemUpdate(query, [kSecValueData as String: data] as CFDictionary)
         if update == errSecSuccess { return }
         guard update == errSecItemNotFound else {
-            throw WorkspaceBackendError.holderIdentityRecoveryRequired
+            throw OpenID4VCBackendError.holderIdentityRecoveryRequired
         }
         let add = SecItemAdd([
             kSecClass as String: kSecClassGenericPassword,
@@ -54,7 +54,7 @@ public struct KeychainW3CHolderIdentityReferenceStore: W3CHolderKeyReferenceStor
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ] as CFDictionary, nil)
         guard add == errSecSuccess else {
-            throw WorkspaceBackendError.holderIdentityRecoveryRequired
+            throw OpenID4VCBackendError.holderIdentityRecoveryRequired
         }
     }
 
@@ -65,7 +65,7 @@ public struct KeychainW3CHolderIdentityReferenceStore: W3CHolderKeyReferenceStor
             kSecAttrAccount as String: account,
         ] as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw WorkspaceBackendError.holderIdentityRecoveryRequired
+            throw OpenID4VCBackendError.holderIdentityRecoveryRequired
         }
     }
 }

@@ -2,7 +2,7 @@ import EbsiW3CBackend
 import OariDesignSystem
 import SwiftUI
 
-struct OariTrustWarningView: View {
+struct TrustWarningView: View {
     let warning: EbsiTrustWarning
     let continueAction: () -> Void
     let cancel: () -> Void
@@ -29,7 +29,7 @@ struct OariTrustWarningView: View {
             Label(warning.nextAction, systemImage: "info.circle")
                 .font(OariTypography.body)
                 .foregroundStyle(OariColor.textSecondary(scheme))
-            Text("Nothing has been shared or stored yet. Continue only for development testing.")
+            Text("Nothing has been shared or stored yet. Continue only if you recognize and trust this issuer or verifier.")
                 .font(.caption)
                 .foregroundStyle(OariColor.textSecondary(scheme))
             OariFlowFooter {

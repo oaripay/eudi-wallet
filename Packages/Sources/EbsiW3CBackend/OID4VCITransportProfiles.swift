@@ -32,22 +32,51 @@ public enum OID4VCITokenEndpointAuthentication: String, Codable, Equatable, Send
 
 public struct OID4VCITransportProfileRegistry: Sendable, Equatable {
     private let terminalPathComponents: [String: OID4VCITransportProfile]
+    private let requiresHTTPS: Bool
 
-    public static let finalOnly = OID4VCITransportProfileRegistry(terminalPathComponents: [:])
+    public static let finalOnly = OID4VCITransportProfileRegistry(
+        terminalPathComponents: [:], requiresHTTPS: true
+    )
+    public static let productionInteroperability = OID4VCITransportProfileRegistry(
+        terminalPathComponents: [
+            "draft-13": .draft13,
+            "draft-17": .draft17,
+            "draft-18": .draft18,
+        ],
+        requiresHTTPS: true
+    )
     public static let developmentDraftCompatibility = OID4VCITransportProfileRegistry(
         terminalPathComponents: [
             "draft-13": .draft13,
             "draft-17": .draft17,
             "draft-18": .draft18,
-        ]
+        ],
+        requiresHTTPS: false
     )
 
     public init(terminalPathComponents: [String: OID4VCITransportProfile]) {
+        self.init(terminalPathComponents: terminalPathComponents, requiresHTTPS: false)
+    }
+
+    private init(
+        terminalPathComponents: [String: OID4VCITransportProfile],
+        requiresHTTPS: Bool
+    ) {
         self.terminalPathComponents = terminalPathComponents
+        self.requiresHTTPS = requiresHTTPS
     }
 
     public func profile(for issuerURL: URL) -> OID4VCITransportProfile {
-        terminalPathComponents[issuerURL.lastPathComponent.lowercased()] ?? .final
+        if requiresHTTPS {
+            guard issuerURL.scheme?.lowercased() == "https",
+                  issuerURL.host != nil,
+                  issuerURL.user == nil,
+                  issuerURL.password == nil,
+                  issuerURL.fragment == nil,
+                  issuerURL.port == nil || issuerURL.port == 443 else { return .final }
+        }
+        let terminalComponent = issuerURL.lastPathComponent.lowercased()
+        return terminalPathComponents[terminalComponent] ?? .final
     }
 }
 
@@ -67,48 +96,48 @@ public struct OID4VCITransportContract: Equatable, Sendable {
         profile: .final,
         proofShape: .finalProofsJWT,
         credentialIdentifierField: .credentialConfigurationID,
-        responseEnvelopes: [.jsonCredential, .jsonCredentials, .encryptedJWT, .deferredTransaction],
+        responseEnvelopes: [.jsonCredential, .jsonCredentials],
         requiresDPoP: false,
         tokenEndpointAuthentication: .anonymous,
         requiresCredentialResponseEncryption: false,
-        supportsDeferredIssuance: true,
-        supportsBatchIssuance: true
+        supportsDeferredIssuance: false,
+        supportsBatchIssuance: false
     )
 
     public static let draft13 = OID4VCITransportContract(
         profile: .draft13,
         proofShape: .draftProof,
         credentialIdentifierField: .credentialIdentifier,
-        responseEnvelopes: [.encryptedJWT, .jsonCredential, .jsonCredentials, .deferredTransaction],
+        responseEnvelopes: [.encryptedJWT],
         requiresDPoP: true,
         tokenEndpointAuthentication: .unsupported,
         requiresCredentialResponseEncryption: true,
-        supportsDeferredIssuance: true,
-        supportsBatchIssuance: true
+        supportsDeferredIssuance: false,
+        supportsBatchIssuance: false
     )
 
     public static let draft18 = OID4VCITransportContract(
         profile: .draft18,
         proofShape: .draftProof,
         credentialIdentifierField: .credentialIdentifier,
-        responseEnvelopes: [.encryptedJWT, .jsonCredential, .jsonCredentials, .deferredTransaction],
+        responseEnvelopes: [.encryptedJWT],
         requiresDPoP: true,
         tokenEndpointAuthentication: .unsupported,
         requiresCredentialResponseEncryption: true,
-        supportsDeferredIssuance: true,
-        supportsBatchIssuance: true
+        supportsDeferredIssuance: false,
+        supportsBatchIssuance: false
     )
 
     public static let draft17 = OID4VCITransportContract(
         profile: .draft17,
         proofShape: .finalProofsJWT,
         credentialIdentifierField: .credentialIdentifier,
-        responseEnvelopes: [.encryptedJWT, .jsonCredential, .jsonCredentials, .deferredTransaction],
+        responseEnvelopes: [.encryptedJWT],
         requiresDPoP: true,
         tokenEndpointAuthentication: .unsupported,
         requiresCredentialResponseEncryption: true,
-        supportsDeferredIssuance: true,
-        supportsBatchIssuance: true
+        supportsDeferredIssuance: false,
+        supportsBatchIssuance: false
     )
 
     public static func resolve(
@@ -133,18 +162,16 @@ public struct OID4VCITransportContract: Equatable, Sendable {
             } else {
                 authentication = .unsupported
             }
-            let hasCompatibleDPoP = authorizationMetadata.dpopSigningAlgorithms == nil ||
-                authorizationMetadata.dpopSigningAlgorithms?.contains("ES256") == true
             return OID4VCITransportContract(
                 profile: base.profile,
                 proofShape: base.proofShape,
                 credentialIdentifierField: base.credentialIdentifierField,
                 responseEnvelopes: base.responseEnvelopes,
-                requiresDPoP: base.requiresDPoP,
-                tokenEndpointAuthentication: hasCompatibleDPoP ? authentication : .unsupported,
+                requiresDPoP: false,
+                tokenEndpointAuthentication: authentication,
                 requiresCredentialResponseEncryption: true,
-                supportsDeferredIssuance: true,
-                supportsBatchIssuance: true
+                supportsDeferredIssuance: false,
+                supportsBatchIssuance: false
             )
         }
         let authentication: OID4VCITokenEndpointAuthentication
@@ -162,12 +189,12 @@ public struct OID4VCITransportContract: Equatable, Sendable {
             profile: .final,
             proofShape: .finalProofsJWT,
             credentialIdentifierField: .credentialConfigurationID,
-            responseEnvelopes: [.jsonCredential, .jsonCredentials, .encryptedJWT, .deferredTransaction],
+            responseEnvelopes: [.jsonCredential, .jsonCredentials],
             requiresDPoP: false,
             tokenEndpointAuthentication: authentication,
             requiresCredentialResponseEncryption: false,
-            supportsDeferredIssuance: true,
-            supportsBatchIssuance: true
+            supportsDeferredIssuance: false,
+            supportsBatchIssuance: false
         )
     }
 }

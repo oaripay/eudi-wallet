@@ -7,7 +7,7 @@ struct EudiFlowView: View {
     @Environment(\.colorScheme) private var scheme
     @FocusState private var focusedField: Field?
 
-    private enum Field { case transactionCode, ebsiPIN }
+    private enum Field { case transactionCode, openID4VCPIN }
 
     var body: some View {
         NavigationStack {
@@ -108,8 +108,8 @@ struct EudiFlowView: View {
                 await model.acceptIssuance()
             }
 
-        case let .ebsiIssuanceReview(interaction):
-            Label("EBSI development credential", systemImage: "network.badge.shield.half.filled")
+        case let .openID4VCIssuanceReview(interaction):
+            Label("W3C credential", systemImage: "network.badge.shield.half.filled")
                 .font(OariTypography.heading)
             Text(interaction.displayName ?? interaction.counterpartyIdentifier)
                 .foregroundStyle(OariColor.textSecondary(scheme))
@@ -165,44 +165,20 @@ struct EudiFlowView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
             }
-            if interaction.transactionCodeRequired {
-                Text(interaction.transactionCodeDescription ?? "Enter the PIN supplied by the issuer.")
-                    .font(.caption).foregroundStyle(.secondary)
-                if let length = interaction.transactionCodeLength {
-                    SecurePINCodeField(
-                        value: $model.ebsiTransactionCode,
-                        length: length,
-                        label: "PIN",
-                        focus: $focusedField,
-                        focusValue: .ebsiPIN
-                    )
-                } else {
-                    SecureField("PIN / transaction code", text: $model.ebsiTransactionCode)
-                        .textContentType(.oneTimeCode)
-                        .keyboardType(.numberPad)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($focusedField, equals: .ebsiPIN)
-                }
+            OpenID4VCTransactionCodeEntry(interaction: interaction) { transactionCode in
+                await model.issueReviewedOpenID4VCCredential(transactionCode: transactionCode)
+            } onCancel: {
+                await model.cancelOpenID4VCTrustWarning()
             }
-            primaryButton("Issue and store credential", icon: "plus.circle.fill", disabled: !validPIN(interaction)) {
-                focusedField = nil
-                await model.issueReviewedEbsiCredential()
-            }
-            Button("Cancel") {
-                focusedField = nil
-                Task { await model.cancelEbsiTrustWarning() }
-            }
-                .frame(maxWidth: .infinity)
-                .buttonStyle(OariSecondaryButtonStyle())
 
-        case let .ebsiPresentationRequired(challenge):
+        case let .openID4VPPresentationRequired(challenge):
             Label("Present your PID", systemImage: "person.badge.shield.checkmark")
                 .font(OariTypography.heading)
             Text("The issuer requires an OpenID4VP presentation before it can issue this W3C credential.")
             Text("DCQL request: \(challenge.dcqlQuery.keys.sorted().joined(separator: ", "))")
                 .font(.caption).foregroundStyle(.secondary)
             primaryButton("Review PID claims", icon: "person.text.rectangle") {
-                await model.startEudiPresentationForEbsi(challenge)
+                await model.startEudiCredentialPresentation(challenge)
             }
 
         case let .presentationConsent(request):
@@ -295,9 +271,59 @@ struct EudiFlowView: View {
         return requirement.inputMode != "numeric" || value.unicodeScalars.allSatisfy { $0.value >= 48 && $0.value <= 57 }
     }
 
-    private func validPIN(_ interaction: EbsiResolvedInteraction) -> Bool {
+}
+
+private struct OpenID4VCTransactionCodeEntry: View {
+    private enum Field { case pin }
+
+    let interaction: OpenID4VCResolvedInteraction
+    let onSubmit: @MainActor (String?) async -> Void
+    let onCancel: @MainActor () async -> Void
+
+    @State private var value = ""
+    @FocusState private var focusedField: Field?
+
+    var body: some View {
+        if interaction.transactionCodeRequired {
+            Text(interaction.transactionCodeDescription ?? "Enter the PIN supplied by the issuer.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let length = interaction.transactionCodeLength {
+                SecurePINCodeField(
+                    value: $value,
+                    length: length,
+                    label: "PIN",
+                    focus: $focusedField,
+                    focusValue: .pin
+                )
+            } else {
+                SecureField("PIN / transaction code", text: $value)
+                    .textContentType(.oneTimeCode)
+                    .keyboardType(.numberPad)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($focusedField, equals: .pin)
+            }
+        }
+        Button {
+            focusedField = nil
+            Task { await onSubmit(value.isEmpty ? nil : value) }
+        } label: {
+            Label("Issue and store credential", systemImage: "plus.circle.fill")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(OariPrimaryButtonStyle())
+        .disabled(!isValid)
+
+        Button("Cancel") {
+            focusedField = nil
+            Task { await onCancel() }
+        }
+        .frame(maxWidth: .infinity)
+        .buttonStyle(OariSecondaryButtonStyle())
+    }
+
+    private var isValid: Bool {
         guard interaction.transactionCodeRequired else { return true }
-        let value = model.ebsiTransactionCode
         guard !value.isEmpty else { return false }
         if let length = interaction.transactionCodeLength, value.count != length { return false }
         return value.unicodeScalars.allSatisfy { $0.value >= 48 && $0.value <= 57 }

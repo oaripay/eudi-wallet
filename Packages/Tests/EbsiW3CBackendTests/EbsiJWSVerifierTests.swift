@@ -123,6 +123,85 @@ struct EbsiJWSVerifierTests {
         }
     }
 
+    @Test("VC-JOSE requires vc+jwt typ and rejects malformed, unknown, and registered critical headers")
+    func vcJOSEProtectedHeaders() throws {
+        let key = P256.Signing.PrivateKey()
+        let method = method(id: "did:key:p256#key-1", key: key.publicKey)
+        let vcRequirements = EbsiJWSRequirements(
+            allowedAlgorithms: [.es256],
+            requiredRelationship: .assertionMethod,
+            expectedController: "did:key:p256",
+            expectedType: "vc+jwt",
+            validationDate: now
+        )
+
+        let valid = try compactJWS(
+            algorithm: "ES256",
+            kid: method.id,
+            headerAdditions: ["typ": "vc+jwt"]
+        ) { try key.signature(for: $0).rawRepresentation }
+        _ = try EbsiJWSVerifier().verify(compactJWS: valid, methods: [method], requirements: vcRequirements)
+
+        for additions: [String: Any] in [
+            ["typ": "JWT"],
+            ["typ": "vc+jwt", "crit": "custom", "custom": true],
+            ["typ": "vc+jwt", "crit": ["missing"]],
+            ["typ": "vc+jwt", "crit": ["custom"], "custom": true],
+            ["typ": "vc+jwt", "crit": ["typ"]],
+            ["typ": "vc+jwt", "crit": ["custom", "custom"], "custom": true],
+        ] {
+            let token = try compactJWS(
+                algorithm: "ES256",
+                kid: method.id,
+                headerAdditions: additions
+            ) { try key.signature(for: $0).rawRepresentation }
+            #expect(throws: EbsiCredentialError.verificationFailed) {
+                _ = try EbsiJWSVerifier().verify(
+                    compactJWS: token,
+                    methods: [method],
+                    requirements: vcRequirements
+                )
+            }
+        }
+
+        let understood = try compactJWS(
+            algorithm: "ES256",
+            kid: method.id,
+            headerAdditions: ["typ": "vc+jwt", "crit": ["custom"], "custom": true]
+        ) { try key.signature(for: $0).rawRepresentation }
+        _ = try EbsiJWSVerifier().verify(
+            compactJWS: understood,
+            methods: [method],
+            requirements: EbsiJWSRequirements(
+                allowedAlgorithms: [.es256],
+                requiredRelationship: .assertionMethod,
+                expectedController: "did:key:p256",
+                expectedType: "vc+jwt",
+                understoodCriticalHeaders: ["custom"],
+                validationDate: now
+            )
+        )
+    }
+
+    @Test("Registered NumericDate claims reject wrong JSON types")
+    func malformedNumericDate() throws {
+        let key = P256.Signing.PrivateKey()
+        let method = method(id: "did:key:p256#key-1", key: key.publicKey)
+        let token = try compactJWS(
+            algorithm: "ES256",
+            kid: method.id,
+            headerAdditions: [:],
+            payloadAdditions: ["exp": "never"]
+        ) { try key.signature(for: $0).rawRepresentation }
+        #expect(throws: EbsiCredentialError.verificationFailed) {
+            _ = try EbsiJWSVerifier().verify(
+                compactJWS: token,
+                methods: [method],
+                requirements: requirements(algorithm: .es256, controller: "did:key:p256")
+            )
+        }
+    }
+
     private func requirements(
         algorithm: EbsiKeyAlgorithm,
         controller: String
@@ -153,18 +232,21 @@ struct EbsiJWSVerifierTests {
         kid: String,
         headerAdditions: [String: Any] = [:],
         issuer: String? = nil,
+        payloadAdditions: [String: Any] = [:],
         signer: (Data) throws -> Data
     ) throws -> String {
         var headerValue: [String: Any] = ["alg": algorithm, "kid": kid, "typ": "JWT"]
         headerValue.merge(headerAdditions) { _, new in new }
         let header = try encode(headerValue)
-        let payload = try encode([
+        var payloadValue: [String: Any] = [
             "iss": issuer ?? kid.components(separatedBy: "#")[0],
             "aud": "https://verifier.example",
             "nonce": "nonce-1",
             "iat": Int(now.timeIntervalSince1970),
             "exp": Int(now.addingTimeInterval(300).timeIntervalSince1970),
-        ] as [String: Any])
+        ]
+        payloadValue.merge(payloadAdditions) { _, new in new }
+        let payload = try encode(payloadValue)
         let input = Data("\(header).\(payload)".utf8)
         return "\(header).\(payload).\(base64URL(try signer(input)))"
     }

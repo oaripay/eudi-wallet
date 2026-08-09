@@ -15,7 +15,7 @@ struct CredentialModelsTests {
             cryptographicValidity: .valid,
             issuerTrust: .untrusted,
             status: .indeterminate,
-            legalClassification: .oariProvisional,
+            legalClassification: .provisional,
             createdAt: createdAt
         )
 
@@ -28,7 +28,9 @@ struct CredentialModelsTests {
         #expect(decoded.cryptographicValidity == .valid)
         #expect(decoded.issuerTrust == .untrusted)
         #expect(decoded.status == .indeterminate)
-        #expect(decoded.legalClassification == .oariProvisional)
+        #expect(decoded.legalClassification == .provisional)
+        #expect(decoded.legalClassification.rawValue == "oariProvisional")
+        #expect(LegalClassification.applicationCredential.rawValue == "oariCredential")
     }
 
     @Test("Supported credential formats do not collapse into one representation")

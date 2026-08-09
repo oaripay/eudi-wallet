@@ -33,7 +33,7 @@ struct W3CHolderIdentityTests {
             keyProvider: IdentityFixtureKeyProvider(),
             referenceStore: references
         )
-        await #expect(throws: WorkspaceBackendError.holderIdentityRecoveryRequired) {
+        await #expect(throws: OpenID4VCBackendError.holderIdentityRecoveryRequired) {
             _ = try await provider.loadOrCreateIdentity()
         }
     }

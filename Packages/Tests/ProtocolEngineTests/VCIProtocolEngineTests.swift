@@ -41,7 +41,7 @@ struct VCIProtocolEngineTests {
             deferredCredentialEndpoint: nil,
             supportedConfigurations: ["pid"]
         )
-        let profile = BuiltInProfiles.oariDevelopmentFinal(checkedOn: Date())
+        let profile = BuiltInProfiles.vcdm2OpenID4VCProfile(checkedOn: Date())
         let request = try IssuanceValidator().validate(
             offer: offer,
             metadata: metadata,
@@ -107,7 +107,7 @@ struct VCIProtocolEngineTests {
             try IssuanceValidator().validate(
                 offer: offer,
                 metadata: metadata,
-                profile: BuiltInProfiles.oariDevelopmentFinal(checkedOn: Date()),
+                profile: BuiltInProfiles.vcdm2OpenID4VCProfile(checkedOn: Date()),
                 configurationID: "pid"
             )
         }

@@ -56,7 +56,7 @@ public struct EbsiCredentialProfile: Codable, Equatable, Identifiable, Sendable 
         self.termsOfUseType = termsOfUseType
     }
 
-    public static func oariVcdm2Jwt() throws -> EbsiCredentialProfile {
+    public static func vcdm2JWTVC() throws -> EbsiCredentialProfile {
         try EbsiCredentialProfile(
             id: "oari-ebsi-vcdm2-vc-jwt",
             dataModel: .v2_0,
@@ -159,7 +159,8 @@ public struct EbsiCredentialInspector: Sendable {
 
     public func inspectCompactJWT(
         _ compactJWT: String,
-        profile: EbsiCredentialProfile
+        profile: EbsiCredentialProfile,
+        validationDate: Date? = nil
     ) throws -> [String: AnySendableJSON] {
         let parts = compactJWT.split(separator: ".")
         guard parts.count == 3,
@@ -176,8 +177,11 @@ public struct EbsiCredentialInspector: Sendable {
                 profile.representation == .vcdm2Jwt else {
             throw EbsiCredentialError.unsupportedRepresentation
         }
-        if profile.representation == .vcdm2Jwt, payload["vc"] != nil {
-            throw EbsiCredentialError.profileMismatch
+        if profile.representation == .vcdm2Jwt {
+            guard header["typ"]?.string == "vc+jwt", payload["vc"] == nil else {
+                throw EbsiCredentialError.profileMismatch
+            }
+            try Self.validateVCDM2Credential(payload, context: profile.context, at: validationDate)
         }
         let credential = payload["vc"]?.object ?? payload
         guard credential["@context"]?.contains(string: profile.context) == true,
@@ -197,6 +201,120 @@ public struct EbsiCredentialInspector: Sendable {
             throw EbsiCredentialError.profileMismatch
         }
         return credential
+    }
+
+    private static func validateVCDM2Credential(
+        _ credential: [String: AnySendableJSON],
+        context expectedContext: String,
+        at validationDate: Date?
+    ) throws {
+        guard case let .array(contexts)? = credential["@context"],
+              contexts.first?.string == expectedContext,
+              contexts.allSatisfy({ $0.string != nil || $0.object != nil }),
+              Self.hasVCDM2Type(credential["type"]),
+              let issuer = Self.issuerIdentifier(credential["issuer"]),
+              Self.isURI(issuer),
+              let subjects = Self.credentialSubjects(credential["credentialSubject"]) else {
+            throw EbsiCredentialError.profileMismatch
+        }
+
+        let validFrom = try Self.dateTimeProperty("validFrom", in: credential)
+        let validUntil = try Self.dateTimeProperty("validUntil", in: credential)
+        if let validFrom, let validUntil, validFrom >= validUntil {
+            throw EbsiCredentialError.profileMismatch
+        }
+        if let validationDate {
+            if let validFrom, validationDate < validFrom { throw EbsiCredentialError.profileMismatch }
+            if let validUntil, validationDate >= validUntil { throw EbsiCredentialError.profileMismatch }
+        }
+
+        // VC-JOSE registered claims are optional, but when used they must be
+        // equivalent to their VCDM properties rather than introducing a second
+        // issuer, subject, identifier, or validity period.
+        if credential["iss"] != nil, credential["iss"]?.string != issuer {
+            throw EbsiCredentialError.profileMismatch
+        }
+        if let subject = credential["sub"] {
+            guard let subject = subject.string,
+                   subjects.compactMap({ $0["id"]?.string }).contains(subject) else {
+                throw EbsiCredentialError.profileMismatch
+            }
+        }
+        if let tokenID = credential["jti"] {
+            guard let tokenID = tokenID.string, credential["id"]?.string == tokenID else {
+                throw EbsiCredentialError.profileMismatch
+            }
+        }
+        try Self.validateNumericDateClaim("nbf", value: credential["nbf"], matches: validFrom)
+        try Self.validateNumericDateClaim("exp", value: credential["exp"], matches: validUntil)
+    }
+
+    private static func hasVCDM2Type(_ value: AnySendableJSON?) -> Bool {
+        switch value {
+        case let .string(type): type == "VerifiableCredential"
+        case let .array(types):
+            !types.isEmpty && types.allSatisfy { $0.string != nil } &&
+                types.contains { $0.string == "VerifiableCredential" }
+        default: false
+        }
+    }
+
+    private static func issuerIdentifier(_ value: AnySendableJSON?) -> String? {
+        switch value {
+        case let .string(issuer): issuer.isEmpty ? nil : issuer
+        case let .object(issuer): issuer["id"]?.string.flatMap { $0.isEmpty ? nil : $0 }
+        default: nil
+        }
+    }
+
+    private static func credentialSubjects(
+        _ value: AnySendableJSON?
+    ) -> [[String: AnySendableJSON]]? {
+        switch value {
+        case let .object(subject): return [subject]
+        case let .array(subjects):
+            let objects = subjects.compactMap(\.object)
+            return !objects.isEmpty && objects.count == subjects.count ? objects : nil
+        default: return nil
+        }
+    }
+
+    private static func isURI(_ value: String) -> Bool {
+        guard !value.contains(where: { $0.isWhitespace }),
+              let components = URLComponents(string: value) else { return false }
+        return components.scheme?.isEmpty == false
+    }
+
+    private static func dateTimeProperty(
+        _ name: String,
+        in credential: [String: AnySendableJSON]
+    ) throws -> Date? {
+        guard let value = credential[name] else { return nil }
+        guard let string = value.string, let date = parseDateTime(string) else {
+            throw EbsiCredentialError.profileMismatch
+        }
+        return date
+    }
+
+    private static func parseDateTime(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let result = fractional.date(from: value) { return result }
+        let standard = ISO8601DateFormatter()
+        standard.formatOptions = [.withInternetDateTime]
+        return standard.date(from: value)
+    }
+
+    private static func validateNumericDateClaim(
+        _ name: String,
+        value: AnySendableJSON?,
+        matches date: Date?
+    ) throws {
+        guard let value else { return }
+        guard let number = value.numericValue, number.isFinite, let date,
+              abs(number - date.timeIntervalSince1970) < 0.001 else {
+            throw EbsiCredentialError.profileMismatch
+        }
     }
 
     public func validateEnvelope(_ credential: Data, profile: EbsiCredentialProfile) throws {

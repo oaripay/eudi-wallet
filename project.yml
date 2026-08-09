@@ -27,6 +27,8 @@ settings:
     Release:
       SWIFT_COMPILATION_MODE: wholemodule
       VALIDATE_PRODUCT: YES
+      # Defense in depth: this development-only resource is also excluded from
+      # production target composition. Its only code reference is DEBUG-gated.
     ReleaseTesting:
       SWIFT_COMPILATION_MODE: wholemodule
       VALIDATE_PRODUCT: YES
@@ -43,6 +45,7 @@ targets:
       - path: App
     resources:
       - path: App/Resources
+      - path: App/PrivacyInfo.xcprivacy
     dependencies:
       - package: OariWalletModules
         product: WalletDomain
@@ -100,7 +103,6 @@ targets:
           ENABLE_TESTABILITY: YES
         ReleaseTesting:
           ENABLE_TESTABILITY: YES
-
   WalletTests:
     type: bundle.unit-test
     platform: iOS

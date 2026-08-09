@@ -53,10 +53,21 @@ public struct EBSIChainEndpoint: Codable, Equatable, Identifiable, Sendable {
         return url
     }
 
-    public static func oariDevelopment() throws -> EBSIChainEndpoint {
+    public static func developmentEBSIRegistries() throws -> EBSIChainEndpoint {
         try EBSIChainEndpoint(
             id: "oari-development",
-            displayName: "OARI EBSI Development",
+            displayName: "EBSI Development Registries",
+            didRegistryURL: URL(string: "https://ebsi.oari.io/did-registry/v5/identifiers")!,
+            trustedIssuersRegistryURL: URL(string: "https://ebsi.oari.io/trusted-issuers-registry/v5/issuers")!,
+            trustedSchemasRegistryURL: URL(string: "https://ebsi.oari.io/trusted-schemas-registry/v3/schemas")!
+        )
+    }
+
+    /// The immutable EBSI collections used by the production wallet.
+    public static func productionEBSIRegistries() throws -> EBSIChainEndpoint {
+        try EBSIChainEndpoint(
+            id: "oari-production",
+            displayName: "EBSI Production Registries",
             didRegistryURL: URL(string: "https://ebsi.oari.io/did-registry/v5/identifiers")!,
             trustedIssuersRegistryURL: URL(string: "https://ebsi.oari.io/trusted-issuers-registry/v5/issuers")!,
             trustedSchemasRegistryURL: URL(string: "https://ebsi.oari.io/trusted-schemas-registry/v3/schemas")!
@@ -66,7 +77,7 @@ public struct EBSIChainEndpoint: Codable, Equatable, Identifiable, Sendable {
     public static func localAuthority() throws -> EBSIChainEndpoint {
         try EBSIChainEndpoint(
             id: "local-authority",
-            displayName: "Local OARI Authority",
+            displayName: "Local EBSI Authority",
             didRegistryURL: URL(string: "http://127.0.0.1:4080/openid")!,
             trustedIssuersRegistryURL: URL(string: "http://127.0.0.1:4080/openid")!,
             trustedSchemasRegistryURL: URL(string: "http://127.0.0.1:4080/openid")!
@@ -89,7 +100,7 @@ public struct EBSIEndpointRegistry: Sendable {
     public init(
         policy: EBSIEnvironmentPolicy,
         endpoints: [EBSIChainEndpoint],
-        approvedProductionEndpoints: [String: EBSIChainEndpoint] = [:]
+        approvedProductionEndpoints _: [String: EBSIChainEndpoint] = [:]
     ) throws {
         guard !endpoints.isEmpty else { throw EBSIEndpointError.noEndpoints }
         guard Set(endpoints.map(\.id)).count == endpoints.count else {
@@ -102,8 +113,11 @@ public struct EBSIEndpointRegistry: Sendable {
             throw EBSIEndpointError.duplicateEndpoint
         }
         if policy == .production {
-            guard !approvedProductionEndpoints.isEmpty,
-                  endpoints.allSatisfy({ approvedProductionEndpoints[$0.id] == $0 }) else {
+            // Production is deliberately not configurable. In particular, a
+            // caller-supplied approval map must not turn an arbitrary host into
+            // a production trust anchor.
+            let pinned = try EBSIChainEndpoint.productionEBSIRegistries()
+            guard endpoints == [pinned] else {
                 throw EBSIEndpointError.unapprovedProductionEndpoint
             }
         }

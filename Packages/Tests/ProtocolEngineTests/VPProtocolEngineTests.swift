@@ -39,7 +39,7 @@ struct VPProtocolEngineTests {
         """.utf8)
         let parsed = try PresentationRequestParser().parse(
             json: data,
-            profileID: BuiltInProfiles.oariDevelopmentFinalID,
+            profileID: BuiltInProfiles.vcdm2OpenID4VCProfileID,
             expectedResponseOrigin: URL(string: "https://verifier.example")!
         )
         #expect(parsed.id == "req-1")
@@ -49,14 +49,14 @@ struct VPProtocolEngineTests {
         #expect(throws: PresentationRequestError.missingQuery) {
             try PresentationRequestParser().parse(
                 json: noQuery,
-                profileID: BuiltInProfiles.oariDevelopmentFinalID,
+                profileID: BuiltInProfiles.vcdm2OpenID4VCProfileID,
                 expectedResponseOrigin: URL(string: "https://verifier.example")!
             )
         }
         #expect(throws: PresentationRequestError.invalidURI) {
             try PresentationRequestParser().parse(
                 json: data,
-                profileID: BuiltInProfiles.oariDevelopmentFinalID,
+                profileID: BuiltInProfiles.vcdm2OpenID4VCProfileID,
                 expectedResponseOrigin: URL(string: "https://verifier.example:8443")!
             )
         }
@@ -84,14 +84,14 @@ struct VPProtocolEngineTests {
         let intake = PresentationIntakeCoordinator(replay: ReplayProtectionStore())
         _ = try await intake.accept(
             json: data,
-            profileID: BuiltInProfiles.oariDevelopmentFinalID,
+            profileID: BuiltInProfiles.vcdm2OpenID4VCProfileID,
             registeredOrigin: URL(string: "https://verifier.example")!,
             now: now
         )
         await #expect(throws: ReplayError.replayed) {
             try await intake.accept(
                 json: data,
-                profileID: BuiltInProfiles.oariDevelopmentFinalID,
+                profileID: BuiltInProfiles.vcdm2OpenID4VCProfileID,
                 registeredOrigin: URL(string: "https://verifier.example")!,
                 now: now
             )

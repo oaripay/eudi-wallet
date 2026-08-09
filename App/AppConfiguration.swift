@@ -12,8 +12,6 @@ struct AppConfiguration: Sendable {
     let fixture: Fixture
     let incomingURL: URL?
     let disablesAnimations: Bool
-    let ebsiDevelopmentEnabled: Bool
-    let ebsiLocalAuthorityEnabled: Bool
 
     static func current(
         arguments: [String] = ProcessInfo.processInfo.arguments
@@ -25,23 +23,17 @@ struct AppConfiguration: Sendable {
         let fixtureHosts: Set<String> = fixture == .production
             ? []
             : ["verifier.example", "issuer.example"]
+        let allowedHosts = Set(["wallet.dev.oari.io"]).union(fixtureHosts)
 #else
         let fixture = Fixture.production
         let incomingURL: URL? = nil
-        let fixtureHosts: Set<String> = []
+        let allowedHosts: Set<String> = []
 #endif
-        // This build is the dedicated EUDI/EBSI interoperability wallet. Keep the
-        // open development profile on by default so testers do not need to maintain
-        // issuer/verifier trust lists for every development counterparty.
-        let ebsiDevelopmentEnabled = !arguments.contains("--disable-ebsi-development")
         return AppConfiguration(
-            allowedHosts: Set(["wallet.dev.oari.io"]).union(fixtureHosts),
+            allowedHosts: allowedHosts,
             fixture: fixture,
             incomingURL: incomingURL,
-            disablesAnimations: arguments.contains("--disable-animations"),
-            ebsiDevelopmentEnabled: ebsiDevelopmentEnabled,
-            ebsiLocalAuthorityEnabled: arguments.contains("--enable-local-ebsi-authority") ||
-                ProcessInfo.processInfo.environment["OARI_EBSI_LOCAL_AUTHORITY"] == "1"
+            disablesAnimations: arguments.contains("--disable-animations")
         )
     }
 

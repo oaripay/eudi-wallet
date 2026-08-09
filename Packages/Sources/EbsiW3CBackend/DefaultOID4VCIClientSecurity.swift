@@ -71,7 +71,7 @@ public actor DefaultOID4VCIClientSecurity: OID4VCIClientSecurity {
         state: OID4VCIClientSecurityState
     ) async throws -> OID4VCIResponseEncryptionParameters {
         guard let key = responseKeys[state.responseEncryptionKeyID] else {
-            throw WorkspaceBackendError.clientSecurityUnavailable
+            throw OpenID4VCBackendError.clientSecurityUnavailable
         }
         var jwk = try Self.publicJWK(key.publicKey.x963Representation)
         jwk["alg"] = "ECDH-ES"
@@ -88,7 +88,7 @@ public actor DefaultOID4VCIClientSecurity: OID4VCIClientSecurity {
         compactJWE: Data
     ) async throws -> Data {
         guard let key = responseKeys.removeValue(forKey: state.responseEncryptionKeyID) else {
-            throw WorkspaceBackendError.clientSecurityUnavailable
+            throw OpenID4VCBackendError.clientSecurityUnavailable
         }
         let privateJWK = try Self.privateJWK(key)
         let privateData = try JSONSerialization.data(withJSONObject: privateJWK, options: [.sortedKeys])

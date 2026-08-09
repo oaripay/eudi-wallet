@@ -4,7 +4,7 @@ import IdentityDomain
 import Testing
 
 struct KeyDIDResolverTests {
-    @Test("P-256 public key round trips through OARI-compatible did:key")
+    @Test("P-256 public key round trips through did:key")
     func p256RoundTrip() async throws {
         let privateKey = P256.Signing.PrivateKey()
         let resolver = KeyDIDResolver()
@@ -32,8 +32,8 @@ struct KeyDIDResolverTests {
         }
     }
 
-    @Test("P-256 generator vector matches OARI p256-pub multicodec encoding")
-    func oariCompatibilityVector() throws {
+    @Test("P-256 generator vector matches p256-pub multicodec encoding")
+    func p256DidKeyCompatibilityVector() throws {
         let x963 = try #require(Data(hex: "046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"))
         let did = try KeyDIDResolver().derive(publicKeyX963: x963)
         #expect(did == "did:key:zDnaepsL7AXenJkVYdkh5KuKsSU7Ykh7kyXaLLU7auN9FWSiZ")

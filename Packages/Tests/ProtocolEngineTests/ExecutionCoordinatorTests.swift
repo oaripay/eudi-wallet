@@ -48,7 +48,7 @@ struct ExecutionCoordinatorTests {
             state: nil,
             presentationDefinitionID: nil,
             dcqlCredentialIDs: ["pid"],
-            profileID: BuiltInProfiles.oariDevelopmentFinalID
+            profileID: BuiltInProfiles.vcdm2OpenID4VCProfileID
         )
         let coordinator = PresentationExecutionCoordinator(
             authenticator: AllowingAuthenticator(),
@@ -122,7 +122,7 @@ struct ExecutionCoordinatorTests {
     func issuanceExecution() async throws {
         let credentials = MemoryCredentialRepository()
         let audit = MemoryAuditRepository()
-        let profile = BuiltInProfiles.oariDevelopmentFinal(checkedOn: Date())
+        let profile = BuiltInProfiles.vcdm2OpenID4VCProfile(checkedOn: Date())
         let request = IssuanceRequest(
             profileID: profile.id,
             configurationID: "pid",
@@ -181,7 +181,7 @@ struct ExecutionCoordinatorTests {
             state: nil,
             presentationDefinitionID: nil,
             dcqlCredentialIDs: ["pid"],
-            profileID: BuiltInProfiles.oariDevelopmentFinalID
+            profileID: BuiltInProfiles.vcdm2OpenID4VCProfileID
         )
     }
 
@@ -198,7 +198,7 @@ struct ExecutionCoordinatorTests {
             nonce: "1234567890123456",
             expiresAt: expiresAt,
             state: nil,
-            profileID: BuiltInProfiles.oariDevelopmentFinalID
+            profileID: BuiltInProfiles.vcdm2OpenID4VCProfileID
         )
     }
 }

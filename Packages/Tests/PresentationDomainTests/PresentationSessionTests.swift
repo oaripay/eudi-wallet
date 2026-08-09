@@ -147,7 +147,7 @@ struct PresentationSessionTests {
             nonce: "1234567890123456",
             expiresAt: Date(timeIntervalSince1970: 1_754_524_860),
             state: nil,
-            profileID: BuiltInProfiles.oariDevelopmentFinalID
+            profileID: BuiltInProfiles.vcdm2OpenID4VCProfileID
         )
     }
 }

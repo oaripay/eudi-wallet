@@ -41,6 +41,8 @@ public struct EbsiJWSRequirements: Equatable, Sendable {
     public let expectedIssuer: String?
     public let expectedAudience: String?
     public let expectedNonce: String?
+    public let expectedType: String?
+    public let understoodCriticalHeaders: Set<String>
     public let validationDate: Date
 
     public init(
@@ -50,6 +52,8 @@ public struct EbsiJWSRequirements: Equatable, Sendable {
         expectedIssuer: String? = nil,
         expectedAudience: String? = nil,
         expectedNonce: String? = nil,
+        expectedType: String? = nil,
+        understoodCriticalHeaders: Set<String> = [],
         validationDate: Date = Date()
     ) {
         self.allowedAlgorithms = allowedAlgorithms
@@ -58,6 +62,8 @@ public struct EbsiJWSRequirements: Equatable, Sendable {
         self.expectedIssuer = expectedIssuer
         self.expectedAudience = expectedAudience
         self.expectedNonce = expectedNonce
+        self.expectedType = expectedType
+        self.understoodCriticalHeaders = understoodCriticalHeaders
         self.validationDate = validationDate
     }
 }
@@ -89,6 +95,7 @@ public struct EbsiJWSVerifier: Sendable {
             throw EbsiCredentialError.verificationFailed
         }
         let kid = header["kid"]?.string
+        try Self.validateProtectedHeader(header, requirements: requirements)
         let hasEmbeddedKeyReference = Self.hasEmbeddedKeyReference(header)
         if kid == "None", !hasEmbeddedKeyReference {
             throw EbsiCredentialError.verificationFailed
@@ -132,6 +139,32 @@ public struct EbsiJWSVerifier: Sendable {
         return false
     }
 
+    private static func validateProtectedHeader(
+        _ header: [String: AnySendableJSON],
+        requirements: EbsiJWSRequirements
+    ) throws {
+        if let expectedType = requirements.expectedType,
+           header["typ"]?.string != expectedType {
+            throw EbsiCredentialError.verificationFailed
+        }
+        guard let critical = header["crit"] else { return }
+        guard case let .array(values) = critical, !values.isEmpty else {
+            throw EbsiCredentialError.verificationFailed
+        }
+        let names = values.compactMap(\.string)
+        let registered = Set([
+            "alg", "jku", "jwk", "kid", "x5u", "x5c", "x5t",
+            "x5t#S256", "typ", "cty", "crit", "b64",
+        ])
+        guard names.count == values.count,
+              Set(names).count == names.count,
+              names.allSatisfy({ header[$0] != nil }),
+              Set(names).isDisjoint(with: registered),
+              Set(names).isSubset(of: requirements.understoodCriticalHeaders) else {
+            throw EbsiCredentialError.verificationFailed
+        }
+    }
+
     private static func validateClaims(
         _ payload: [String: AnySendableJSON],
         requirements: EbsiJWSRequirements
@@ -147,9 +180,23 @@ public struct EbsiJWSVerifier: Sendable {
             throw EbsiCredentialError.verificationFailed
         }
         let now = requirements.validationDate.timeIntervalSince1970
-        if let exp = payload["exp"]?.numericValue, exp <= now { throw EbsiCredentialError.verificationFailed }
-        if let nbf = payload["nbf"]?.numericValue, nbf > now { throw EbsiCredentialError.verificationFailed }
-        if let iat = payload["iat"]?.numericValue, iat > now + 60 { throw EbsiCredentialError.verificationFailed }
+        let exp = try numericDate("exp", in: payload)
+        let nbf = try numericDate("nbf", in: payload)
+        let iat = try numericDate("iat", in: payload)
+        if let exp, exp <= now { throw EbsiCredentialError.verificationFailed }
+        if let nbf, nbf > now { throw EbsiCredentialError.verificationFailed }
+        if let iat, iat > now + 60 { throw EbsiCredentialError.verificationFailed }
+    }
+
+    private static func numericDate(
+        _ name: String,
+        in payload: [String: AnySendableJSON]
+    ) throws -> Double? {
+        guard let claim = payload[name] else { return nil }
+        guard let value = claim.numericValue, value.isFinite else {
+            throw EbsiCredentialError.verificationFailed
+        }
+        return value
     }
 
     private static func audiences(_ value: AnySendableJSON?) -> [String] {

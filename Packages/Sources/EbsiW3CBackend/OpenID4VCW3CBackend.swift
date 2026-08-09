@@ -4,7 +4,7 @@ import IdentityDomain
 import TrustDomain
 import WalletDomain
 
-public struct WorkspaceHTTPResponse: Equatable, Sendable {
+public struct OpenID4VCHTTPResponse: Equatable, Sendable {
     public let statusCode: Int
     public let body: Data
     public let headers: [String: String]
@@ -16,20 +16,37 @@ public struct WorkspaceHTTPResponse: Equatable, Sendable {
     }
 }
 
-public protocol WorkspaceHTTPTransport: Sendable {
+public protocol OpenID4VCHTTPTransport: Sendable {
     func send(
         url: URL,
         method: String,
         headers: [String: String],
         body: Data?
-    ) async throws -> WorkspaceHTTPResponse
+    ) async throws -> OpenID4VCHTTPResponse
 }
 
-public protocol WorkspaceIssuerTrustEvaluating: Sendable {
+public protocol CredentialIssuerServiceTrustEvaluating: Sendable {
     func evaluate(issuer: String, at date: Date) async -> TrustVerdict
 }
 
-public protocol WorkspaceCredentialValidating: Sendable {
+/// Trust in an OpenID4VCI HTTPS service and trust in the entity that signed a
+/// returned credential are deliberately separate. Implementations of this
+/// protocol are only called with the signed issuer extracted after successful
+/// credential validation.
+public protocol CredentialSignerTrustEvaluating: Sendable {
+    func evaluate(issuer: String, at date: Date) async -> TrustVerdict
+}
+
+extension EBSITIRCredentialSignerTrustEvaluator: CredentialSignerTrustEvaluating {}
+
+private struct LegacySignerTrustEvaluator: CredentialSignerTrustEvaluating {
+    let base: any CredentialIssuerServiceTrustEvaluating
+    func evaluate(issuer: String, at date: Date) async -> TrustVerdict {
+        await base.evaluate(issuer: issuer, at: date)
+    }
+}
+
+public protocol W3CCredentialValidating: Sendable {
     func validate(
         rawCredential: Data,
         profile: EbsiCredentialProfile,
@@ -39,7 +56,42 @@ public protocol WorkspaceCredentialValidating: Sendable {
     ) async throws -> String
 }
 
-public struct WorkspaceResolvedOffer: Equatable, Identifiable, Sendable {
+/// Atomic replay protection for externally supplied OpenID4VP Request Objects.
+/// Applications that need replay protection across launches can inject a persistent implementation.
+public protocol OpenID4VPReplayProtecting: Sendable {
+    func consume(requestDigest: String, nonce: String, expiresAt: Date, at date: Date) async throws
+}
+
+public actor InMemoryOpenID4VPReplayStore: OpenID4VPReplayProtecting {
+    private var requestDigests: [String: Date] = [:]
+    private var nonces: [String: Date] = [:]
+    private let maximumEntries: Int
+    private let maximumRetention: TimeInterval
+
+    public init(maximumEntries: Int = 1_024, maximumRetention: TimeInterval = 600) {
+        self.maximumEntries = max(1, maximumEntries)
+        self.maximumRetention = max(1, maximumRetention)
+    }
+
+    public func consume(requestDigest: String, nonce: String, expiresAt: Date, at date: Date) throws {
+        guard !requestDigest.isEmpty, !nonce.isEmpty, expiresAt > date,
+              expiresAt.timeIntervalSince(date) <= maximumRetention else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request replay lifetime was invalid")
+        }
+        requestDigests = requestDigests.filter { $0.value > date }
+        nonces = nonces.filter { $0.value > date }
+        guard requestDigests[requestDigest] == nil, nonces[nonce] == nil else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request was replayed")
+        }
+        guard requestDigests.count < maximumEntries, nonces.count < maximumEntries else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request replay store is at capacity")
+        }
+        requestDigests[requestDigest] = expiresAt
+        nonces[nonce] = expiresAt
+    }
+}
+
+public struct ResolvedOpenID4VCCredentialOffer: Equatable, Identifiable, Sendable {
     public let id: UUID
     public let issuer: String
     public let displayName: String?
@@ -51,10 +103,10 @@ public struct WorkspaceResolvedOffer: Equatable, Identifiable, Sendable {
     public let authorizationRequired: Bool
     public let issuerState: String?
     public let representations: [String]
-    public let credentialDisplay: [String: WorkspaceCredentialDisplay]
+    public let credentialDisplay: [String: CredentialConfigurationDisplay]
 }
 
-public struct WorkspaceCredentialDisplay: Codable, Equatable, Sendable {
+public struct CredentialConfigurationDisplay: Codable, Equatable, Sendable {
     public let name: String
     public let locale: String?
     public let description: String?
@@ -63,10 +115,10 @@ public struct WorkspaceCredentialDisplay: Codable, Equatable, Sendable {
     public let logoURL: URL?
     public let logoAlternativeText: String?
     public let backgroundImageURL: URL?
-    public let claims: [WorkspaceCredentialClaim]
+    public let claims: [CredentialConfigurationClaim]
 }
 
-public struct WorkspaceCredentialClaim: Codable, Equatable, Sendable, Identifiable {
+public struct CredentialConfigurationClaim: Codable, Equatable, Sendable, Identifiable {
     public let id: String
     public let path: [String]
     public let name: String?
@@ -112,7 +164,7 @@ public struct WorkspaceCredentialClaim: Codable, Equatable, Sendable, Identifiab
     private enum CodingKeys: String, CodingKey { case path, name, description }
 }
 
-public struct WorkspacePresentationChallenge: Equatable, Identifiable, Sendable {
+public struct OpenID4VPPresentationRequest: Equatable, Identifiable, Sendable {
     public let id: UUID
     public let authorizationEndpoint: URL
     public let authSession: String?
@@ -152,31 +204,32 @@ public struct WorkspacePresentationChallenge: Equatable, Identifiable, Sendable 
     }
 }
 
-public struct WorkspacePIDPresentationClaim: Equatable, Identifiable, Sendable {
+public struct DCQLRequestedClaim: Equatable, Identifiable, Sendable {
     public let id: String
     public let path: [String]
     public let value: String
     public let required: Bool
 }
 
-public struct WorkspacePIDPresentationRequest: Equatable, Identifiable, Sendable {
+public struct DCQLCredentialPresentationRequest: Equatable, Identifiable, Sendable {
     public let id: UUID
     public let verifierName: String?
-    public let claims: [WorkspacePIDPresentationClaim]
+    public let claims: [DCQLRequestedClaim]
 }
 
-public struct WorkspaceIssuedCredential: Equatable, Sendable {
+public struct IssuedW3CCredential: Equatable, Sendable {
     public let id: UUID
     public let configurationID: String
     public let displayName: String
     public let issuerIdentifier: String
     public let profileID: String
     public let representation: EbsiCredentialRepresentation
+    public let hasStatusReference: Bool
     public let displayClaims: [CredentialDisplayClaim]
     public let display: CredentialDisplayMetadata?
 }
 
-public enum WorkspaceBackendError: Error, Equatable, Sendable {
+public enum OpenID4VCBackendError: Error, Equatable, Sendable {
     case malformedOffer
     case unsafeEndpoint
     case unsupportedGrant
@@ -199,15 +252,33 @@ public enum WorkspaceBackendError: Error, Equatable, Sendable {
     case remoteHTTPError(status: Int, detail: String?)
     case clientSecurityUnavailable
     case holderIdentityRecoveryRequired
+    case invalidTokenType(expected: String, actual: String?)
+    case credentialSignerTrustWarning(EbsiTrustWarning)
 }
 
-public actor OariWorkspaceW3CBackend {
+public actor OpenID4VCW3CBackend {
     private struct Transaction: Sendable {
         let issuer: URL
         let issuerMetadata: IssuerMetadata
         let configurationIDs: [String]
         let grant: Grant
         let trustOutcome: EbsiTrustGateOutcome
+    }
+
+    private struct StagedCredential: Sendable {
+        let stored: StoredEbsiCredential
+        let result: IssuedW3CCredential
+    }
+
+    private struct StagedNotification: Sendable {
+        let endpoint: URL
+        let notificationID: String
+        let accessToken: String
+    }
+
+    private struct StagedIssuance: Sendable {
+        let credentials: [StagedCredential]
+        let notifications: [StagedNotification]
     }
 
     enum Grant: Sendable {
@@ -221,16 +292,19 @@ public actor OariWorkspaceW3CBackend {
         let description: String?
     }
 
-    private let transport: any WorkspaceHTTPTransport
-    private let trustEvaluator: any WorkspaceIssuerTrustEvaluating
+    private let transport: any OpenID4VCHTTPTransport
+    private let trustEvaluator: any CredentialIssuerServiceTrustEvaluating
+    private let credentialSignerTrustEvaluator: any CredentialSignerTrustEvaluating
     private let keyProvider: any KeyProvider
     private let credentialStore: any EbsiCredentialStore
-    private let credentialValidator: any WorkspaceCredentialValidating
+    private let credentialValidator: any W3CCredentialValidating
     private let profiles: [EbsiCredentialProfile]
     private let clientSecurity: (any OID4VCIClientSecurity)?
     private let transportProfileRegistry: OID4VCITransportProfileRegistry
     private let holderIdentityProvider: any W3CHolderIdentityProviding
-    private let presentationRequestValidator: (any WorkspacePresentationRequestValidating)?
+    private let presentationRequestValidator: (any OpenID4VPRequestObjectValidating)?
+    private let presentationReplayProtection: any OpenID4VPReplayProtecting
+    private let trustEnvironment: EbsiTrustEnvironment
     private let authorizationClientID: String
     private let authorizationRedirectURI: URL
     private let now: @Sendable () -> Date
@@ -239,30 +313,36 @@ public actor OariWorkspaceW3CBackend {
     private var authorizationCodeVerifiers: [UUID: String] = [:]
     private var authorizationStates: [UUID: String] = [:]
     private var trustConsents: Set<UUID> = []
-    private var presentationChallenges: [UUID: WorkspacePresentationChallenge] = [:]
-    private var presentationChallengeTasks: [UUID: Task<WorkspacePresentationChallenge, Error>] = [:]
+    private var presentationChallenges: [UUID: OpenID4VPPresentationRequest] = [:]
+    private var presentationChallengeTasks: [UUID: Task<OpenID4VPPresentationRequest, Error>] = [:]
     private var interactiveAuthorizationContexts: [UUID: InteractiveAuthorizationContext] = [:]
     private var preparedPIDPresentations: [UUID: PreparedW3CPresentation] = [:]
     private var transactionHolderIdentities: [UUID: W3CHolderIdentity] = [:]
+    private var stagedCredentials: [UUID: StagedIssuance] = [:]
 
     public init(
-        transport: any WorkspaceHTTPTransport,
-        trustEvaluator: any WorkspaceIssuerTrustEvaluating,
+        transport: any OpenID4VCHTTPTransport,
+        trustEvaluator: any CredentialIssuerServiceTrustEvaluating,
+        credentialSignerTrustEvaluator: (any CredentialSignerTrustEvaluating)? = nil,
         keyProvider: any KeyProvider,
         credentialStore: any EbsiCredentialStore,
-        credentialValidator: any WorkspaceCredentialValidating,
+        credentialValidator: any W3CCredentialValidating,
         profile: EbsiCredentialProfile,
         additionalProfiles: [EbsiCredentialProfile] = [],
         clientSecurity: (any OID4VCIClientSecurity)? = nil,
         transportProfileRegistry: OID4VCITransportProfileRegistry = .finalOnly,
         holderIdentityProvider: (any W3CHolderIdentityProviding)? = nil,
-        presentationRequestValidator: (any WorkspacePresentationRequestValidating)? = nil,
+        presentationRequestValidator: (any OpenID4VPRequestObjectValidating)? = nil,
+        presentationReplayProtection: any OpenID4VPReplayProtecting = InMemoryOpenID4VPReplayStore(),
+        trustEnvironment: EbsiTrustEnvironment = .development,
         authorizationClientID: String = "oari-development-wallet",
         authorizationRedirectURI: URL = URL(string: "https://oari.io/oauth/callback")!,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.transport = transport
         self.trustEvaluator = trustEvaluator
+        self.credentialSignerTrustEvaluator = credentialSignerTrustEvaluator
+            ?? LegacySignerTrustEvaluator(base: trustEvaluator)
         self.keyProvider = keyProvider
         self.credentialStore = credentialStore
         self.credentialValidator = credentialValidator
@@ -274,14 +354,16 @@ public actor OariWorkspaceW3CBackend {
             referenceStore: InMemoryW3CHolderKeyReferenceStore()
         )
         self.presentationRequestValidator = presentationRequestValidator
+        self.presentationReplayProtection = presentationReplayProtection
+        self.trustEnvironment = trustEnvironment
         self.authorizationClientID = authorizationClientID
         self.authorizationRedirectURI = authorizationRedirectURI
         self.now = now
     }
 
-    public func resolveOffer(_ value: String) async throws -> WorkspaceResolvedOffer {
+    public func resolveOffer(_ value: String) async throws -> ResolvedOpenID4VCCredentialOffer {
         guard let url = URL(string: value), let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            throw WorkspaceBackendError.malformedOffer
+            throw OpenID4VCBackendError.malformedOffer
         }
         let items = components.queryItems ?? []
         let data: Data
@@ -302,10 +384,10 @@ public actor OariWorkspaceW3CBackend {
                 allowedOrigins: [try Self.origin(of: url)]
             )
         } else {
-            throw WorkspaceBackendError.malformedOffer
+            throw OpenID4VCBackendError.malformedOffer
         }
         let offer = try Self.decode(CredentialOffer.self, from: data, stage: "credential offer")
-        guard let issuer = URL(string: offer.credentialIssuer) else { throw WorkspaceBackendError.malformedOffer }
+        guard let issuer = URL(string: offer.credentialIssuer) else { throw OpenID4VCBackendError.malformedOffer }
         try Self.validateHTTPS(issuer)
         let grant: Grant
         if let preauthorized = offer.grants?.preauthorized {
@@ -319,7 +401,7 @@ public actor OariWorkspaceW3CBackend {
                   let issuerState = authorization.issuerState {
             grant = .authorizationCode(issuerState: issuerState)
         } else {
-            throw WorkspaceBackendError.unsupportedGrant
+            throw OpenID4VCBackendError.unsupportedGrant
         }
         let issuerMetadataURL = try Self.wellKnownURL(
             name: "openid-credential-issuer",
@@ -334,21 +416,19 @@ public actor OariWorkspaceW3CBackend {
         )
         let selectedConfigurations = try offer.credentialConfigurationIds.map { configurationID in
             guard let configuration = issuerMetadata.credentialConfigurations[configurationID] else {
-                throw WorkspaceBackendError.unsupportedGrant
+                throw OpenID4VCBackendError.unsupportedGrant
             }
             return configuration
         }
         let representations = selectedConfigurations.map(\.format)
         guard representations.allSatisfy(Self.supportedRepresentation) else {
-            throw WorkspaceBackendError.unsupportedGrant
+            throw OpenID4VCBackendError.unsupportedGrant
         }
-        let verdict = await trustEvaluator.evaluate(issuer: offer.credentialIssuer, at: now())
-        let outcome = EbsiTrustGate().evaluate(
-            verdict: verdict,
-            environment: .development,
-            counterpartyIdentifier: offer.credentialIssuer,
-            role: .issuer
-        )
+        // `credential_issuer` identifies the HTTPS protocol service, not the
+        // credential signer. Its identity is established by the HTTPS and
+        // metadata/endpoint same-origin checks above and below; never submit it
+        // to a DID Trusted Issuers Registry.
+        let outcome: EbsiTrustGateOutcome = .allow
         let id = UUID()
         transactions[id] = Transaction(
             issuer: issuer,
@@ -357,7 +437,7 @@ public actor OariWorkspaceW3CBackend {
             grant: grant,
             trustOutcome: outcome
         )
-        return WorkspaceResolvedOffer(
+        return ResolvedOpenID4VCCredentialOffer(
             id: id,
             issuer: offer.credentialIssuer,
             displayName: issuerMetadata.display?.first?.name,
@@ -379,7 +459,7 @@ public actor OariWorkspaceW3CBackend {
         interactionTypes: [String] = [
             "urn:openid:dcp:ia:openid4vp_presentation",
         ]
-    ) async throws -> WorkspacePresentationChallenge {
+    ) async throws -> OpenID4VPPresentationRequest {
         if let context = interactiveAuthorizationContexts[id] {
             guard context.expiresAt > now() else {
                 interactiveAuthorizationContexts[id] = nil
@@ -387,7 +467,7 @@ public actor OariWorkspaceW3CBackend {
                 preparedPIDPresentations[id] = nil
                 authorizationCodeVerifiers[id] = nil
                 authorizationStates[id] = nil
-                throw WorkspaceBackendError.invalidPresentationChallenge(reason: "authorization session expired")
+                throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "authorization session expired")
             }
             return context.challenge
         }
@@ -426,10 +506,10 @@ public actor OariWorkspaceW3CBackend {
         interactionTypes: [String] = [
             "urn:openid:dcp:ia:openid4vp_presentation",
         ]
-    ) async throws -> WorkspacePresentationChallenge {
+    ) async throws -> OpenID4VPPresentationRequest {
         guard let transaction = transactions[id],
               case let .authorizationCode(issuerState) = transaction.grant else {
-            throw WorkspaceBackendError.presentationRequired
+            throw OpenID4VCBackendError.presentationRequired
         }
         try authorizeTrust(transaction: transaction, id: id, allowUntrusted: allowUntrusted)
         let usesDraftInteraction = interactionTypes == ["openid4vp_presentation"]
@@ -454,11 +534,12 @@ public actor OariWorkspaceW3CBackend {
         )
         if let metadataIssuer = metadata.issuer,
            URL(string: metadataIssuer) != authorizationServer {
-            throw WorkspaceBackendError.invalidPresentationChallenge(
+            throw OpenID4VCBackendError.invalidPresentationChallenge(
                 reason: "authorization server metadata issuer did not match the selected server"
             )
         }
-        if let publishedEndpoint = metadata.authorizationChallengeEndpoint,
+        if !usesDraftInteraction,
+           let publishedEndpoint = metadata.authorizationChallengeEndpoint,
            let url = URL(string: publishedEndpoint),
            try Self.origin(of: url) == authorizationServerOrigin {
             endpoint = url
@@ -504,7 +585,7 @@ public actor OariWorkspaceW3CBackend {
                 components?.queryItems = fields.compactMap { key, value in
                     value.map { URLQueryItem(name: key, value: $0) }
                 }
-                guard let url = components?.url else { throw WorkspaceBackendError.unsafeEndpoint }
+                guard let url = components?.url else { throw OpenID4VCBackendError.unsafeEndpoint }
                 requestURL = url
                 requestBody = nil
             } else {
@@ -522,7 +603,7 @@ public actor OariWorkspaceW3CBackend {
         let endpointOrigin = try Self.origin(of: endpoint)
         let issuerOrigin = try Self.origin(of: transaction.issuer)
         guard endpointOrigin == authorizationServerOrigin || endpointOrigin == issuerOrigin else {
-            throw WorkspaceBackendError.unsafeEndpoint
+            throw OpenID4VCBackendError.unsafeEndpoint
         }
         let raw = try await transport.send(
             url: requestURL,
@@ -533,11 +614,11 @@ public actor OariWorkspaceW3CBackend {
             body: requestBody
         )
         guard raw.body.count <= 1_048_576 else {
-            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "response exceeded the 1 MB limit")
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "response exceeded the 1 MB limit")
         }
         guard raw.statusCode == 200 || raw.statusCode == 403 else {
             let detail = Self.safeHTTPErrorDetail(raw.body)
-            throw WorkspaceBackendError.invalidPresentationChallenge(
+            throw OpenID4VCBackendError.invalidPresentationChallenge(
                 reason: "\(requestMethod) \(endpoint.path) returned HTTP \(raw.statusCode)\(detail.map { ": \($0)" } ?? "")"
             )
         }
@@ -547,24 +628,25 @@ public actor OariWorkspaceW3CBackend {
             from: data,
             stage: "presentation challenge"
         )
-        let expectedInteractionType = "urn:openid:dcp:ia:openid4vp_presentation"
-        guard response.interactionTypeRequired == expectedInteractionType,
+        let expectedInteractionType = usesDraftInteraction
+            ? "openid4vp_presentation"
+            : "urn:openid:dcp:ia:openid4vp_presentation"
+        guard (response.interactionTypeRequired ?? response.type) == expectedInteractionType,
               interactionTypes.contains(expectedInteractionType),
-              let authSession = response.authSession,
-              !authSession.isEmpty else {
-            throw WorkspaceBackendError.invalidPresentationChallenge(
+              usesDraftInteraction || !(response.authSession?.isEmpty ?? true) else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(
                 reason: "response did not contain the requested interaction type and auth_session"
             )
         }
         guard let request = response.openid4vpRequest else {
-            throw WorkspaceBackendError.invalidPresentationChallenge(
+            throw OpenID4VCBackendError.invalidPresentationChallenge(
                 reason: "response did not contain openid4vp_request"
             )
         }
-        let signedClaims: VerifiedWorkspacePresentationRequest?
+        let signedClaims: VerifiedOpenID4VPRequestObject?
         if let requestJWT = request.requestJWT {
             guard let presentationRequestValidator else {
-                throw WorkspaceBackendError.invalidPresentationChallenge(
+                throw OpenID4VCBackendError.invalidPresentationChallenge(
                     reason: "signed request verification is not configured"
                 )
             }
@@ -572,58 +654,88 @@ public actor OariWorkspaceW3CBackend {
                 compactJWT: requestJWT,
                 at: now()
             )
+            guard usesDraftInteraction || signedClaims?.audience == "https://self-issued.me/v2" else {
+                throw OpenID4VCBackendError.invalidPresentationChallenge(
+                    reason: "signed interactive request audience was invalid"
+                )
+            }
+            guard usesDraftInteraction || signedClaims?.responseType == "vp_token" else {
+                throw OpenID4VCBackendError.invalidPresentationChallenge(
+                    reason: "signed interactive request response_type was invalid"
+                )
+            }
         } else {
             signedClaims = nil
         }
-        guard let responseMode = request.responseMode ?? request.requestObject?.responseMode ?? signedClaims?.responseMode,
-              let nonce = request.nonce ?? request.requestObject?.nonce ?? signedClaims?.nonce,
+        if let signedClaims {
+            try Self.requireUnsignedMatchesSigned(request: request, signed: signedClaims)
+        }
+        let responseMode = signedClaims?.responseMode ?? request.responseMode ?? request.requestObject?.responseMode
+        let nonce = signedClaims?.nonce ?? request.nonce ?? request.requestObject?.nonce
+        let dcqlQuery = signedClaims?.dcqlQuery ?? request.dcqlQuery ?? request.requestObject?.dcqlQuery
+        guard let responseMode,
+              let nonce,
               !nonce.isEmpty,
-              let dcqlQuery = request.dcqlQuery ?? request.requestObject?.dcqlQuery ?? signedClaims?.dcqlQuery else {
-            throw WorkspaceBackendError.invalidPresentationChallenge(
+              let dcqlQuery else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(
                 reason: "request did not contain response_mode, nonce, and dcql_query"
             )
         }
-        guard responseMode == "ia_post" else {
-            throw WorkspaceBackendError.invalidPresentationChallenge(
+        let supportedResponseModes = usesDraftInteraction
+            ? ["direct_post", "iar-post"]
+            : ["ia_post"]
+        guard supportedResponseModes.contains(responseMode) else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(
                 reason: responseMode == "ia_post.jwt"
                     ? "encrypted ia_post.jwt is not implemented"
                     : "unsupported response_mode \(responseMode)"
             )
         }
-        let requestedResponseURI = request.responseURI ?? request.requestObject?.responseURI ?? signedClaims?.responseURI
-        if let requestedResponseURI,
+        let requestedResponseURI = signedClaims?.responseURI ?? request.responseURI ?? request.requestObject?.responseURI
+        if responseMode == "ia_post",
+           let requestedResponseURI,
            let url = URL(string: requestedResponseURI),
            url != endpoint {
-            throw WorkspaceBackendError.invalidPresentationChallenge(
+            throw OpenID4VCBackendError.invalidPresentationChallenge(
                 reason: "ia_post response_uri did not match authorization_challenge_endpoint"
             )
         }
-        let challenge = WorkspacePresentationChallenge(
+        _ = try Self.presentationQuery(from: dcqlQuery)
+        if let requestJWT = request.requestJWT, let signedClaims {
+            let expiry = min(signedClaims.expiresAt ?? now().addingTimeInterval(300), now().addingTimeInterval(300))
+            try await presentationReplayProtection.consume(
+                requestDigest: Data(SHA256.hash(data: Data(requestJWT.utf8))).base64URLEncodedString(),
+                nonce: signedClaims.nonce,
+                expiresAt: expiry,
+                at: now()
+            )
+        }
+        let challenge = OpenID4VPPresentationRequest(
             id: id,
             authorizationEndpoint: endpoint,
-            authSession: authSession,
+            authSession: response.authSession,
             interactionType: expectedInteractionType,
             responseMode: responseMode,
             responseURI: endpoint,
             nonce: nonce,
-            state: request.state ?? request.requestObject?.state ?? signedClaims?.state,
+            state: signedClaims?.state ?? request.state ?? request.requestObject?.state,
             dcqlQuery: dcqlQuery,
             signedRequest: request.request,
-            clientID: request.clientID ?? request.requestObject?.clientID ?? signedClaims?.clientID
+            clientID: signedClaims?.clientID ?? request.clientID ?? request.requestObject?.clientID
         )
         return challenge
     }
 
-    public func prepareStoredPIDPresentation(id: UUID) async throws -> WorkspacePIDPresentationRequest {
+    public func prepareStoredPIDPresentation(id: UUID) async throws -> DCQLCredentialPresentationRequest {
         guard let context = interactiveAuthorizationContexts[id], context.expiresAt > now() else {
-            throw WorkspaceBackendError.unknownTransaction
+            throw OpenID4VCBackendError.unknownTransaction
         }
         let challenge = context.challenge
         let holderIdentity = try await holderIdentity(for: id)
         let query = try Self.presentationQuery(from: challenge.dcqlQuery)
         let credentials = try await credentialStore.credentials()
         for credential in credentials where credential.holderKeyReference == holderIdentity.keyID.rawValue.uuidString {
-            var claims: [WorkspacePIDPresentationClaim] = []
+            var claims: [DCQLRequestedClaim] = []
             let kind: PreparedW3CPresentation.Kind
             switch (query.format, credential.representation) {
             case ("dc+sd-jwt", .dcSdJwt):
@@ -673,24 +785,25 @@ public actor OariWorkspaceW3CBackend {
                 requiredClaimIDs: Set(claims.map(\.id)),
                 queryID: query.id
             )
-            return WorkspacePIDPresentationRequest(
+            return DCQLCredentialPresentationRequest(
                 id: id,
                 verifierName: challenge.clientID,
                 claims: claims
             )
         }
-        throw WorkspaceBackendError.presentationCredentialUnavailable
+        throw OpenID4VCBackendError.presentationCredentialUnavailable
     }
 
-    public func beginStoredOpenID4VPPresentation(uri: String) async throws -> WorkspacePIDPresentationRequest {
+    public func beginStoredOpenID4VPPresentation(uri: String) async throws -> DCQLCredentialPresentationRequest {
         guard let components = URLComponents(string: uri),
               components.scheme?.lowercased() == "openid4vp",
-              let outerClientID = components.queryItems?.first(where: { $0.name == "client_id" })?.value,
-              let requestURIValue = components.queryItems?.first(where: { $0.name == "request_uri" })?.value,
+              let queryItems = components.queryItems,
+              let outerClientID = try Self.singleQueryValue(named: "client_id", in: queryItems),
+              let requestURIValue = try Self.singleQueryValue(named: "request_uri", in: queryItems),
               let requestURI = URL(string: requestURIValue),
               requestURI.scheme?.lowercased() == "https",
               let presentationRequestValidator else {
-            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "OpenID4VP request URI was malformed")
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "OpenID4VP request URI was malformed")
         }
         let requestData = try await successfulRequest(
             requestURI,
@@ -700,22 +813,40 @@ public actor OariWorkspaceW3CBackend {
             allowedOrigins: [try Self.origin(of: requestURI)]
         )
         guard let compactRequest = String(data: requestData, encoding: .utf8), !compactRequest.isEmpty else {
-            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "request_uri returned an empty Request Object")
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "request_uri returned an empty Request Object")
         }
         let verified = try await presentationRequestValidator.validate(compactJWT: compactRequest, at: now())
+        try Self.requireOuterValuesMatchSigned(queryItems, signed: verified)
         guard verified.clientID == outerClientID else {
-            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "outer and signed client_id values did not match")
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "outer and signed client_id values did not match")
+        }
+        try Self.validateStandaloneLifetime(verified, at: now())
+        if verified.clientID.hasPrefix("decentralized_identifier:") {
+            guard let signingDID = verified.signingDID,
+                  verified.clientID == "decentralized_identifier:\(signingDID)" else {
+                throw OpenID4VCBackendError.invalidPresentationChallenge(
+                    reason: "decentralized_identifier client_id was not bound to the signing DID"
+                )
+            }
         }
         guard verified.audience == "https://self-issued.me/v2",
               verified.responseType == "vp_token",
               verified.responseMode == "direct_post",
               let responseURIValue = verified.responseURI,
               let responseURI = URL(string: responseURIValue),
-              responseURI.scheme?.lowercased() == "https" else {
-            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "unsupported standalone response mode or response URI")
+               responseURI.scheme?.lowercased() == "https" else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "unsupported standalone response mode or response URI")
         }
+        _ = try Self.presentationQuery(from: verified.dcqlQuery)
+        let digest = Data(SHA256.hash(data: Data(compactRequest.utf8))).base64URLEncodedString()
+        try await presentationReplayProtection.consume(
+            requestDigest: digest,
+            nonce: verified.nonce,
+            expiresAt: try Self.requiredStandaloneExpiry(verified),
+            at: now()
+        )
         let id = UUID()
-        let challenge = WorkspacePresentationChallenge(
+        let challenge = OpenID4VPPresentationRequest(
             id: id,
             authorizationEndpoint: responseURI,
             authSession: nil,
@@ -759,7 +890,7 @@ public actor OariWorkspaceW3CBackend {
               prepared.authorizationGenerationID == context.generationID,
               prepared.requiredClaimIDs.isSubset(of: selectedClaimIDs),
               let keyUUID = UUID(uuidString: prepared.credential.holderKeyReference) else {
-            throw WorkspaceBackendError.invalidPresentationResponse
+            throw OpenID4VCBackendError.invalidPresentationResponse
         }
         let challenge = context.challenge
         let keyID = KeyID(rawValue: keyUUID)
@@ -770,7 +901,7 @@ public actor OariWorkspaceW3CBackend {
         } else if let clientID = challenge.clientID, !clientID.isEmpty {
             audience = clientID
         } else {
-            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "presentation client_id was missing")
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "presentation client_id was missing")
         }
         switch prepared.kind {
         case let .sdJWT(issuerJWT, disclosures):
@@ -855,7 +986,7 @@ public actor OariWorkspaceW3CBackend {
               context.expiresAt > now(),
               context.challenge.responseMode == "direct_post",
               let responseURI = context.challenge.responseURI else {
-            throw WorkspaceBackendError.unknownTransaction
+            throw OpenID4VCBackendError.unknownTransaction
         }
         let token = try await storedPIDPresentationToken(id: id, selectedClaimIDs: selectedClaimIDs)
         do {
@@ -869,9 +1000,9 @@ public actor OariWorkspaceW3CBackend {
                 ]),
                 allowedOrigins: [try Self.origin(of: responseURI)]
             )
-        } catch let error as WorkspaceBackendError {
+        } catch let error as OpenID4VCBackendError {
             if case let .remoteHTTPError(status, detail) = error {
-                throw WorkspaceBackendError.presentationSubmissionHTTPError(
+                throw OpenID4VCBackendError.presentationSubmissionHTTPError(
                     method: "POST",
                     path: responseURI.path,
                     status: status,
@@ -892,7 +1023,7 @@ public actor OariWorkspaceW3CBackend {
               let context = interactiveAuthorizationContexts[id],
               context.expiresAt > now(),
               trustConsents.contains(id) else {
-            throw WorkspaceBackendError.unknownTransaction
+            throw OpenID4VCBackendError.unknownTransaction
         }
         let challenge = context.challenge
         var fields: [String: String?] = [:]
@@ -922,18 +1053,18 @@ public actor OariWorkspaceW3CBackend {
         } else if challenge.responseMode == "ia_post" {
             fields["auth_session"] = challenge.authSession
             guard let tokenObject = try JSONSerialization.jsonObject(with: Data(vpToken.utf8)) as? [String: Any] else {
-                throw WorkspaceBackendError.invalidPresentationResponse
+                throw OpenID4VCBackendError.invalidPresentationResponse
             }
             var responseObject: [String: Any] = ["vp_token": tokenObject]
             if let state = challenge.state { responseObject["state"] = state }
             let wrapped = try JSONSerialization.data(withJSONObject: responseObject)
             fields["openid4vp_response"] = String(decoding: wrapped, as: UTF8.self)
         } else if challenge.responseMode == "ia_post.jwt" {
-            throw WorkspaceBackendError.invalidPresentationChallenge(
+            throw OpenID4VCBackendError.invalidPresentationChallenge(
                 reason: "encrypted ia_post.jwt response generation is not implemented"
             )
         } else {
-            throw WorkspaceBackendError.invalidPresentationChallenge(
+            throw OpenID4VCBackendError.invalidPresentationChallenge(
                 reason: "unsupported response_mode \(challenge.responseMode)"
             )
         }
@@ -949,9 +1080,9 @@ public actor OariWorkspaceW3CBackend {
                 body: form(fields),
                 allowedOrigins: [try Self.origin(of: responseEndpoint)]
             )
-        } catch let error as WorkspaceBackendError {
+        } catch let error as OpenID4VCBackendError {
             if case let .remoteHTTPError(status, detail) = error {
-                throw WorkspaceBackendError.presentationSubmissionHTTPError(
+                throw OpenID4VCBackendError.presentationSubmissionHTTPError(
                     method: "POST",
                     path: responseEndpoint.path,
                     status: status,
@@ -966,14 +1097,18 @@ public actor OariWorkspaceW3CBackend {
             stage: "presentation authorization response"
         )
         if let responseState = code.state {
-            guard let expectedState = authorizationStates[id], responseState == expectedState else {
-                throw WorkspaceBackendError.authorizationFailed
+            let matchesAuthorizationState = authorizationStates[id] == responseState
+            let matchesSignedPresentationState = challenge.state == responseState
+            guard matchesAuthorizationState || matchesSignedPresentationState else {
+                throw OpenID4VCBackendError.authorizationFailed
             }
-        } else if challenge.responseMode != "ia_post" {
-            throw WorkspaceBackendError.authorizationFailed
+        } else if challenge.responseMode != "ia_post" &&
+                    challenge.responseMode != "direct_post" &&
+                    challenge.responseMode != "iar-post" {
+            throw OpenID4VCBackendError.authorizationFailed
         }
         guard let value = code.authorizationCode ?? code.code, !value.isEmpty else {
-            throw WorkspaceBackendError.invalidPresentationResponse
+            throw OpenID4VCBackendError.invalidPresentationResponse
         }
         authorizationCodes[id] = value
         presentationChallenges[id] = nil
@@ -983,7 +1118,7 @@ public actor OariWorkspaceW3CBackend {
 
     public func acceptAuthorizationCode(id: UUID, code: String) throws {
         guard transactions[id] != nil, !code.isEmpty else {
-            throw WorkspaceBackendError.unknownTransaction
+            throw OpenID4VCBackendError.unknownTransaction
         }
         authorizationCodes[id] = code
         presentationChallenges[id] = nil
@@ -993,9 +1128,15 @@ public actor OariWorkspaceW3CBackend {
         id: UUID,
         allowUntrusted: Bool,
         transactionCode: String?
-    ) async throws -> [WorkspaceIssuedCredential] {
+    ) async throws -> [IssuedW3CCredential] {
         guard let transaction = transactions[id] else {
-            throw WorkspaceBackendError.unknownTransaction
+            throw OpenID4VCBackendError.unknownTransaction
+        }
+        if let staged = stagedCredentials[id] {
+            guard allowUntrusted else {
+                throw OpenID4VCBackendError.untrustedConsentRequired
+            }
+            return try await commitStagedCredentials(staged, transactionID: id)
         }
         try authorizeTrust(transaction: transaction, id: id, allowUntrusted: allowUntrusted)
         let tokenValues: [String: String?]
@@ -1009,7 +1150,7 @@ public actor OariWorkspaceW3CBackend {
             ]
         case .authorizationCode:
             guard let code = authorizationCodes[id] else {
-                throw WorkspaceBackendError.presentationRequired
+                throw OpenID4VCBackendError.presentationRequired
             }
             tokenValues = [
                 "grant_type": "authorization_code",
@@ -1022,7 +1163,7 @@ public actor OariWorkspaceW3CBackend {
         let issuerMetadata = transaction.issuerMetadata
         guard let authorizationServer = URL(
             string: issuerMetadata.authorizationServers?.first ?? transaction.issuer.absoluteString
-        ) else { throw WorkspaceBackendError.unsafeEndpoint }
+        ) else { throw OpenID4VCBackendError.unsafeEndpoint }
         let authMetadataURL = try Self.wellKnownURL(
             name: "oauth-authorization-server",
             issuer: authorizationServer
@@ -1043,19 +1184,19 @@ public actor OariWorkspaceW3CBackend {
             )
         )
         guard transportContract.tokenEndpointAuthentication != .unsupported else {
-            throw WorkspaceBackendError.clientSecurityUnavailable
+            throw OpenID4VCBackendError.clientSecurityUnavailable
         }
         let securityState: OID4VCIClientSecurityState?
         if transportContract.requiresDPoP || transportContract.requiresClientAttestation ||
             transportContract.requiresCredentialResponseEncryption {
-            guard let clientSecurity else { throw WorkspaceBackendError.clientSecurityUnavailable }
+            guard let clientSecurity else { throw OpenID4VCBackendError.clientSecurityUnavailable }
             securityState = try await clientSecurity.state(for: transportContract.profile)
         } else {
             securityState = nil
         }
         let tokenBody = form(tokenValues)
         guard let tokenEndpoint = URL(string: authMetadata.tokenEndpoint) else {
-            throw WorkspaceBackendError.unsafeEndpoint
+            throw OpenID4VCBackendError.unsafeEndpoint
         }
         var tokenHeaders = ["Content-Type": "application/x-www-form-urlencoded"]
         if let securityState, let clientSecurity {
@@ -1073,7 +1214,7 @@ public actor OariWorkspaceW3CBackend {
                     audience: tokenEndpoint
                 )
                 guard !attestationHeaders.isEmpty else {
-                    throw WorkspaceBackendError.clientSecurityUnavailable
+                    throw OpenID4VCBackendError.clientSecurityUnavailable
                 }
                 tokenHeaders.merge(attestationHeaders, uniquingKeysWith: { _, new in new })
             }
@@ -1086,17 +1227,22 @@ public actor OariWorkspaceW3CBackend {
             allowedOrigins: [try Self.origin(of: authorizationServer)]
         )
         let token = try Self.decode(TokenResponse.self, from: tokenResponse, stage: "token response")
+        let expectedTokenType = transportContract.requiresDPoP ? "DPoP" : "Bearer"
+        guard token.tokenType?.caseInsensitiveCompare(expectedTokenType) == .orderedSame else {
+            throw OpenID4VCBackendError.invalidTokenType(expected: expectedTokenType, actual: token.tokenType)
+        }
         let holderIdentity = try await holderIdentity(for: id)
         let holderDID = holderIdentity.did
         let method = holderIdentity.assertionMethod
-        var results: [WorkspaceIssuedCredential] = []
+        var staged: [StagedCredential] = []
+        var pendingNotifications: [StagedNotification] = []
         let configurationIDs: [String]
         var draftAuthorizationDetails: [String: TokenResponse.AuthorizationDetail] = [:]
         var draftCredentialIdentifiers: [String: [String]] = [:]
         if transportContract.profile != .final {
             if let authorizationDetails = token.authorizationDetails {
                 guard !authorizationDetails.isEmpty else {
-                    throw WorkspaceBackendError.missingCredentialAuthorization
+                    throw OpenID4VCBackendError.missingCredentialAuthorization
                 }
                 var matchedIndexes: Set<Int> = []
                 for offeredID in transaction.configurationIDs {
@@ -1108,7 +1254,9 @@ public actor OariWorkspaceW3CBackend {
                         ) else { return nil }
                         return (index, match.score, match.credentialIdentifier)
                     }
-                    if ranked.isEmpty, transaction.configurationIDs.count == 1 {
+                    if ranked.isEmpty,
+                       transaction.configurationIDs.count == 1,
+                       authorizationDetails.count == 1 {
                         ranked = authorizationDetails.indices.compactMap { index in
                             guard let identifier = authorizationDetails[index].credentialIdentifiers?
                                 .first(where: { !$0.isEmpty }) else { return nil }
@@ -1117,12 +1265,10 @@ public actor OariWorkspaceW3CBackend {
                     }
                     let highestScore = ranked.map(\.1).max()
                     let candidates = ranked.filter { $0.1 == highestScore }
-                    let candidate = transaction.configurationIDs.count == 1
-                        ? candidates.first
-                        : (candidates.count == 1 ? candidates.first : nil)
+                    let candidate = candidates.count == 1 ? candidates.first : nil
                     guard highestScore != nil, let candidate,
                           matchedIndexes.insert(candidate.0).inserted else {
-                        throw WorkspaceBackendError.credentialAuthorizationMismatch(
+                        throw OpenID4VCBackendError.credentialAuthorizationMismatch(
                             offered: offeredID,
                             authorized: Self.authorizationIdentifiers(authorizationDetails)
                         )
@@ -1161,7 +1307,7 @@ public actor OariWorkspaceW3CBackend {
                 guard let jwk = try JSONSerialization.jsonObject(
                     with: Data(parameters.publicJWK.utf8)
                 ) as? [String: String] else {
-                    throw WorkspaceBackendError.clientSecurityUnavailable
+                    throw OpenID4VCBackendError.clientSecurityUnavailable
                 }
                 responseEncryption = CredentialResponseEncryptionRequest(
                     jwk: jwk,
@@ -1172,7 +1318,7 @@ public actor OariWorkspaceW3CBackend {
                 responseEncryption = nil
             }
             guard let credentialEndpoint = URL(string: issuerMetadata.credentialEndpoint) else {
-                throw WorkspaceBackendError.unsafeEndpoint
+                throw OpenID4VCBackendError.unsafeEndpoint
             }
             let identifierCandidates: [String?]
             if transportContract.credentialIdentifierField == .credentialIdentifier {
@@ -1183,15 +1329,17 @@ public actor OariWorkspaceW3CBackend {
             } else {
                 identifierCandidates = [nil]
             }
-            let proof = try await proofJWT(
-                keyID: holderIdentity.keyID,
-                kid: method,
-                issuer: holderDID,
-                audience: transaction.issuer.absoluteString,
-                nonce: token.nonce
-            )
             var successfulResponse: Data?
             for (index, candidate) in identifierCandidates.enumerated() {
+                // A proof is a single-use assertion. In particular, identifier fallback
+                // must not replay the proof accepted or rejected for a prior identifier.
+                let proof = try await proofJWT(
+                    keyID: holderIdentity.keyID,
+                    kid: method,
+                    issuer: holderDID,
+                    audience: transaction.issuer.absoluteString,
+                    nonce: token.nonce
+                )
                 let request = CredentialRequest(
                     credentialConfigurationId: transportContract.credentialIdentifierField == .credentialConfigurationID ? configurationID : nil,
                     credentialIdentifier: candidate,
@@ -1230,16 +1378,18 @@ public actor OariWorkspaceW3CBackend {
                         allowedOrigins: [try Self.origin(of: transaction.issuer)]
                     )
                     break
-                } catch let error as WorkspaceBackendError {
+                } catch let error as OpenID4VCBackendError {
                     let canRetry = index + 1 < identifierCandidates.count &&
                         Self.isRetryableCredentialIdentifierError(error)
                     guard canRetry else { throw error }
                 }
             }
-            guard var response = successfulResponse else { throw WorkspaceBackendError.invalidResponse }
-            if transportContract.requiresCredentialResponseEncryption,
-               Self.looksLikeCompactJWE(response),
-               let securityState, let clientSecurity {
+            guard var response = successfulResponse else { throw OpenID4VCBackendError.invalidResponse }
+            if transportContract.requiresCredentialResponseEncryption {
+                guard Self.looksLikeCompactJWE(response),
+                      let securityState, let clientSecurity else {
+                    throw OpenID4VCBackendError.invalidResponse
+                }
                 response = try await clientSecurity.decryptCredentialResponse(
                     state: securityState,
                     compactJWE: response
@@ -1251,7 +1401,7 @@ public actor OariWorkspaceW3CBackend {
                 stage: "credential response"
             )
             guard !credentials.credentials.isEmpty else {
-                throw WorkspaceBackendError.invalidResponse
+                throw OpenID4VCBackendError.invalidResponse
             }
             for item in credentials.credentials {
                 let raw = Data(item.credential.utf8)
@@ -1275,8 +1425,7 @@ public actor OariWorkspaceW3CBackend {
                     holderKeyReference: holderIdentity.keyID.rawValue.uuidString,
                     receivedAt: now()
                 )
-                try await credentialStore.save(stored)
-                results.append(WorkspaceIssuedCredential(
+                let result = IssuedW3CCredential(
                     id: stored.id,
                     configurationID: configurationID,
                     displayName: transaction.issuerMetadata.credentialConfigurations[configurationID]?.display.name
@@ -1284,31 +1433,97 @@ public actor OariWorkspaceW3CBackend {
                     issuerIdentifier: signedIssuer,
                     profileID: stored.profileID,
                     representation: stored.representation,
+                    hasStatusReference: Self.hasCredentialStatus(raw: raw, profile: selectedProfile),
                     displayClaims: Self.displayClaims(
                         raw: String(decoding: raw, as: UTF8.self),
                         profile: selectedProfile
                     ),
                     display: display
-                ))
+                )
+                staged.append(StagedCredential(stored: stored, result: result))
             }
             if let notificationID = credentials.notificationID,
-               let notificationEndpoint = issuerMetadata.notificationEndpoint.flatMap(URL.init(string:)) {
-                let notification = try JSONSerialization.data(withJSONObject: [
-                    "event": "credential_accepted",
-                    "notification_id": notificationID,
-                ])
-                _ = try await successfulRequest(
-                    notificationEndpoint,
-                    method: "POST",
-                    headers: [
-                        "Content-Type": "application/json",
-                        "Authorization": "Bearer \(token.accessToken)",
-                    ],
-                    body: notification,
-                    allowedOrigins: [try Self.origin(of: transaction.issuer)]
+               let endpoint = issuerMetadata.notificationEndpoint.flatMap(URL.init(string:)) {
+                pendingNotifications.append(StagedNotification(
+                    endpoint: endpoint,
+                    notificationID: notificationID,
+                    accessToken: token.accessToken
+                ))
+            }
+        }
+        let stagedIssuance = StagedIssuance(
+            credentials: staged,
+            notifications: pendingNotifications
+        )
+        let signerWarning = await credentialSignerWarning(for: staged.map(\.result.issuerIdentifier))
+        if let signerWarning {
+            // Raw credentials are already cryptographically validated. Retain
+            // them only in this actor's transaction memory so Continue can
+            // commit without replaying token or credential requests.
+            stagedCredentials[id] = stagedIssuance
+            throw OpenID4VCBackendError.credentialSignerTrustWarning(signerWarning)
+        }
+        return try await commitStagedCredentials(stagedIssuance, transactionID: id)
+    }
+
+    private func credentialSignerWarning(for issuers: [String]) async -> EbsiTrustWarning? {
+        for issuer in Set(issuers).sorted() {
+            let verdict: TrustVerdict
+            if issuer.hasPrefix("did:ebsi:") {
+                verdict = await credentialSignerTrustEvaluator.evaluate(issuer: issuer, at: now())
+            } else if issuer.hasPrefix("did:key:") {
+                verdict = .untrusted(reasons: [.issuerNotAccredited], evidence: [])
+            } else {
+                // HTTPS JWT issuers are bound to their metadata and keys by the
+                // credential validator. TIR is a DID accreditation registry.
+                continue
+            }
+            guard case .trusted = verdict else {
+                let reasons: [TrustReason]
+                let evidence: [TrustEvidence]
+                switch verdict {
+                case .trusted: continue
+                case let .untrusted(value, items), let .invalid(value, items), let .indeterminate(value, items):
+                    reasons = value.isEmpty ? [.issuerNotAccredited] : value
+                    evidence = items
+                }
+                return EbsiTrustWarning(
+                    counterpartyIdentifier: issuer,
+                    role: .issuer,
+                    reasons: reasons,
+                    evidenceSources: evidence.map(\.sourceIdentifier).sorted(),
+                    nextAction: "Continue to store the validated credential, or Cancel. No credential has been stored and no credential request will be repeated."
                 )
             }
         }
+        return nil
+    }
+
+    private func commitStagedCredentials(
+        _ staged: StagedIssuance, transactionID id: UUID
+    ) async throws -> [IssuedW3CCredential] {
+        guard let transaction = transactions[id] else { throw OpenID4VCBackendError.unknownTransaction }
+        for item in staged.credentials { try await credentialStore.save(item.stored) }
+        for item in staged.notifications {
+            let notification = try JSONSerialization.data(withJSONObject: [
+                "event": "credential_accepted",
+                "notification_id": item.notificationID,
+            ])
+            // Notification delivery is secondary to an already completed local
+            // commit. A transient notification failure must not report issuance
+            // as failed after the credential has been stored.
+            _ = try? await successfulRequest(
+                item.endpoint,
+                method: "POST",
+                headers: [
+                    "Content-Type": "application/json",
+                    "Authorization": "Bearer \(item.accessToken)",
+                ],
+                body: notification,
+                allowedOrigins: [try Self.origin(of: transaction.issuer)]
+            )
+        }
+        stagedCredentials[id] = nil
         transactions[id] = nil
         authorizationCodes[id] = nil
         authorizationCodeVerifiers[id] = nil
@@ -1317,7 +1532,7 @@ public actor OariWorkspaceW3CBackend {
         presentationChallengeTasks.removeValue(forKey: id)?.cancel()
         transactionHolderIdentities[id] = nil
         trustConsents.remove(id)
-        return results
+        return staged.credentials.map(\.result)
     }
 
     private func selectProfile(
@@ -1432,7 +1647,7 @@ public actor OariWorkspaceW3CBackend {
                 context = value
                 reason = "missing \(String(describing: expected))"
             @unknown default:
-                throw WorkspaceBackendError.decodingFailed(
+                throw OpenID4VCBackendError.decodingFailed(
                     stage: stage,
                     path: "$",
                     reason: "unknown decoding failure"
@@ -1442,7 +1657,7 @@ public actor OariWorkspaceW3CBackend {
                 if let index = key.intValue { return "\(partial)[\(index)]" }
                 return "\(partial).\(key.stringValue)"
             }
-            throw WorkspaceBackendError.decodingFailed(stage: stage, path: path, reason: reason)
+            throw OpenID4VCBackendError.decodingFailed(stage: stage, path: path, reason: reason)
         }
     }
 
@@ -1454,7 +1669,7 @@ public actor OariWorkspaceW3CBackend {
 
     private static func wellKnownURL(name: String, issuer: URL) throws -> URL {
         guard let scheme = issuer.scheme, let host = issuer.host else {
-            throw WorkspaceBackendError.unsafeEndpoint
+            throw OpenID4VCBackendError.unsafeEndpoint
         }
         var components = URLComponents()
         components.scheme = scheme
@@ -1462,20 +1677,20 @@ public actor OariWorkspaceW3CBackend {
         components.port = issuer.port
         let issuerPath = issuer.path == "/" ? "" : issuer.path
         components.path = "/.well-known/\(name)\(issuerPath)"
-        guard let url = components.url else { throw WorkspaceBackendError.unsafeEndpoint }
+        guard let url = components.url else { throw OpenID4VCBackendError.unsafeEndpoint }
         return url
     }
 
     private static func decodeSignedPresentationRequest(_ compactJWT: String) throws -> SignedPresentationRequest {
         let parts = compactJWT.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 3 else {
-            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "signed request was not a compact JWT")
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request was not a compact JWT")
         }
         var base64 = String(parts[1]).replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
         base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
         guard let data = Data(base64Encoded: base64) else {
-            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "signed request payload was not valid base64url")
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request payload was not valid base64url")
         }
         return try Self.decode(
             SignedPresentationRequest.self,
@@ -1493,24 +1708,38 @@ public actor OariWorkspaceW3CBackend {
         typeValues: [[String]],
         claimPaths: [[String]]
     ) {
-        guard case let .array(credentials)? = dcqlQuery["credentials"] else {
-            throw WorkspaceBackendError.invalidResponse
+        guard dcqlQuery["credential_sets"] == nil else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "DCQL credential_sets are not supported")
         }
-        let supportsRequestedFormat = credentials.contains { credential in
-            guard case let .object(query) = credential, let format = query["format"]?.string else { return false }
-            return format == "dc+sd-jwt" || format == "jwt_vc_json"
+        guard Set(dcqlQuery.keys).isSubset(of: ["credentials"]),
+              case let .array(credentials)? = dcqlQuery["credentials"],
+              credentials.count == 1,
+              case let .object(query) = credentials[0] else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(
+                reason: "exactly one DCQL credential query is supported"
+            )
         }
-        guard supportsRequestedFormat else { throw EbsiCredentialError.unsupportedRepresentation }
-        for credential in credentials {
-            guard case let .object(query) = credential,
-                  let format = query["format"]?.string,
-                  format == "dc+sd-jwt" || format == "jwt_vc_json",
-                  let id = query["id"]?.string,
-                  case let .array(claims)? = query["claims"] else { continue }
-            let meta = query["meta"]?.object ?? [:]
+        guard Set(query.keys).isSubset(of: ["id", "format", "meta", "claims"]),
+              let format = query["format"]?.string,
+              let id = query["id"]?.string, !id.isEmpty,
+              case let .array(claims)? = query["claims"], !claims.isEmpty else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "DCQL credential query was unsupported")
+        }
+        guard format == "dc+sd-jwt" || format == "jwt_vc_json" else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "DCQL credential format was unsupported")
+        }
+        let meta = query["meta"]?.object ?? [:]
+        let allowedMetaKeys: Set<String> = format == "dc+sd-jwt" ? ["vct_values"] : ["type_values"]
+        guard Set(meta.keys).isSubset(of: allowedMetaKeys) else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "DCQL credential metadata was unsupported")
+        }
             let vcts: Set<String>
             if case let .array(values)? = meta["vct_values"] {
-                vcts = Set(values.compactMap(\.string))
+                let decoded = values.compactMap(\.string)
+                guard decoded.count == values.count, !decoded.contains(where: \.isEmpty) else {
+                    throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "DCQL vct_values were malformed")
+                }
+                vcts = Set(decoded)
             } else {
                 vcts = []
             }
@@ -1518,30 +1747,114 @@ public actor OariWorkspaceW3CBackend {
             if case let .array(values)? = meta["type_values"] {
                 typeValues = values.compactMap { value in
                     guard case let .array(types) = value else { return nil }
-                    return types.compactMap(\.string)
+                    let decoded = types.compactMap(\.string)
+                    return decoded.count == types.count && !decoded.isEmpty ? decoded : nil
+                }
+                guard typeValues.count == values.count else {
+                    throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "DCQL type_values were malformed")
                 }
             } else {
                 typeValues = []
             }
             let paths = claims.compactMap { claim -> [String]? in
                 guard case let .object(value) = claim,
+                      Set(value.keys) == ["path"],
                       case let .array(path)? = value["path"] else { return nil }
-                return path.compactMap(\.string)
+                let decoded = path.compactMap(\.string)
+                return decoded.count == path.count && !decoded.isEmpty ? decoded : nil
             }
             guard paths.count == claims.count, !paths.isEmpty,
-                  format != "dc+sd-jwt" || !vcts.isEmpty else {
-                throw WorkspaceBackendError.invalidResponse
+                  format != "dc+sd-jwt" || !vcts.isEmpty,
+                  format != "jwt_vc_json" || !typeValues.isEmpty else {
+                throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "DCQL claim constraints were unsupported")
             }
             return (id, format, vcts, typeValues, paths)
+    }
+
+    private static func requireUnsignedMatchesSigned(
+        request: PresentationRequest,
+        signed: VerifiedOpenID4VPRequestObject
+    ) throws {
+        try requireMatches([request.clientID, request.requestObject?.clientID], signed: signed.clientID, name: "client_id")
+        try requireMatches([request.responseType, request.requestObject?.responseType], signed: signed.responseType, name: "response_type")
+        try requireMatches([request.responseMode, request.requestObject?.responseMode], signed: signed.responseMode, name: "response_mode")
+        try requireMatches([request.responseURI, request.requestObject?.responseURI], signed: signed.responseURI, name: "response_uri")
+        try requireMatches([request.nonce, request.requestObject?.nonce], signed: signed.nonce, name: "nonce")
+        try requireMatches([request.state, request.requestObject?.state], signed: signed.state, name: "state")
+        try requireMatches([request.dcqlQuery, request.requestObject?.dcqlQuery], signed: signed.dcqlQuery, name: "dcql_query")
+    }
+
+    private static func requireMatches<Value: Equatable>(
+        _ unsignedValues: [Value?], signed: Value?, name: String
+    ) throws {
+        for value in unsignedValues.compactMap({ $0 }) where value != signed {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(
+                reason: "unsigned \(name) did not exactly match the signed Request Object"
+            )
         }
-        throw WorkspaceBackendError.presentationCredentialUnavailable
+    }
+
+    private static func singleQueryValue(named name: String, in items: [URLQueryItem]) throws -> String? {
+        let values = items.filter { $0.name == name }
+        guard values.count <= 1 else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "duplicate \(name) parameter")
+        }
+        return values.first?.value
+    }
+
+    private static func requireOuterValuesMatchSigned(
+        _ items: [URLQueryItem], signed: VerifiedOpenID4VPRequestObject
+    ) throws {
+        let scalarValues: [(String, String?)] = [
+            ("client_id", signed.clientID), ("response_type", signed.responseType),
+            ("response_mode", signed.responseMode), ("response_uri", signed.responseURI),
+            ("nonce", signed.nonce), ("state", signed.state),
+        ]
+        for (name, signedValue) in scalarValues {
+            if let unsigned = try singleQueryValue(named: name, in: items), unsigned != signedValue {
+                throw OpenID4VCBackendError.invalidPresentationChallenge(
+                    reason: "unsigned \(name) did not exactly match the signed Request Object"
+                )
+            }
+        }
+        if let value = try singleQueryValue(named: "dcql_query", in: items) {
+            guard let data = value.data(using: .utf8),
+                  let decoded = try? JSONDecoder().decode([String: AnySendableJSON].self, from: data),
+                  decoded == signed.dcqlQuery else {
+                throw OpenID4VCBackendError.invalidPresentationChallenge(
+                    reason: "unsigned dcql_query did not exactly match the signed Request Object"
+                )
+            }
+        }
+    }
+
+    private static func requiredStandaloneExpiry(_ request: VerifiedOpenID4VPRequestObject) throws -> Date {
+        guard let expiresAt = request.expiresAt else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "standalone signed request exp was missing")
+        }
+        return expiresAt
+    }
+
+    private static func validateStandaloneLifetime(
+        _ request: VerifiedOpenID4VPRequestObject, at date: Date
+    ) throws {
+        guard let issuedAt = request.issuedAt, let expiresAt = request.expiresAt,
+              issuedAt <= date.addingTimeInterval(60),
+              issuedAt >= date.addingTimeInterval(-300),
+              expiresAt > date,
+              expiresAt > issuedAt,
+              expiresAt.timeIntervalSince(issuedAt) <= 300 else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(
+                reason: "standalone signed request required a current iat and an exp within five minutes"
+            )
+        }
     }
 
     private static func presentationClaim(
         path: [String],
         value: String
-    ) -> WorkspacePIDPresentationClaim {
-        WorkspacePIDPresentationClaim(
+    ) -> DCQLRequestedClaim {
+        DCQLRequestedClaim(
             id: path.joined(separator: "."),
             path: path,
             value: value,
@@ -1636,13 +1949,14 @@ public actor OariWorkspaceW3CBackend {
     ) -> (score: Int, credentialIdentifier: String)? {
         let identifiers = detail.credentialIdentifiers?.filter { !$0.isEmpty } ?? []
         guard !identifiers.isEmpty else { return nil }
-        let equivalentIdentifier = identifiers.first {
+        let equivalentIdentifiers = identifiers.filter {
             equivalentDraftConfiguration(
                 offeredID: offeredID,
                 authorizedID: $0,
                 configurations: configurations
             )
         }
+        let equivalentIdentifier = equivalentIdentifiers.count == 1 ? equivalentIdentifiers[0] : nil
         if detail.credentialConfigurationID == offeredID {
             return (400, identifiers.first(where: { $0 == offeredID }) ?? equivalentIdentifier ?? identifiers[0])
         }
@@ -1677,7 +1991,7 @@ public actor OariWorkspaceW3CBackend {
         return values.filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
-    private static func isRetryableCredentialIdentifierError(_ error: WorkspaceBackendError) -> Bool {
+    private static func isRetryableCredentialIdentifierError(_ error: OpenID4VCBackendError) -> Bool {
         switch error {
         case .remoteOAuthError(code: "invalid_credential_request", detail: _),
              .remoteOAuthError(code: "unsupported_credential_type", detail: _):
@@ -1726,7 +2040,24 @@ public actor OariWorkspaceW3CBackend {
         return displayClaims(from: try? EbsiCredentialInspector().inspectCompactJWT(raw, profile: profile))
     }
 
+    private static func hasCredentialStatus(raw: Data, profile: EbsiCredentialProfile) -> Bool {
+        let compact = String(decoding: raw, as: UTF8.self)
+        if profile.representation == .dcSdJwt || profile.representation == .vcdm2SdJwt {
+            guard let payload = try? EbsiCredentialInspector().inspectSDJWT(
+                compact,
+                requiresHolderBinding: profile.requiresSDJWTHolderBinding
+            ) else { return false }
+            return payload["status"] != nil || payload["status_list"] != nil
+        }
+        guard let credential = try? EbsiCredentialInspector().inspectCompactJWT(
+            compact,
+            profile: profile
+        ) else { return false }
+        return credential["credentialStatus"] != nil || credential["status"] != nil
+    }
+
     public func cancel(id: UUID) {
+        stagedCredentials[id] = nil
         transactions[id] = nil
         authorizationCodes[id] = nil
         authorizationCodeVerifiers[id] = nil
@@ -1752,10 +2083,10 @@ public actor OariWorkspaceW3CBackend {
         case .allow: trustConsents.insert(id)
         case .requireExplicitWarning:
             guard allowUntrusted || trustConsents.contains(id) else {
-                throw WorkspaceBackendError.untrustedConsentRequired
+                throw OpenID4VCBackendError.untrustedConsentRequired
             }
             trustConsents.insert(id)
-        case .reject: throw WorkspaceBackendError.rejectedTrust
+        case .reject: throw OpenID4VCBackendError.rejectedTrust
         }
     }
 
@@ -1828,6 +2159,7 @@ public actor OariWorkspaceW3CBackend {
             "aud": audience,
             "iat": issuedAt,
             "exp": issuedAt + 300,
+            "jti": "urn:uuid:\(UUID().uuidString.lowercased())",
         ]
         if let nonce { payload["nonce"] = nonce }
         let encodedPayload = try Self.base64JSON(payload)
@@ -1849,6 +2181,12 @@ public actor OariWorkspaceW3CBackend {
     ) async throws -> String {
         var headerObject = ["alg": "ES256", "typ": type]
         if let contentType { headerObject["cty"] = contentType }
+        if let publicKey = try? await keyProvider.publicKey(id: keyID),
+           let did = try? KeyDIDResolver().derive(publicKeyX963: publicKey.x963Representation),
+           let document = try? await KeyDIDResolver().resolve(did),
+           let method = document.assertionMethod.first {
+            headerObject["kid"] = method
+        }
         let header = try Self.base64JSON(headerObject)
         let encodedPayload = try Self.base64JSON(payload)
         let signingInput = Data("\(header).\(encodedPayload)".utf8)
@@ -1882,7 +2220,7 @@ public actor OariWorkspaceW3CBackend {
         do {
             let data = try await successfulGET(standardURL, allowedOrigins: allowedOrigins)
             return try Self.decode(type, from: data, stage: stage)
-        } catch let error as WorkspaceBackendError {
+        } catch let error as OpenID4VCBackendError {
             let shouldTryLegacy = switch error {
             case .remoteHTTPError(status: 404, detail: _): true
             case .remoteOAuthError(code: "not_found", detail: _): true
@@ -1900,7 +2238,7 @@ public actor OariWorkspaceW3CBackend {
     }
 
     private func offlineDisplayMetadata(
-        _ display: WorkspaceCredentialDisplay?
+        _ display: CredentialConfigurationDisplay?
     ) async -> CredentialDisplayMetadata? {
         guard let display else { return nil }
         async let logo = downloadDisplayImage(
@@ -1973,19 +2311,19 @@ public actor OariWorkspaceW3CBackend {
     ) async throws -> Data {
         try Self.validateHTTPS(url)
         guard allowedOrigins.contains(try Self.origin(of: url)) else {
-            throw WorkspaceBackendError.unsafeEndpoint
+            throw OpenID4VCBackendError.unsafeEndpoint
         }
         let response = try await transport.send(url: url, method: method, headers: headers, body: body)
         guard response.body.count <= 1_048_576 else {
-            throw WorkspaceBackendError.invalidResponse
+            throw OpenID4VCBackendError.invalidResponse
         }
         guard (200..<300).contains(response.statusCode) else {
             if let error = try? JSONDecoder().decode(RemoteOAuthError.self, from: response.body) {
-                throw WorkspaceBackendError.remoteOAuthError(code: error.error, detail: error.errorDetail)
+                throw OpenID4VCBackendError.remoteOAuthError(code: error.error, detail: error.errorDetail)
             }
             let detail = (try? JSONDecoder().decode(RemoteHTTPError.self, from: response.body))?.detail
                 ?? String(data: response.body, encoding: .utf8)
-            throw WorkspaceBackendError.remoteHTTPError(status: response.statusCode, detail: detail)
+            throw OpenID4VCBackendError.remoteHTTPError(status: response.statusCode, detail: detail)
         }
         return response.body
     }
@@ -1995,14 +2333,14 @@ public actor OariWorkspaceW3CBackend {
               scheme == "https" || (scheme == "http" && (url.host == "127.0.0.1" || url.host == "localhost")),
               url.host != nil,
               url.user == nil, url.password == nil, url.fragment == nil else {
-            throw WorkspaceBackendError.unsafeEndpoint
+            throw OpenID4VCBackendError.unsafeEndpoint
         }
     }
 
     private static func origin(of url: URL) throws -> String {
         try validateHTTPS(url)
         guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else {
-            throw WorkspaceBackendError.unsafeEndpoint
+            throw OpenID4VCBackendError.unsafeEndpoint
         }
         return "\(scheme)://\(host)\(url.port.map { ":\($0)" } ?? "")"
     }
@@ -2010,16 +2348,16 @@ public actor OariWorkspaceW3CBackend {
     private static func validate(_ value: String?, requirement: TxCode?) throws {
         guard let requirement else { return }
         guard let value, requirement.length.map({ value.count == $0 }) ?? true else {
-            throw WorkspaceBackendError.invalidTransactionCode
+            throw OpenID4VCBackendError.invalidTransactionCode
         }
         guard !value.isEmpty,
               value.unicodeScalars.allSatisfy({ $0.isASCII && $0.value >= 0x21 && $0.value <= 0x7e }),
               value.utf8.count == value.count else {
-            throw WorkspaceBackendError.invalidTransactionCode
+            throw OpenID4VCBackendError.invalidTransactionCode
         }
         if requirement.numeric,
            !value.unicodeScalars.allSatisfy({ (48...57).contains(Int($0.value)) }) {
-            throw WorkspaceBackendError.invalidTransactionCode
+            throw OpenID4VCBackendError.invalidTransactionCode
         }
     }
 
@@ -2063,15 +2401,18 @@ private struct AuthorizationCodeGrant: Decodable {
 private struct PresentationChallengeResponse: Decodable {
     let authSession: String?
     let interactionTypeRequired: String?
+    let type: String?
     let openid4vpRequest: PresentationRequest?
     enum CodingKeys: String, CodingKey {
         case authSession = "auth_session"
         case interactionTypeRequired = "interaction_type_required"
+        case type
         case openid4vpRequest = "openid4vp_request"
     }
 }
 
 private struct PresentationRequest: Decodable {
+    let responseType: String?
     let responseMode: String?
     let responseURI: String?
     let clientID: String?
@@ -2082,6 +2423,7 @@ private struct PresentationRequest: Decodable {
     let requestJWT: String?
     let requestObject: PresentationRequestObject?
     enum CodingKeys: String, CodingKey {
+        case responseType = "response_type"
         case responseMode = "response_mode"
         case responseURI = "response_uri"
         case clientID = "client_id"
@@ -2092,6 +2434,7 @@ private struct PresentationRequest: Decodable {
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        responseType = try values.decodeIfPresent(String.self, forKey: .responseType)
         responseMode = try values.decodeIfPresent(String.self, forKey: .responseMode)
         responseURI = try values.decodeIfPresent(String.self, forKey: .responseURI)
         clientID = try values.decodeIfPresent(String.self, forKey: .clientID)
@@ -2112,6 +2455,7 @@ private struct PresentationRequest: Decodable {
 
 private struct PresentationRequestObject: Decodable {
     let clientID: String?
+    let responseType: String?
     let responseMode: String?
     let responseURI: String?
     let nonce: String?
@@ -2120,6 +2464,7 @@ private struct PresentationRequestObject: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case clientID = "client_id"
+        case responseType = "response_type"
         case responseMode = "response_mode"
         case responseURI = "response_uri"
         case nonce, state
@@ -2159,7 +2504,7 @@ private struct PreparedW3CPresentation: Sendable {
 
 private struct InteractiveAuthorizationContext: Sendable {
     let generationID: UUID
-    let challenge: WorkspacePresentationChallenge
+    let challenge: OpenID4VPPresentationRequest
     let expiresAt: Date
 }
 
@@ -2174,27 +2519,27 @@ private struct AuthorizationCodeResponse: Decodable {
     }
 }
 
-private func ifCasePreAuthorizedTxCode(_ grant: OariWorkspaceW3CBackend.Grant) -> Bool {
+private func ifCasePreAuthorizedTxCode(_ grant: OpenID4VCW3CBackend.Grant) -> Bool {
     if case let .preAuthorized(_, txCode) = grant { return txCode != nil }
     return false
 }
 
-private func transactionCodeLength(_ grant: OariWorkspaceW3CBackend.Grant) -> Int? {
+private func transactionCodeLength(_ grant: OpenID4VCW3CBackend.Grant) -> Int? {
     if case let .preAuthorized(_, requirement) = grant { return requirement?.length }
     return nil
 }
 
-private func transactionCodeDescription(_ grant: OariWorkspaceW3CBackend.Grant) -> String? {
+private func transactionCodeDescription(_ grant: OpenID4VCW3CBackend.Grant) -> String? {
     if case let .preAuthorized(_, requirement) = grant { return requirement?.description }
     return nil
 }
 
-private func ifCaseAuthorization(_ grant: OariWorkspaceW3CBackend.Grant) -> Bool {
+private func ifCaseAuthorization(_ grant: OpenID4VCW3CBackend.Grant) -> Bool {
     if case .authorizationCode = grant { return true }
     return false
 }
 
-private func ifCaseIssuerState(_ grant: OariWorkspaceW3CBackend.Grant) -> String? {
+private func ifCaseIssuerState(_ grant: OpenID4VCW3CBackend.Grant) -> String? {
     if case let .authorizationCode(issuerState) = grant { return issuerState }
     return nil
 }
@@ -2253,9 +2598,9 @@ private struct SupportedConfiguration: Decodable {
     let directDisplay: [CredentialDisplay]?
     let directClaims: [String: ClaimDefinition]?
 
-    var display: WorkspaceCredentialDisplay {
+    var display: CredentialConfigurationDisplay {
         let display = (directDisplay ?? credentialMetadata?.display)?.first
-        return WorkspaceCredentialDisplay(
+        return CredentialConfigurationDisplay(
             name: display?.name ?? "Credential",
             locale: display?.locale,
             description: display?.description,
@@ -2265,7 +2610,7 @@ private struct SupportedConfiguration: Decodable {
             logoAlternativeText: display?.logo?.alternativeText,
             backgroundImageURL: display?.backgroundImage.flatMap { URL(string: $0.url) },
             claims: directClaims?.map { key, value in
-                WorkspaceCredentialClaim(
+                CredentialConfigurationClaim(
                     id: key,
                     path: [key],
                     name: value.display?.first?.name ?? key,
@@ -2294,7 +2639,7 @@ private struct SupportedConfiguration: Decodable {
 
 private struct CredentialMetadata: Decodable {
     let display: [CredentialDisplay]?
-    let claims: [WorkspaceCredentialClaim]?
+    let claims: [CredentialConfigurationClaim]?
 }
 
 private struct CredentialDisplay: Decodable {

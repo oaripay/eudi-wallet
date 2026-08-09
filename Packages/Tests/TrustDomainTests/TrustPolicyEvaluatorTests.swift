@@ -8,7 +8,7 @@ struct TrustPolicyEvaluatorTests {
 
     @Test("Trusted requires fresh valid evidence for every configured source")
     func evidenceCompleteness() {
-        let profile = BuiltInProfiles.oariDevelopmentFinal(checkedOn: now)
+        let profile = BuiltInProfiles.vcdm2OpenID4VCProfile(checkedOn: now)
         let evaluator = TrustPolicyEvaluator()
         let incomplete = TrustVerdict.trusted(evidence: [evidence(for: .signedMetadata)])
 
@@ -24,7 +24,7 @@ struct TrustPolicyEvaluatorTests {
 
     @Test("Expired evidence fails closed")
     func staleEvidence() {
-        let profile = BuiltInProfiles.oariDevelopmentFinal(checkedOn: now)
+        let profile = BuiltInProfiles.vcdm2OpenID4VCProfile(checkedOn: now)
         let evidence = profile.requiredTrustSources.map {
             self.evidence(for: $0, expiresAt: now)
         }
@@ -45,7 +45,7 @@ struct TrustPolicyEvaluatorTests {
 
     @Test("Warning consent never converts an untrusted verdict into trusted")
     func warningConsentPreservesVerdict() {
-        let profile = BuiltInProfiles.oariDevelopmentFinal(checkedOn: now)
+        let profile = BuiltInProfiles.vcdm2OpenID4VCProfile(checkedOn: now)
         let verdict = TrustVerdict.untrusted(
             reasons: [.requesterNotRegistered],
             evidence: []
@@ -63,7 +63,7 @@ struct TrustPolicyEvaluatorTests {
 
     @Test("Contradictory evidence always fails closed")
     func contradictoryEvidence() {
-        let profile = BuiltInProfiles.oariDevelopmentFinal(checkedOn: now)
+        let profile = BuiltInProfiles.vcdm2OpenID4VCProfile(checkedOn: now)
         let evaluator = TrustPolicyEvaluator()
 
         for conflictingResult in [TrustEvidenceResult.invalid, .notFound] {
@@ -80,7 +80,7 @@ struct TrustPolicyEvaluatorTests {
 
     @Test("Profile maximum age rejects old but unexpired evidence")
     func maximumAge() {
-        let profile = BuiltInProfiles.oariDevelopmentFinal(checkedOn: now)
+        let profile = BuiltInProfiles.vcdm2OpenID4VCProfile(checkedOn: now)
         let evidence = profile.requiredTrustSources.map { source in
             self.evidence(
                 for: source,
@@ -104,7 +104,7 @@ struct TrustPolicyEvaluatorTests {
 
     @Test("Malformed timestamp ordering rejects")
     func malformedTimestampOrdering() {
-        let profile = BuiltInProfiles.oariDevelopmentFinal(checkedOn: now)
+        let profile = BuiltInProfiles.vcdm2OpenID4VCProfile(checkedOn: now)
         var evidence = profile.requiredTrustSources.map { self.evidence(for: $0) }
         evidence.removeAll { $0.source == .credentialStatus }
         evidence.append(self.evidence(
@@ -128,7 +128,7 @@ struct TrustPolicyEvaluatorTests {
 
     @Test("Strict and invalid verdicts always reject")
     func mandatoryRejection() {
-        var strict = BuiltInProfiles.oariDevelopmentFinal(checkedOn: now)
+        var strict = BuiltInProfiles.vcdm2OpenID4VCProfile(checkedOn: now)
         strict = InteroperabilityProfile(
             id: strict.id,
             openID4VCI: strict.openID4VCI,
@@ -155,7 +155,7 @@ struct TrustPolicyEvaluatorTests {
         ).action == .reject)
         #expect(evaluator.decide(
             verdict: .invalid(reasons: [.invalidSignature], evidence: []),
-            profile: BuiltInProfiles.oariDevelopmentFinal(checkedOn: now),
+            profile: BuiltInProfiles.vcdm2OpenID4VCProfile(checkedOn: now),
             at: now
         ).action == .reject)
     }

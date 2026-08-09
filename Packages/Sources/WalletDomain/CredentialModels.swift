@@ -37,6 +37,7 @@ public enum CredentialStatusState: String, Codable, Sendable {
     case suspended
     case revoked
     case indeterminate
+    case notProvided
     case notEvaluated
 }
 
@@ -44,8 +45,8 @@ public enum LegalClassification: String, Codable, Sendable {
     case eudiPID
     case eudiAttestation
     case ebsiAttestation
-    case oariProvisional
-    case oariCredential
+    case provisional = "oariProvisional"
+    case applicationCredential = "oariCredential"
     case unclassified
 }
 

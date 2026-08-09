@@ -61,6 +61,11 @@ struct AuditModelsTests {
         }
     }
 
+    @Test("Renamed audit policy cases retain their persisted values")
+    func auditPolicyRawValueCompatibility() {
+        #expect(AuditPolicy.productionConsent.rawValue == "oariProductionConsent")
+    }
+
     @Test("Every key purpose is explicit and serializable")
     func keyPurposesArePurposeBound() throws {
         let encoded = try JSONEncoder().encode(KeyPurpose.allCases)

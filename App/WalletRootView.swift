@@ -56,7 +56,7 @@ struct WalletRootView: View {
         .sheet(isPresented: Binding(
             get: {
                 switch model.eudiFlow {
-                case .issuanceReview, .ebsiIssuanceReview, .ebsiPresentationRequired, .presentationConsent, .pending, .completed, .failed, .working:
+                case .issuanceReview, .openID4VCIssuanceReview, .openID4VPPresentationRequired, .presentationConsent, .pending, .completed, .failed, .working:
                     true
                 case .idle, .configurationRequired:
                     false
@@ -72,11 +72,11 @@ struct WalletRootView: View {
             WalletOnboardingView(model: model)
                 .interactiveDismissDisabled()
         }
-        .sheet(item: $model.ebsiTrustWarning) { warning in
-            OariTrustWarningView(warning: warning) {
-                Task { await model.continueAfterEbsiTrustWarning() }
+        .sheet(item: $model.openID4VCTrustWarning) { warning in
+            TrustWarningView(warning: warning) {
+                Task { await model.continueAfterOpenID4VCTrustWarning() }
             } cancel: {
-                Task { await model.cancelEbsiTrustWarning() }
+                Task { await model.cancelOpenID4VCTrustWarning() }
             }
             .presentationDetents([.medium, .large])
             .interactiveDismissDisabled()

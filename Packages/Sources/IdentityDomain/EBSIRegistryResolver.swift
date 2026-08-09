@@ -52,7 +52,10 @@ public struct URLSessionEBSIRegistryClient: EBSIRegistryClient, Sendable {
         httpClient: any BoundedHTTPSClient = URLSessionBoundedHTTPSClient(),
         evidenceTTL: TimeInterval = 3_600
     ) throws {
-        guard registryBaseURL.scheme == "https", registryBaseURL.host != nil,
+        guard registryBaseURL.scheme?.lowercased() == "https", registryBaseURL.host != nil,
+              registryBaseURL.user == nil, registryBaseURL.password == nil,
+              registryBaseURL.query == nil, registryBaseURL.fragment == nil,
+              registryBaseURL.lastPathComponent == "identifiers",
               evidenceTTL > 0 else {
             throw DIDResolutionError.registryUnavailable
         }
@@ -62,12 +65,13 @@ public struct URLSessionEBSIRegistryClient: EBSIRegistryClient, Sendable {
     }
 
     public func resolve(did: String, at date: Date) async throws -> ResolvedDID {
-        let url = registryBaseURL.appendingPathComponent(did)
+        guard Self.isSafeEBSIDID(did) else { throw DIDResolutionError.invalidDID }
+        // A DID is one path segment. Rejecting all delimiters rather than
+        // accepting a pre-escaped value prevents traversal and query injection.
+        let url = registryBaseURL.appendingPathComponent(did, isDirectory: false)
         let response = try await httpClient.get(url, maximumBytes: 1_048_576)
         guard response.statusCode == 200,
-              response.finalURL.scheme == "https",
-              response.finalURL.host == registryBaseURL.host,
-              (response.finalURL.port ?? 443) == (registryBaseURL.port ?? 443) else {
+              response.finalURL == url else {
             throw DIDResolutionError.registryUnavailable
         }
         let data = response.data
@@ -89,5 +93,13 @@ public struct URLSessionEBSIRegistryClient: EBSIRegistryClient, Sendable {
                 evidenceDigest: digest
             )
         )
+    }
+
+    private static func isSafeEBSIDID(_ did: String) -> Bool {
+        let prefix = "did:ebsi:"
+        guard did.hasPrefix(prefix), did.count > prefix.count else { return false }
+        return did.dropFirst(prefix.count).unicodeScalars.allSatisfy {
+            CharacterSet.alphanumerics.contains($0)
+        }
     }
 }

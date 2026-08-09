@@ -1,6 +1,6 @@
 import Foundation
 
-/// OARI-owned display and policy metadata. Raw Wallet Kit document bytes and
+/// Application-owned display and policy metadata. Raw Wallet Kit document bytes and
 /// document-bound keys must never cross this boundary.
 public protocol CredentialMetadataRepository: Sendable {
     func credentials() async throws -> [CredentialRecord]

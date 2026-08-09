@@ -11,7 +11,7 @@ struct HTTPSIssuerKeyDiscoveryTests {
     func resolvesOpenIDJWKS() async throws {
         let key = P256.Signing.PrivateKey()
         let transport = HTTPSIssuerFixtureTransport(issuer: issuer, publicKey: key.publicKey)
-        let validator = NativeWorkspaceCredentialValidator(
+        let validator = NativeW3CCredentialValidator(
             resolver: RejectingDIDResolver(),
             transport: transport
         )
@@ -42,7 +42,7 @@ struct HTTPSIssuerKeyDiscoveryTests {
             publicKey: key.publicKey,
             metadataIssuer: "https://attacker.example"
         )
-        let validator = NativeWorkspaceCredentialValidator(
+        let validator = NativeW3CCredentialValidator(
             resolver: RejectingDIDResolver(),
             transport: transport
         )
@@ -68,7 +68,7 @@ struct HTTPSIssuerKeyDiscoveryTests {
             publicKey: key.publicKey,
             includesMetadataIssuer: false
         )
-        let validator = NativeWorkspaceCredentialValidator(
+        let validator = NativeW3CCredentialValidator(
             resolver: RejectingDIDResolver(),
             transport: transport
         )
@@ -90,7 +90,7 @@ struct HTTPSIssuerKeyDiscoveryTests {
     func rejectsCredentialIssuerSubstitution() async throws {
         let key = P256.Signing.PrivateKey()
         let transport = HTTPSIssuerFixtureTransport(issuer: issuer, publicKey: key.publicKey)
-        let validator = NativeWorkspaceCredentialValidator(
+        let validator = NativeW3CCredentialValidator(
             resolver: RejectingDIDResolver(),
             transport: transport
         )
@@ -115,7 +115,7 @@ struct HTTPSIssuerKeyDiscoveryTests {
         let document = try await KeyDIDResolver().resolve(signedIssuer)
         let kid = try #require(document.assertionMethod.first)
         let credential = try signedSDJWT(key: key, kid: kid, issuer: signedIssuer)
-        let validator = NativeWorkspaceCredentialValidator(
+        let validator = NativeW3CCredentialValidator(
             resolver: KeyDIDResolver(),
             allowsDIDIssuerDelegation: true
         )
@@ -129,7 +129,7 @@ struct HTTPSIssuerKeyDiscoveryTests {
         )
         #expect(result == signedIssuer)
 
-        let strict = NativeWorkspaceCredentialValidator(resolver: KeyDIDResolver())
+        let strict = NativeW3CCredentialValidator(resolver: KeyDIDResolver())
         await #expect(throws: EbsiCredentialError.issuerMismatch) {
             try await strict.validate(
                 rawCredential: Data(credential.utf8),
@@ -146,7 +146,7 @@ struct HTTPSIssuerKeyDiscoveryTests {
         let publishedKey = P256.Signing.PrivateKey()
         let attackerKey = P256.Signing.PrivateKey()
         let transport = HTTPSIssuerFixtureTransport(issuer: issuer, publicKey: publishedKey.publicKey)
-        let validator = NativeWorkspaceCredentialValidator(
+        let validator = NativeW3CCredentialValidator(
             resolver: RejectingDIDResolver(),
             transport: transport
         )
@@ -193,7 +193,7 @@ private struct RejectingDIDResolver: DIDResolver {
     }
 }
 
-private actor HTTPSIssuerFixtureTransport: WorkspaceHTTPTransport {
+private actor HTTPSIssuerFixtureTransport: OpenID4VCHTTPTransport {
     private let issuer: String
     private let metadataIssuer: String
     private let jwtVCMetadataIssuer: String
@@ -220,7 +220,7 @@ private actor HTTPSIssuerFixtureTransport: WorkspaceHTTPTransport {
         method: String,
         headers: [String: String],
         body: Data?
-    ) async throws -> WorkspaceHTTPResponse {
+    ) async throws -> OpenID4VCHTTPResponse {
         requestPaths.append(url.path)
         if url.path.hasPrefix("/.well-known/jwt-vc-issuer/") {
             var metadata = [
@@ -257,11 +257,11 @@ private actor HTTPSIssuerFixtureTransport: WorkspaceHTTPTransport {
                 ]],
             ])
         }
-        return WorkspaceHTTPResponse(statusCode: 404, body: Data())
+        return OpenID4VCHTTPResponse(statusCode: 404, body: Data())
     }
 
-    private func response(_ object: Any) throws -> WorkspaceHTTPResponse {
-        WorkspaceHTTPResponse(
+    private func response(_ object: Any) throws -> OpenID4VCHTTPResponse {
+        OpenID4VCHTTPResponse(
             statusCode: 200,
             body: try JSONSerialization.data(withJSONObject: object),
             headers: ["Content-Type": "application/json"]

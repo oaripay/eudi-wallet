@@ -42,20 +42,21 @@ final class WalletAppModel: ObservableObject {
     @Published private(set) var credentialActionState: CredentialActionState = .idle
     @Published var showsOnboarding: Bool
     @Published private(set) var eudiAvailability: EudiWalletAvailability = .configurationRequired("Loading wallet profile…")
-    @Published var ebsiTrustWarning: EbsiTrustWarning?
-    @Published var ebsiTransactionCode = ""
+    @Published var openID4VCTrustWarning: EbsiTrustWarning?
+    private var openID4VCTransactionCode = ""
     private let allowedHosts: Set<String>
     private var eudiWallet: (any EudiWalletOperating)?
-    private var ebsiWallet: (any EbsiW3COperating)?
-    private var activeEbsiInteractionID: UUID?
-    private var activeEbsiChallenge: WorkspacePresentationChallenge?
-    private var activeEbsiInteraction: EbsiResolvedInteraction?
-    private var activeEbsiAllowsUntrusted = false
+    private var openID4VCWallet: (any OpenID4VCOperating)?
+    private var activeOpenID4VCInteractionID: UUID?
+    private var activeOpenID4VPPresentationRequest: OpenID4VPPresentationRequest?
+    private var activeOpenID4VCInteraction: OpenID4VCResolvedInteraction?
+    private var activeOpenID4VCAllowsUntrusted = false
+    private var pendingOpenID4VCSignerTrustWarning = false
     private var repositories: (credentials: any CredentialMetadataRepository, audit: any AuditRepository)?
     private var activePendingIssuanceID: UUID?
     private var activePendingIssuance: EudiPendingIssuance?
-    private var activeWorkspacePresentation = false
-    private var activeStandaloneWorkspacePresentation = false
+    private var activeIssuerAuthorizationPresentation = false
+    private var activeStandaloneOpenID4VPPresentation = false
     private var appLockAuthenticator: (any AppLockAuthenticating)?
     private var backgroundGeneration = 0
     private var activeAuthenticationID: UUID?
@@ -135,8 +136,8 @@ final class WalletAppModel: ObservableObject {
         case completed(String)
         case failed(String)
         case configurationRequired(String)
-        case ebsiIssuanceReview(EbsiResolvedInteraction)
-        case ebsiPresentationRequired(WorkspacePresentationChallenge)
+        case openID4VCIssuanceReview(OpenID4VCResolvedInteraction)
+        case openID4VPPresentationRequired(OpenID4VPPresentationRequest)
     }
 
     enum CredentialActionState: Equatable {
@@ -169,7 +170,7 @@ final class WalletAppModel: ObservableObject {
             let dependencies = try dependencies.get()
             eudiWallet = dependencies.eudiWallet
             eudiAvailability = dependencies.eudiAvailability
-            ebsiWallet = dependencies.ebsiWallet
+            openID4VCWallet = dependencies.openID4VCWallet
             appLockAuthenticator = dependencies.appLockAuthenticator
             appLockAuthenticationKind = dependencies.appLockAuthenticator.availability()
             repositories = (dependencies.credentials, dependencies.audit)
@@ -199,7 +200,7 @@ final class WalletAppModel: ObservableObject {
             }
             loadingState = .loaded
         } catch {
-            loadingState = .failed("Development wallet setup failed: \(Self.developmentErrorMessage(error))")
+            loadingState = .failed("Wallet setup failed: \(Self.setupErrorMessage(error))")
         }
     }
 
@@ -369,19 +370,19 @@ final class WalletAppModel: ObservableObject {
             case .issuance:
                 eudiFlow = .working("Checking the issuer and credential offer…")
                 var w3cRoutingError: Error?
-                if let ebsiWallet {
+                if let openID4VCWallet {
                     do {
-                        let interaction = try await ebsiWallet.resolveInteraction(uri: scanInput)
-                        activeEbsiInteractionID = interaction.id
-                        activeEbsiInteraction = interaction
+                        let interaction = try await openID4VCWallet.resolveInteraction(uri: scanInput)
+                        activeOpenID4VCInteractionID = interaction.id
+                        activeOpenID4VCInteraction = interaction
                         switch interaction.trustOutcome {
-                        case .allow: prepareEbsiInteraction(allowUntrusted: false)
-                        case let .requireExplicitWarning(warning): ebsiTrustWarning = warning; eudiFlow = .idle
-                        case .reject: throw WorkspaceBackendError.rejectedTrust
+                        case .allow: prepareOpenID4VCInteraction(allowUntrusted: false)
+                        case let .requireExplicitWarning(warning): openID4VCTrustWarning = warning; eudiFlow = .idle
+                        case .reject: throw OpenID4VCBackendError.rejectedTrust
                         }
                         return
                     } catch {
-                        if case WorkspaceBackendError.unsupportedGrant = error {
+                        if case OpenID4VCBackendError.unsupportedGrant = error {
                             // The offer advertises a non-W3C format; let Wallet Kit claim it.
                         } else {
                             w3cRoutingError = error
@@ -402,7 +403,7 @@ final class WalletAppModel: ObservableObject {
                     }
                     return
                 }
-                if ebsiWallet == nil {
+                if openID4VCWallet == nil {
                     guard let eudiWallet, isEudiOperational else {
                         throw EbsiCredentialError.backendUnavailable
                     }
@@ -416,11 +417,11 @@ final class WalletAppModel: ObservableObject {
             case .presentation:
                 eudiFlow = .working("Checking the verifier and requested claims…")
                 activePendingIssuanceID = nil
-                if let ebsiWallet {
+                if let openID4VCWallet {
                     do {
-                        let request = try await ebsiWallet.beginPresentation(uri: scanInput)
-                        activeEbsiInteractionID = request.id
-                        activeStandaloneWorkspacePresentation = true
+                        let request = try await openID4VCWallet.beginPresentation(uri: scanInput)
+                        activeOpenID4VCInteractionID = request.id
+                        activeStandaloneOpenID4VPPresentation = true
                         selectedClaimIDs = Set(request.claims.filter(\.required).map(\.id))
                         eudiFlow = .presentationConsent(request)
                         return
@@ -443,77 +444,60 @@ final class WalletAppModel: ObservableObject {
     }
 
     func redeemScannedRequest() async {
-        classifyScan()
-        if !isEudiOperational {
-            await reviewEbsiScannedRequest()
-        } else {
-            await reviewScannedRequest()
-        }
+        await reviewScannedRequest()
     }
 
-    var isEbsiDevelopmentAvailable: Bool { ebsiWallet != nil }
-
-    func reviewEbsiScannedRequest() async {
-        guard let ebsiWallet else {
-            eudiFlow = .configurationRequired("No EBSI development backend is configured.")
+    func continueAfterOpenID4VCTrustWarning() async {
+        guard openID4VCTrustWarning != nil,
+              activeOpenID4VCInteractionID != nil else { return }
+        openID4VCTrustWarning = nil
+        if pendingOpenID4VCSignerTrustWarning {
+            pendingOpenID4VCSignerTrustWarning = false
+            activeOpenID4VCAllowsUntrusted = true
+            do {
+                try await continueOpenID4VCInteraction()
+                try await refreshWalletState()
+            } catch {
+                if let id = activeOpenID4VCInteractionID { await openID4VCWallet?.cancelInteraction(id: id) }
+                activeOpenID4VCInteractionID = nil
+                activeOpenID4VCInteraction = nil
+                eudiFlow = .failed(Self.safeMessage(error))
+            }
             return
         }
-        eudiFlow = .working("Checking EBSI issuer or verifier trust…")
+        prepareOpenID4VCInteraction(allowUntrusted: true)
+    }
+
+    func cancelOpenID4VCTrustWarning() async {
+        let id = activeOpenID4VCInteractionID
+        openID4VCTrustWarning = nil
+        pendingOpenID4VCSignerTrustWarning = false
+        activeOpenID4VCInteractionID = nil
+        activeOpenID4VCInteraction = nil
+        if let id { await openID4VCWallet?.cancelInteraction(id: id) }
+        eudiFlow = .completed("Wallet request cancelled. Nothing was shared or stored.")
+    }
+
+    func issueReviewedOpenID4VCCredential(transactionCode: String? = nil) async {
+        openID4VCTransactionCode = transactionCode ?? ""
         do {
-            let interaction = try await ebsiWallet.resolveInteraction(uri: scanInput)
-            activeEbsiInteractionID = interaction.id
-            activeEbsiInteraction = interaction
-            switch interaction.trustOutcome {
-            case .allow:
-                prepareEbsiInteraction(allowUntrusted: false)
-            case let .requireExplicitWarning(warning):
-                ebsiTrustWarning = warning
-                eudiFlow = .idle
-            case .reject:
-                activeEbsiInteractionID = nil
-                eudiFlow = .failed("The EBSI request failed cryptographic or trust-policy validation.")
-            }
-        } catch {
-            activeEbsiInteractionID = nil
-            eudiFlow = .failed(Self.safeMessage(error))
-        }
-    }
-
-    func continueAfterEbsiTrustWarning() async {
-        guard ebsiTrustWarning != nil,
-              activeEbsiInteractionID != nil else { return }
-        ebsiTrustWarning = nil
-        prepareEbsiInteraction(allowUntrusted: true)
-    }
-
-    func cancelEbsiTrustWarning() async {
-        let id = activeEbsiInteractionID
-        ebsiTrustWarning = nil
-        activeEbsiInteractionID = nil
-        activeEbsiInteraction = nil
-        if let id { await ebsiWallet?.cancelInteraction(id: id) }
-        eudiFlow = .completed("EBSI request cancelled. Nothing was shared or stored.")
-    }
-
-    func issueReviewedEbsiCredential() async {
-        do {
-            try await continueEbsiInteraction()
+            try await continueOpenID4VCInteraction()
             try await refreshWalletState()
         }
         catch {
-            if let id = activeEbsiInteractionID { await ebsiWallet?.cancelInteraction(id: id) }
-            activeEbsiInteractionID = nil
-            activeEbsiInteraction = nil
+            if let id = activeOpenID4VCInteractionID { await openID4VCWallet?.cancelInteraction(id: id) }
+            activeOpenID4VCInteractionID = nil
+            activeOpenID4VCInteraction = nil
             eudiFlow = .failed(Self.safeMessage(error))
         }
     }
 
-    func startEudiPresentationForEbsi(_ challenge: WorkspacePresentationChallenge) async {
-        guard activeEbsiInteractionID == challenge.id else {
+    func startEudiCredentialPresentation(_ challenge: OpenID4VPPresentationRequest) async {
+        guard activeOpenID4VCInteractionID == challenge.id else {
             eudiFlow = .failed("The issuer authorization challenge is stale. Start the credential offer again.")
             return
         }
-        activeEbsiChallenge = challenge
+        activeOpenID4VPPresentationRequest = challenge
         let requestedVCTs = Self.requestedVCTs(in: challenge.dcqlQuery)
         let requestedFormats = Self.requestedFormats(in: challenge.dcqlQuery)
         let hasMatchingEudiPID = requestedVCTs.isEmpty || walletDocumentSummaries.values.contains { document in
@@ -523,14 +507,14 @@ final class WalletAppModel: ObservableObject {
             $0 == "dc+sd-jwt" || $0 == "jwt_vc_json" || $0 == "jwt_vc_json-ld"
         }
         if requestsW3CCredential || !hasMatchingEudiPID {
-            guard let id = activeEbsiInteractionID, let ebsiWallet else {
+            guard let id = activeOpenID4VCInteractionID, let openID4VCWallet else {
                 eudiFlow = .failed("The issuer authorization transaction expired before PID selection.")
                 return
             }
             do {
                 eudiFlow = .working("Preparing W3C PID presentation…")
-                let request = try await ebsiWallet.preparePIDPresentation(id: id)
-                activeWorkspacePresentation = true
+                let request = try await openID4VCWallet.preparePIDPresentation(id: id)
+                activeIssuerAuthorizationPresentation = true
                 selectedClaimIDs = Set(request.claims.filter(\.required).map(\.id))
                 eudiFlow = .presentationConsent(request)
             } catch {
@@ -542,7 +526,7 @@ final class WalletAppModel: ObservableObject {
             eudiFlow = .configurationRequired("EUDI Wallet Kit is not configured for PID presentation.")
             return
         }
-        activeWorkspacePresentation = false
+        activeIssuerAuthorizationPresentation = false
         guard let signedRequest = challenge.signedRequest else {
             eudiFlow = .failed("The issuer did not provide the signed PID presentation request required by Wallet Kit.")
             return
@@ -565,35 +549,39 @@ final class WalletAppModel: ObservableObject {
         }
     }
 
-    private func prepareEbsiInteraction(allowUntrusted: Bool) {
-        guard let interaction = activeEbsiInteraction else {
-            eudiFlow = .failed("The EBSI transaction expired before consent.")
+    private func prepareOpenID4VCInteraction(allowUntrusted: Bool) {
+        guard let interaction = activeOpenID4VCInteraction else {
+            eudiFlow = .failed("The credential transaction expired before consent.")
             return
         }
-        activeEbsiAllowsUntrusted = allowUntrusted
-        ebsiTransactionCode = ""
-        eudiFlow = .ebsiIssuanceReview(interaction)
+        activeOpenID4VCAllowsUntrusted = allowUntrusted
+        openID4VCTransactionCode = ""
+        eudiFlow = .openID4VCIssuanceReview(interaction)
     }
 
-    private func continueEbsiInteraction() async throws {
-        guard let id = activeEbsiInteractionID, let ebsiWallet else {
+    private func continueOpenID4VCInteraction() async throws {
+        guard let id = activeOpenID4VCInteractionID, let openID4VCWallet else {
             throw EbsiCredentialError.backendUnavailable
         }
-        eudiFlow = .working("Continuing EBSI development flow…")
-        let result = try await ebsiWallet.continueInteraction(
+        eudiFlow = .working("Continuing credential issuance…")
+        let result = try await openID4VCWallet.continueInteraction(
             id: id,
-            allowUntrusted: activeEbsiAllowsUntrusted,
-            transactionCode: ebsiTransactionCode.isEmpty ? nil : ebsiTransactionCode
+            allowUntrusted: activeOpenID4VCAllowsUntrusted,
+            transactionCode: openID4VCTransactionCode.isEmpty ? nil : openID4VCTransactionCode
         )
         switch result {
         case .completed:
-            activeEbsiInteractionID = nil
-            activeEbsiInteraction = nil
+            activeOpenID4VCInteractionID = nil
+            activeOpenID4VCInteraction = nil
             finishCredentialRedemption()
         case let .pending(message):
             eudiFlow = .completed(message)
         case let .presentationRequired(challenge):
-            eudiFlow = .ebsiPresentationRequired(challenge)
+            eudiFlow = .openID4VPPresentationRequired(challenge)
+        case let .credentialSignerTrustWarning(warning):
+            pendingOpenID4VCSignerTrustWarning = true
+            openID4VCTrustWarning = warning
+            eudiFlow = .idle
         }
     }
 
@@ -648,41 +636,54 @@ final class WalletAppModel: ObservableObject {
         }
         eudiFlow = .working(accepted ? "Sharing approved claims…" : "Declining the request…")
         do {
-            if activeStandaloneWorkspacePresentation {
-                guard let id = activeEbsiInteractionID, let ebsiWallet else {
+            if activeStandaloneOpenID4VPPresentation {
+                guard let id = activeOpenID4VCInteractionID, let openID4VCWallet else {
                     throw EbsiCredentialError.backendUnavailable
                 }
-                try await ebsiWallet.completePresentation(
+                try await openID4VCWallet.completePresentation(
                     id: id,
                     selectedClaimIDs: accepted ? selectedClaimIDs : [],
                     userAccepted: accepted
                 )
-                activeStandaloneWorkspacePresentation = false
-                activeEbsiInteractionID = nil
+                activeStandaloneOpenID4VPPresentation = false
+                activeOpenID4VCInteractionID = nil
                 selectedClaimIDs = []
                 eudiFlow = .completed(accepted ? "Approved claims were shared." : "Request declined. Nothing was shared.")
                 return
             }
-            if activeWorkspacePresentation {
-                guard let id = activeEbsiChallenge?.id,
-                      id == activeEbsiInteractionID,
-                      let ebsiWallet else {
+            if activeIssuerAuthorizationPresentation {
+                guard let id = activeOpenID4VPPresentationRequest?.id,
+                      id == activeOpenID4VCInteractionID,
+                      let openID4VCWallet else {
                     throw EbsiCredentialError.backendUnavailable
                 }
-                let result = try await ebsiWallet.completePIDPresentation(
+                let result = try await openID4VCWallet.completePIDPresentation(
                     id: id,
                     selectedClaimIDs: accepted ? selectedClaimIDs : [],
                     userAccepted: accepted
                 )
-                activeWorkspacePresentation = false
-                activeEbsiInteractionID = nil
-                activeEbsiInteraction = nil
-                activeEbsiChallenge = nil
+                activeIssuerAuthorizationPresentation = false
                 if accepted { try await refreshWalletState() }
                 switch result {
-                case .completed: finishCredentialRedemption()
-                case let .pending(message): eudiFlow = .completed(message)
-                case .presentationRequired: eudiFlow = .failed("The issuer requested another unsupported presentation step.")
+                case .completed:
+                    activeOpenID4VCInteractionID = nil
+                    activeOpenID4VCInteraction = nil
+                    activeOpenID4VPPresentationRequest = nil
+                    finishCredentialRedemption()
+                case let .pending(message):
+                    activeOpenID4VCInteractionID = nil
+                    activeOpenID4VCInteraction = nil
+                    activeOpenID4VPPresentationRequest = nil
+                    eudiFlow = .completed(message)
+                case .presentationRequired:
+                    activeOpenID4VCInteractionID = nil
+                    activeOpenID4VCInteraction = nil
+                    activeOpenID4VPPresentationRequest = nil
+                    eudiFlow = .failed("The issuer requested another unsupported presentation step.")
+                case let .credentialSignerTrustWarning(warning):
+                    pendingOpenID4VCSignerTrustWarning = true
+                    openID4VCTrustWarning = warning
+                    eudiFlow = .idle
                 }
                 return
             }
@@ -719,21 +720,34 @@ final class WalletAppModel: ObservableObject {
                 activePendingIssuance = nil
                 eudiFlow = .completed(accepted ? "Approved claims were shared." : "Request declined. Nothing was shared.")
             case let .externalAuthorization(code):
-                guard let id = activeEbsiChallenge?.id,
-                      id == activeEbsiInteractionID,
-                      let ebsiWallet else {
+                guard let id = activeOpenID4VPPresentationRequest?.id,
+                      id == activeOpenID4VCInteractionID,
+                      let openID4VCWallet else {
                     eudiFlow = .failed("The EBSI authorization transaction expired.")
                     return
                 }
-                let result = try await ebsiWallet.completeAuthorization(id: id, code: code)
+                let result = try await openID4VCWallet.completeAuthorization(id: id, code: code)
                 try await refreshWalletState()
-                activeEbsiInteractionID = nil
-                activeEbsiInteraction = nil
-                activeEbsiChallenge = nil
                 switch result {
-                case .completed: finishCredentialRedemption()
-                case let .pending(message): eudiFlow = .completed(message)
-                case .presentationRequired: eudiFlow = .failed("The issuer requested another unsupported presentation step.")
+                case .completed:
+                    activeOpenID4VCInteractionID = nil
+                    activeOpenID4VCInteraction = nil
+                    activeOpenID4VPPresentationRequest = nil
+                    finishCredentialRedemption()
+                case let .pending(message):
+                    activeOpenID4VCInteractionID = nil
+                    activeOpenID4VCInteraction = nil
+                    activeOpenID4VPPresentationRequest = nil
+                    eudiFlow = .completed(message)
+                case .presentationRequired:
+                    activeOpenID4VCInteractionID = nil
+                    activeOpenID4VCInteraction = nil
+                    activeOpenID4VPPresentationRequest = nil
+                    eudiFlow = .failed("The issuer requested another unsupported presentation step.")
+                case let .credentialSignerTrustWarning(warning):
+                    pendingOpenID4VCSignerTrustWarning = true
+                    openID4VCTrustWarning = warning
+                    eudiFlow = .idle
                 }
             }
         } catch {
@@ -752,14 +766,14 @@ final class WalletAppModel: ObservableObject {
         selectedIssuanceConfigurationIDs = []
         selectedClaimIDs = []
         transactionCode = ""
-        ebsiTransactionCode = ""
-        activeEbsiInteractionID = nil
-        activeEbsiInteraction = nil
-        activeEbsiChallenge = nil
+        openID4VCTransactionCode = ""
+        activeOpenID4VCInteractionID = nil
+        activeOpenID4VCInteraction = nil
+        activeOpenID4VPPresentationRequest = nil
         activePendingIssuanceID = nil
         activePendingIssuance = nil
-        activeWorkspacePresentation = false
-        activeStandaloneWorkspacePresentation = false
+        activeIssuerAuthorizationPresentation = false
+        activeStandaloneOpenID4VPPresentation = false
         eudiFlow = .idle
     }
 
@@ -792,16 +806,16 @@ final class WalletAppModel: ObservableObject {
         guard !credentialActionIsWorking, let credential = selectedCredential else { return }
         enum DeletionTarget {
             case eudi(documentID: String, service: any EudiWalletOperating)
-            case w3c(backendID: UUID, service: any EbsiW3COperating)
+            case w3c(backendID: UUID, service: any OpenID4VCOperating)
         }
         let target: DeletionTarget
-        if credential.backendID == "oari-workspace-w3c" {
+        if W3CBackendComposition.ownsCredential(backendID: credential.backendID) {
             guard let backendID = credential.backendDocumentID.flatMap(UUID.init(uuidString:)),
-                  let ebsiWallet else {
+                  let openID4VCWallet else {
                 credentialActionState = .failed("This W3C credential has no valid backend reference.")
                 return
             }
-            target = .w3c(backendID: backendID, service: ebsiWallet)
+            target = .w3c(backendID: backendID, service: openID4VCWallet)
         } else {
             guard isEudiOperational, let documentID = credential.walletDocumentID, let eudiWallet else {
                 credentialActionState = .failed("Wallet Kit is unavailable or the credential document reference is missing.")
@@ -846,8 +860,8 @@ final class WalletAppModel: ObservableObject {
     }
 
     func canDeleteCredential(_ credential: CredentialRecord) -> Bool {
-        if credential.backendID == "oari-workspace-w3c" {
-            return ebsiWallet != nil && credential.backendDocumentID.flatMap(UUID.init(uuidString:)) != nil
+        if W3CBackendComposition.ownsCredential(backendID: credential.backendID) {
+            return openID4VCWallet != nil && credential.backendDocumentID.flatMap(UUID.init(uuidString:)) != nil
         }
         return isEudiOperational && credential.walletDocumentID != nil
     }
@@ -935,14 +949,16 @@ final class WalletAppModel: ObservableObject {
     }
 
     private static func safeMessage(_ error: Error) -> String {
-        if let error = error as? WorkspaceBackendError {
+        if let error = error as? OpenID4VCBackendError {
             switch error {
             case .malformedOffer: return "The issuer offer is malformed or missing a credential offer payload."
-            case .unsafeEndpoint: return "The issuer endpoint is not an allowed HTTPS development endpoint."
-            case .unsupportedGrant: return "This issuer grant is not implemented by the development wallet yet."
+            case .unsafeEndpoint: return "The issuer endpoint is not an allowed HTTPS endpoint."
+            case .unsupportedGrant: return "This issuer grant is not supported by the wallet."
             case .invalidTransactionCode: return "The transaction code is invalid for this offer."
-            case .untrustedConsentRequired: return "Review the development trust warning before continuing."
+            case .untrustedConsentRequired: return "Review the issuer trust warning before continuing."
             case .rejectedTrust: return "The issuer request failed trust or signature validation."
+            case .credentialSignerTrustWarning:
+                return "The credential signer could not be resolved or accredited. Review the warning before storing the credential."
             case .invalidResponse: return "The issuer returned an invalid or incomplete OpenID4VCI response."
             case .missingCredentialNonce:
                 return "The issuer token response omitted the credential nonce required for a replay-protected proof. Create a new offer or correct the issuer configuration."
@@ -973,8 +989,10 @@ final class WalletAppModel: ObservableObject {
                     ?? "The issuer returned HTTP \(status)."
             case .clientSecurityUnavailable:
                 return "The issuer requires DPoP, client attestation, or encrypted credential responses that are unavailable."
+            case let .invalidTokenType(expected, actual):
+                return "The issuer returned an invalid token type. Expected \(expected), received \(actual ?? "no token type")."
             case .holderIdentityRecoveryRequired:
-                return "The canonical W3C holder key is missing. Reset the development W3C wallet data before continuing."
+                return "The canonical W3C holder key is missing. Reset the W3C wallet data before continuing."
             }
         }
         if let error = error as? EbsiCredentialError {
@@ -1014,14 +1032,14 @@ final class WalletAppModel: ObservableObject {
     }
 
 
-    private static func developmentErrorMessage(_ error: Error) -> String {
+    private static func setupErrorMessage(_ error: Error) -> String {
         if let error = error as? DecodingError {
             return "decoding failed at \(decodingPath(error)): \(decodingReason(error))"
         }
         if let error = error as? EudiWalletKitAdapterError {
             return "EUDI Wallet Kit \(String(describing: error))"
         }
-        if let error = error as? WorkspaceBackendError {
+        if let error = error as? OpenID4VCBackendError {
             return "EBSI backend \(String(describing: error))"
         }
         return String(describing: error)

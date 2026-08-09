@@ -1314,7 +1314,7 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
         )
     }
 
-    /// Completes or rolls back operations that crossed the Wallet Kit/OARI storage
+    /// Completes or rolls back operations that crossed Wallet Kit and application storage
     /// boundary before a process interruption or persistence failure.
     public func reconcilePendingOperations() async throws {
         try await operationalState.performLifecycleOperation { [self] in

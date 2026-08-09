@@ -1,7 +1,7 @@
 import Foundation
 import WalletDomain
 
-/// Persists only OARI-owned metadata. Wallet Kit remains the source of truth
+/// Persists only application-owned metadata. Wallet Kit remains the source of truth
 /// for raw documents and their document-bound keys.
 public actor EncryptedCredentialMetadataRepository: CredentialMetadataRepository {
     private let files: ProtectedFileStore

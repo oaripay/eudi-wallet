@@ -72,6 +72,26 @@ struct EBSIResolverTests {
         #expect(result.value == .valid)
         #expect(await verifier.calls == 1)
     }
+
+    @Test("Registry resolver constructs one exact DID path segment")
+    func safeRegistryPath() async throws {
+        let did = "did:ebsi:zSafe123"
+        let document = DIDDocument(id: did, verificationMethod: [], authentication: [], assertionMethod: [])
+        let data = try JSONEncoder().encode(document)
+        let http = RecordingEBSIHTTPClient(data: data)
+        let client = try URLSessionEBSIRegistryClient(
+            registryBaseURL: URL(string: "https://ebsi.oari.io/did-registry/v5/identifiers")!,
+            httpClient: http
+        )
+        _ = try await client.resolve(did: did, at: Date())
+        #expect(await http.requestedURL?.absoluteString ==
+            "https://ebsi.oari.io/did-registry/v5/identifiers/did:ebsi:zSafe123")
+
+        await #expect(throws: DIDResolutionError.invalidDID) {
+            _ = try await client.resolve(did: "did:ebsi:x/../../attack?next=http://evil.example", at: Date())
+        }
+        #expect(await http.calls == 1)
+    }
 }
 
 private struct FixtureEBSIClient: EBSIRegistryClient {
@@ -107,5 +127,19 @@ private actor RecordingStatusVerifier: StatusListTokenVerifier {
     func verify(compactToken: String, index: Int, at date: Date) async throws -> CredentialStatusValue {
         calls += 1
         return .valid
+    }
+}
+
+private actor RecordingEBSIHTTPClient: BoundedHTTPSClient {
+    let data: Data
+    private(set) var requestedURL: URL?
+    private(set) var calls = 0
+
+    init(data: Data) { self.data = data }
+
+    func get(_ url: URL, maximumBytes: Int) async throws -> BoundedHTTPResponse {
+        calls += 1
+        requestedURL = url
+        return BoundedHTTPResponse(data: data, statusCode: 200, finalURL: url)
     }
 }

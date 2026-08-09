@@ -2,12 +2,12 @@ import Foundation
 import WalletDomain
 
 public enum BuiltInProfiles {
-    public static let oariDevelopmentFinalID = ProfileID(rawValue: "oari-development-final-1")
+    public static let vcdm2OpenID4VCProfileID = ProfileID(rawValue: "oari-development-final-1")
     public static let iGrantDraftCompatibilityID = ProfileID(rawValue: "igrant-d13-d18-compatibility-1")
 
-    public static func oariDevelopmentFinal(checkedOn: Date) -> InteroperabilityProfile {
+    public static func vcdm2OpenID4VCProfile(checkedOn: Date) -> InteroperabilityProfile {
         InteroperabilityProfile(
-            id: oariDevelopmentFinalID,
+            id: vcdm2OpenID4VCProfileID,
             openID4VCI: spec(
                 "OpenID for Verifiable Credential Issuance",
                 "1.0",
@@ -48,7 +48,7 @@ public enum BuiltInProfiles {
             ],
             trustPolicyMode: .development,
             permitsUntrustedOneTimeConsent: true,
-            ebsiProfile: "OARI provisional VCDM 2.0/EBSI profile",
+            ebsiProfile: "VCDM 2.0 JWT VC with EBSI trust",
             retirementRule: "Retire when the selected production EUDI/EBSI profile replaces this development profile."
         )
     }

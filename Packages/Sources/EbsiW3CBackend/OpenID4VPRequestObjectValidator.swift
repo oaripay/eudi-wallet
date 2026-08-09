@@ -1,7 +1,7 @@
 import Foundation
 import IdentityDomain
 
-public struct VerifiedWorkspacePresentationRequest: Equatable, Sendable {
+public struct VerifiedOpenID4VPRequestObject: Equatable, Sendable {
     public let clientID: String
     public let audience: String?
     public let responseType: String?
@@ -10,6 +10,10 @@ public struct VerifiedWorkspacePresentationRequest: Equatable, Sendable {
     public let nonce: String
     public let state: String?
     public let dcqlQuery: [String: AnySendableJSON]
+    /// DID that controlled the verification method used for the Request Object.
+    public let signingDID: String?
+    public let issuedAt: Date?
+    public let expiresAt: Date?
 
     public init(
         clientID: String,
@@ -19,7 +23,10 @@ public struct VerifiedWorkspacePresentationRequest: Equatable, Sendable {
         responseURI: String?,
         nonce: String,
         state: String?,
-        dcqlQuery: [String: AnySendableJSON]
+        dcqlQuery: [String: AnySendableJSON],
+        signingDID: String? = nil,
+        issuedAt: Date? = nil,
+        expiresAt: Date? = nil
     ) {
         self.clientID = clientID
         self.audience = audience
@@ -29,19 +36,22 @@ public struct VerifiedWorkspacePresentationRequest: Equatable, Sendable {
         self.nonce = nonce
         self.state = state
         self.dcqlQuery = dcqlQuery
+        self.signingDID = signingDID
+        self.issuedAt = issuedAt
+        self.expiresAt = expiresAt
     }
 }
 
-public protocol WorkspacePresentationRequestValidating: Sendable {
-    func validate(compactJWT: String, at date: Date) async throws -> VerifiedWorkspacePresentationRequest
+public protocol OpenID4VPRequestObjectValidating: Sendable {
+    func validate(compactJWT: String, at date: Date) async throws -> VerifiedOpenID4VPRequestObject
 }
 
-public struct NativeWorkspacePresentationRequestValidator: WorkspacePresentationRequestValidating {
+public struct NativeOpenID4VPRequestObjectValidator: OpenID4VPRequestObjectValidating {
     private let resolver: any DIDResolver
 
     public init(resolver: any DIDResolver) { self.resolver = resolver }
 
-    public func validate(compactJWT: String, at date: Date) async throws -> VerifiedWorkspacePresentationRequest {
+    public func validate(compactJWT: String, at date: Date) async throws -> VerifiedOpenID4VPRequestObject {
         let parts = compactJWT.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 3,
               let headerData = Self.decodeBase64URL(String(parts[0])),
@@ -56,24 +66,24 @@ public struct NativeWorkspacePresentationRequestValidator: WorkspacePresentation
               let dcqlQuery = payload["dcql_query"]?.object,
               let kid = header["kid"]?.string,
               let did = Self.did(from: payload["iss"]?.string ?? kid) else {
-            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "signed request object was malformed")
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request object was malformed")
         }
         let timestamp = Int(date.timeIntervalSince1970)
         if case let .number(issuedAt)? = payload["iat"], Int(issuedAt) > timestamp + 60 {
-            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "signed request object was issued in the future")
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request object was issued in the future")
         }
         if case let .number(expiresAt)? = payload["exp"], Int(expiresAt) <= timestamp {
-            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "signed request object expired")
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request object expired")
         }
         let document: DIDDocument
         do {
             document = try await resolver.resolve(did)
         } catch {
-            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "signed request issuer DID could not be resolved")
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request issuer DID could not be resolved")
         }
         let methods = try document.verificationMethod.map { method in
             guard method.publicKeyJwk.crv == "P-256", let y = method.publicKeyJwk.y else {
-                throw WorkspaceBackendError.invalidPresentationChallenge(reason: "signed request used an unsupported key")
+                throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request used an unsupported key")
             }
             return EbsiVerificationMethod(
                 id: method.id,
@@ -99,12 +109,19 @@ public struct NativeWorkspacePresentationRequestValidator: WorkspacePresentation
                 )
             )
         } catch {
-            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "signed request signature was invalid")
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request signature was invalid")
         }
-        guard verified.methodID == kid || kid.hasPrefix("\(did)#") else {
-            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "signed request kid was not bound to its issuer")
+        guard verified.methodID == kid else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request kid was not bound to its issuer")
         }
-        return VerifiedWorkspacePresentationRequest(
+        if clientID.hasPrefix("decentralized_identifier:") {
+            guard clientID == "decentralized_identifier:\(did)" else {
+                throw OpenID4VCBackendError.invalidPresentationChallenge(
+                    reason: "decentralized_identifier client_id was not bound to the signing DID"
+                )
+            }
+        }
+        return VerifiedOpenID4VPRequestObject(
             clientID: clientID,
             audience: payload["aud"]?.string,
             responseType: payload["response_type"]?.string,
@@ -112,7 +129,10 @@ public struct NativeWorkspacePresentationRequestValidator: WorkspacePresentation
             responseURI: payload["response_uri"]?.string,
             nonce: nonce,
             state: payload["state"]?.string,
-            dcqlQuery: dcqlQuery
+            dcqlQuery: dcqlQuery,
+            signingDID: did,
+            issuedAt: payload["iat"]?.numericValue.map { Date(timeIntervalSince1970: $0) },
+            expiresAt: payload["exp"]?.numericValue.map { Date(timeIntervalSince1970: $0) }
         )
     }
 
@@ -123,7 +143,7 @@ public struct NativeWorkspacePresentationRequestValidator: WorkspacePresentation
 
     private static func requiredBase64URL(_ value: String) throws -> Data {
         guard let data = decodeBase64URL(value) else {
-            throw WorkspaceBackendError.invalidPresentationChallenge(reason: "signed request key was malformed")
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request key was malformed")
         }
         return data
     }

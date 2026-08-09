@@ -8,7 +8,7 @@ struct ProfileRegistryTests {
 
     @Test("Final and iGrant draft behavior stay in separate profiles")
     func draftIsolation() throws {
-        let final = BuiltInProfiles.oariDevelopmentFinal(checkedOn: checkedOn)
+        let final = BuiltInProfiles.vcdm2OpenID4VCProfile(checkedOn: checkedOn)
         let draft = BuiltInProfiles.iGrantDraftCompatibility(checkedOn: checkedOn)
 
         #expect(final.openID4VCI.status == .final)
@@ -25,13 +25,13 @@ struct ProfileRegistryTests {
     @Test("Unsupported combinations fail explicitly without fallback")
     func unsupportedCombination() throws {
         let registry = try StaticProfileRegistry(
-            profiles: [BuiltInProfiles.oariDevelopmentFinal(checkedOn: checkedOn)]
+            profiles: [BuiltInProfiles.vcdm2OpenID4VCProfile(checkedOn: checkedOn)]
         )
 
         #expect(throws: ProfileError.unsupportedCredentialFormat(.mdoc)) {
             try registry.profile(
                 for: ProfileRequest(
-                    id: BuiltInProfiles.oariDevelopmentFinalID,
+                    id: BuiltInProfiles.vcdm2OpenID4VCProfileID,
                     credentialFormat: .mdoc,
                     identifierMethod: .didKey,
                     signingAlgorithm: .es256
@@ -48,5 +48,10 @@ struct ProfileRegistryTests {
                 )
             )
         }
+    }
+
+    @Test("Renamed trust policy cases retain their persisted values")
+    func trustPolicyRawValueCompatibility() {
+        #expect(TrustPolicyMode.productionConsent.rawValue == "oariProductionConsent")
     }
 }

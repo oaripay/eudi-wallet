@@ -3,14 +3,14 @@ import EudiWalletKitAdapter
 import Foundation
 import WalletDomain
 
-enum EbsiInteractionKind: Equatable, Sendable {
+enum OpenID4VCInteractionKind: Equatable, Sendable {
     case issuance
     case presentation
 }
 
-struct EbsiResolvedInteraction: Equatable, Identifiable, Sendable {
+struct OpenID4VCResolvedInteraction: Equatable, Identifiable, Sendable {
     let id: UUID
-    let kind: EbsiInteractionKind
+    let kind: OpenID4VCInteractionKind
     let counterpartyIdentifier: String
     let displayName: String?
     let trustOutcome: EbsiTrustGateOutcome
@@ -20,17 +20,18 @@ struct EbsiResolvedInteraction: Equatable, Identifiable, Sendable {
     let configurationIDs: [String]
     let authorizationRequired: Bool
     let representations: [String]
-    let credentialDisplay: [String: WorkspaceCredentialDisplay]
+    let credentialDisplay: [String: CredentialConfigurationDisplay]
 }
 
-enum EbsiInteractionCompletion: Equatable, Sendable {
+enum OpenID4VCInteractionCompletion: Equatable, Sendable {
     case completed(String)
     case pending(String)
-    case presentationRequired(WorkspacePresentationChallenge)
+    case presentationRequired(OpenID4VPPresentationRequest)
+    case credentialSignerTrustWarning(EbsiTrustWarning)
 }
 
-protocol EbsiW3COperating: Sendable {
-    func resolveInteraction(uri: String) async throws -> EbsiResolvedInteraction
+protocol OpenID4VCOperating: Sendable {
+    func resolveInteraction(uri: String) async throws -> OpenID4VCResolvedInteraction
     func beginPresentation(uri: String) async throws -> EudiPresentationRequest
     func completePresentation(
         id: UUID,
@@ -41,16 +42,16 @@ protocol EbsiW3COperating: Sendable {
         id: UUID,
         allowUntrusted: Bool,
         transactionCode: String?
-    ) async throws -> EbsiInteractionCompletion
+    ) async throws -> OpenID4VCInteractionCompletion
     func cancelInteraction(id: UUID) async
     func preparePIDPresentation(id: UUID) async throws -> EudiPresentationRequest
     func completePIDPresentation(
         id: UUID,
         selectedClaimIDs: Set<String>,
         userAccepted: Bool
-    ) async throws -> EbsiInteractionCompletion
-    func submitPIDPresentation(id: UUID, vpToken: String) async throws -> EbsiInteractionCompletion
-    func completeAuthorization(id: UUID, code: String) async throws -> EbsiInteractionCompletion
+    ) async throws -> OpenID4VCInteractionCompletion
+    func submitPIDPresentation(id: UUID, vpToken: String) async throws -> OpenID4VCInteractionCompletion
+    func completeAuthorization(id: UUID, code: String) async throws -> OpenID4VCInteractionCompletion
     func deleteCredential(
         backendID: UUID,
         metadataID: CredentialID,
@@ -58,15 +59,15 @@ protocol EbsiW3COperating: Sendable {
     ) async throws
 }
 
-actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
-    private let backend: OariWorkspaceW3CBackend
+actor LiveOpenID4VCService: OpenID4VCOperating {
+    private let backend: OpenID4VCW3CBackend
     private let metadata: any CredentialMetadataRepository
     private let audit: any AuditRepository
     private var issuers: [UUID: String] = [:]
     private var authorizationRequired: Set<UUID> = []
 
     init(
-        backend: OariWorkspaceW3CBackend,
+        backend: OpenID4VCW3CBackend,
         metadata: any CredentialMetadataRepository,
         audit: any AuditRepository
     ) {
@@ -75,11 +76,11 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
         self.audit = audit
     }
 
-    func resolveInteraction(uri: String) async throws -> EbsiResolvedInteraction {
+    func resolveInteraction(uri: String) async throws -> OpenID4VCResolvedInteraction {
         let offer = try await backend.resolveOffer(uri)
         issuers[offer.id] = offer.issuer
         if offer.authorizationRequired { authorizationRequired.insert(offer.id) }
-        return EbsiResolvedInteraction(
+        return OpenID4VCResolvedInteraction(
             id: offer.id,
             kind: .issuance,
             counterpartyIdentifier: offer.issuer,
@@ -125,7 +126,7 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
         id: UUID,
         allowUntrusted: Bool,
         transactionCode: String?
-    ) async throws -> EbsiInteractionCompletion {
+    ) async throws -> OpenID4VCInteractionCompletion {
         if authorizationRequired.contains(id) {
             return .presentationRequired(try await backend.beginPresentationRequired(
                 id: id,
@@ -133,18 +134,23 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
                 interactionTypes: ["urn:openid:dcp:ia:openid4vp_presentation"]
             ))
         }
-        let credentials = try await backend.issue(
-            id: id,
-            allowUntrusted: allowUntrusted,
-            transactionCode: transactionCode
-        )
+        let credentials: [IssuedW3CCredential]
+        do {
+            credentials = try await backend.issue(
+                id: id,
+                allowUntrusted: allowUntrusted,
+                transactionCode: transactionCode
+            )
+        } catch OpenID4VCBackendError.credentialSignerTrustWarning(let warning) {
+            return .credentialSignerTrustWarning(warning)
+        }
         let issuer = issuers.removeValue(forKey: id) ?? "unknown"
         authorizationRequired.remove(id)
         var credentialIDs: [CredentialID] = []
         for credential in credentials {
             let record = CredentialRecord(
                 configurationID: credential.configurationID,
-                backendID: "oari-workspace-w3c",
+                backendID: W3CBackendComposition.backendID,
                 backendDocumentID: credential.id.uuidString,
                 displayName: credential.displayName,
                 format: credential.representation == .dcSdJwt || credential.representation == .vcdm2SdJwt
@@ -152,10 +158,10 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
                     : .jwtVC,
                  profileID: credential.profileID,
                  issuerIdentifier: credential.issuerIdentifier,
-                 cryptographicValidity: .valid,
+                cryptographicValidity: .valid,
                 issuerTrust: allowUntrusted ? .untrusted : .trusted,
-                status: .notEvaluated,
-                legalClassification: .oariProvisional,
+                status: credential.hasStatusReference ? .notEvaluated : .notProvided,
+                legalClassification: .provisional,
                  createdAt: Date(),
                  displayClaims: credential.displayClaims,
                  display: credential.display
@@ -186,7 +192,7 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
         return presentationRequest(request)
     }
 
-    private func presentationRequest(_ request: WorkspacePIDPresentationRequest) -> EudiPresentationRequest {
+    private func presentationRequest(_ request: DCQLCredentialPresentationRequest) -> EudiPresentationRequest {
         return EudiPresentationRequest(
             id: request.id,
             verifierName: request.verifierName,
@@ -212,7 +218,7 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
         id: UUID,
         selectedClaimIDs: Set<String>,
         userAccepted: Bool
-    ) async throws -> EbsiInteractionCompletion {
+    ) async throws -> OpenID4VCInteractionCompletion {
         guard userAccepted else {
             await cancelInteraction(id: id)
             return .completed("PID request declined. Nothing was shared.")
@@ -224,12 +230,12 @@ actor LiveWorkspaceEbsiWalletService: EbsiW3COperating {
         return try await submitPIDPresentation(id: id, vpToken: token)
     }
 
-    func submitPIDPresentation(id: UUID, vpToken: String) async throws -> EbsiInteractionCompletion {
+    func submitPIDPresentation(id: UUID, vpToken: String) async throws -> OpenID4VCInteractionCompletion {
         _ = try await backend.submitPresentation(id: id, vpToken: vpToken)
         authorizationRequired.remove(id)
         return try await continueInteraction(id: id, allowUntrusted: true, transactionCode: nil)
     }
-    func completeAuthorization(id: UUID, code: String) async throws -> EbsiInteractionCompletion {
+    func completeAuthorization(id: UUID, code: String) async throws -> OpenID4VCInteractionCompletion {
         try await backend.acceptAuthorizationCode(id: id, code: code)
         authorizationRequired.remove(id)
         return try await continueInteraction(id: id, allowUntrusted: true, transactionCode: nil)

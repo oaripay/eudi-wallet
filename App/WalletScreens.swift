@@ -3,6 +3,37 @@ import SwiftUI
 import UIKit
 import WalletDomain
 
+private extension CredentialStatusState {
+    var displayText: String {
+        switch self {
+        case .valid: "Valid"
+        case .suspended: "Suspended"
+        case .revoked: "Revoked"
+        case .indeterminate: "Status unavailable"
+        case .notProvided: "No status mechanism provided"
+        case .notEvaluated: "Status not checked"
+        }
+    }
+}
+
+private extension CredentialRecord {
+    var cardStatusText: String {
+        switch status {
+        case .revoked: return "Revoked"
+        case .suspended: return "Suspended"
+        case .indeterminate: return "Status unavailable"
+        case .valid, .notProvided, .notEvaluated: break
+        }
+        switch issuerTrust {
+        case .trusted: return "Trusted issuer"
+        case .untrusted: return "Issuer warning"
+        case .invalid: return "Invalid issuer"
+        case .indeterminate: return "Issuer status unavailable"
+        case .notEvaluated: return "Issuer not evaluated"
+        }
+    }
+}
+
 struct WalletVaultView: View {
     @Environment(\.colorScheme) private var scheme
     @ObservedObject var model: WalletAppModel
@@ -168,11 +199,7 @@ private struct CredentialListRow: View {
     }
 
     private var statusText: String {
-        switch credential.issuerTrust {
-        case .trusted: credential.status == .valid ? "Valid" : credential.status.rawValue
-        case .untrusted: "Development warning"
-        default: credential.status.rawValue
-        }
+        credential.cardStatusText
     }
 
     private var statusIcon: String {
@@ -201,7 +228,7 @@ private struct CredentialDetailView: View {
                 }
                 Section("Status") {
                     detailRow("Current status", model.documentStatus(for: credential) ?? "Unavailable")
-                    detailRow("Credential status", credential.status.rawValue)
+                    detailRow("Credential status", credential.status.displayText)
                     detailRow("Issuer trust", credential.issuerTrust.rawValue)
                     if let issuedAt = credential.issuedAt { detailRow("Issued", issuedAt.formatted(date: .abbreviated, time: .omitted)) }
                     if let expiresAt = credential.expiresAt { detailRow("Expires", expiresAt.formatted(date: .abbreviated, time: .omitted)) }
@@ -258,14 +285,14 @@ private struct CredentialDetailView: View {
     }
 
     private var deletionConfirmationMessage: String {
-        if credential.backendID == "oari-workspace-w3c" {
+        if W3CBackendComposition.ownsCredential(backendID: credential.backendID) {
             return "This removes the credential from encrypted W3C storage and Oari Wallet. Face ID or your device passcode will be required."
         }
         return "This removes the credential from Wallet Kit and Oari Wallet. Face ID or your device passcode will be required."
     }
 
     private var deletionUnavailableMessage: String {
-        credential.backendID == "oari-workspace-w3c"
+        W3CBackendComposition.ownsCredential(backendID: credential.backendID)
             ? "The encrypted W3C credential reference is unavailable."
             : "Install an approved EUDI profile to manage this credential."
     }
@@ -334,7 +361,7 @@ private struct CredentialHeroCard: View {
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 6) {
-                OariBackendBadge(credential.backendID == "oari-workspace-w3c" ? "Workspace W3C" : "EUDI Wallet Kit")
+                OariBackendBadge(W3CBackendComposition.ownsCredential(backendID: credential.backendID) ? "W3C Verifiable Credential" : "EUDI Wallet Kit")
                 Text(credential.format.rawValue)
                     .font(.caption2.weight(.semibold))
                     .padding(.horizontal, 8)
@@ -408,11 +435,7 @@ private struct CredentialHeroCard: View {
     }
 
     private var statusLabel: String {
-        switch credential.issuerTrust {
-        case .trusted: credential.status == .valid ? "Valid" : credential.status.rawValue
-        case .untrusted: "Development warning"
-        default: credential.status.rawValue
-        }
+        credential.cardStatusText
     }
 
     private var statusIcon: String {

@@ -66,7 +66,7 @@ public struct AuditDigest: Codable, Equatable, Hashable, Sendable {
 
 public enum AuditPolicy: String, Codable, Sendable {
     case regulatedStrict
-    case oariProductionConsent
+    case productionConsent = "oariProductionConsent"
     case development
 }
 
