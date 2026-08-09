@@ -111,6 +111,7 @@ private struct WalletStartupSplash: View {
             Color("LaunchBackground").ignoresSafeArea()
             Image("OariMark")
                 .resizable()
+                .opacity(0.5)
                 .scaledToFit()
                 .frame(width: 180, height: 180)
                 .rotationEffect(.degrees(rotation))

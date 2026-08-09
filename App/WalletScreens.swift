@@ -734,7 +734,7 @@ struct WalletOnboardingView: View {
                         .accessibilityHidden(true)
 
                     VStack(spacing: OariSpacing.x2) {
-                        Text("Your identity. In your hands.")
+                        Text("Oari Digital Credentials Wallet")
                             .font(OariTypography.title)
                             .multilineTextAlignment(.center)
                         Text("Store and share digital credentials with clear consent every time.")

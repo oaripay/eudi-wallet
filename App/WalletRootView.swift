@@ -96,6 +96,7 @@ struct WalletPrivacyShield: View {
             Image("OariMark")
                 .resizable()
                 .scaledToFit()
+                .opacity(0.5)
                 .frame(width: 180, height: 180)
         }
         .contentShape(Rectangle())
