@@ -3,7 +3,7 @@
   "credentials": [
     {
       "format": "jwt_vc_json",
-      "types": ["VerifiableCredential", "ProvisionalOariLPID"]
+      "types": ["VerifiableCredential", "ExampleLegalPersonID"]
     }
   ],
   "grants": {

@@ -61,9 +61,9 @@ struct AuditModelsTests {
         }
     }
 
-    @Test("Renamed audit policy cases retain their persisted values")
-    func auditPolicyRawValueCompatibility() {
-        #expect(AuditPolicy.productionConsent.rawValue == "oariProductionConsent")
+    @Test("Audit policy uses a vendor-neutral serialized value")
+    func auditPolicyRawValue() {
+        #expect(AuditPolicy.productionConsent.rawValue == "productionConsent")
     }
 
     @Test("Every key purpose is explicit and serializable")

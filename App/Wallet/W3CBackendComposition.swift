@@ -6,7 +6,6 @@ import IdentityDomain
 /// revision paths while local HTTP compatibility stays Debug-only.
 struct W3CBackendComposition: Sendable {
     static let backendID = "openid4vc-w3c"
-    static let legacyBackendID = "oari-workspace-w3c"
     static let authorizationClientID = "io.oari.wallet"
     static let authorizationRedirectURI = URL(string: "https://oari.io/oauth/callback")!
     static let credentialModels = "VCDM 1.1, VCDM 2.0, SD-JWT VC"
@@ -34,6 +33,6 @@ struct W3CBackendComposition: Sendable {
     }
 
     static func ownsCredential(backendID: String?) -> Bool {
-        backendID == self.backendID || backendID == legacyBackendID
+        backendID == self.backendID
     }
 }

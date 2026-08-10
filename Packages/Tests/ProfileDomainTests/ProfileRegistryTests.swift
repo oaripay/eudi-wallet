@@ -50,8 +50,8 @@ struct ProfileRegistryTests {
         }
     }
 
-    @Test("Renamed trust policy cases retain their persisted values")
-    func trustPolicyRawValueCompatibility() {
-        #expect(TrustPolicyMode.productionConsent.rawValue == "oariProductionConsent")
+    @Test("Trust policy uses a vendor-neutral serialized value")
+    func trustPolicyRawValue() {
+        #expect(TrustPolicyMode.productionConsent.rawValue == "productionConsent")
     }
 }

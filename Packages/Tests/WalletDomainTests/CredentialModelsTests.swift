@@ -7,10 +7,10 @@ struct CredentialModelsTests {
     func independentCredentialState() throws {
         let createdAt = Date(timeIntervalSince1970: 1_700_000_000)
         let record = CredentialRecord(
-            configurationID: "provisionalOariLPID",
+            configurationID: "exampleLegalPersonID",
             displayName: "Legal person identity",
             format: .jwtVC,
-            profileID: "oari-development-v1",
+            profileID: "example-development-v1",
             issuerIdentifier: "did:ebsi:issuer",
             cryptographicValidity: .valid,
             issuerTrust: .untrusted,
@@ -29,8 +29,8 @@ struct CredentialModelsTests {
         #expect(decoded.issuerTrust == .untrusted)
         #expect(decoded.status == .indeterminate)
         #expect(decoded.legalClassification == .provisional)
-        #expect(decoded.legalClassification.rawValue == "oariProvisional")
-        #expect(LegalClassification.applicationCredential.rawValue == "oariCredential")
+        #expect(decoded.legalClassification.rawValue == "provisional")
+        #expect(LegalClassification.w3cCredential.rawValue == "w3cCredential")
     }
 
     @Test("Supported credential formats do not collapse into one representation")

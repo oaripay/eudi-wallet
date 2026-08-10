@@ -58,7 +58,7 @@ public struct EbsiCredentialProfile: Codable, Equatable, Identifiable, Sendable 
 
     public static func vcdm2JWTVC() throws -> EbsiCredentialProfile {
         try EbsiCredentialProfile(
-            id: "oari-ebsi-vcdm2-vc-jwt",
+            id: "ebsi-vcdm2-jwt-vc",
             dataModel: .v2_0,
             representation: .vcdm2Jwt,
             allowedAlgorithms: [.es256],

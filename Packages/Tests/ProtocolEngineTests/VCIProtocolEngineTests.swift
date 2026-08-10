@@ -8,7 +8,7 @@ struct VCIProtocolEngineTests {
     @Test("Offer parser supports authorization-code and pre-authorized grants")
     func offerParsing() throws {
         let auth = Data("""
-        {"credential_issuer":"https://issuer.example","credential_configuration_ids":["provisionalOariLPID"],"grants":{"authorization_code":{"authorization_server":"https://issuer.example"}}}
+        {"credential_issuer":"https://issuer.example","credential_configuration_ids":["exampleLegalPersonID"],"grants":{"authorization_code":{"authorization_server":"https://issuer.example"}}}
         """.utf8)
         guard case .authorizationCode = try CredentialOfferParser().parse(json: auth).grant else {
             Issue.record("Expected authorization grant")

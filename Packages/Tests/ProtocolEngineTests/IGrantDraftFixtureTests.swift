@@ -7,7 +7,7 @@ struct IGrantDraftFixtureTests {
     func draft13Offer() throws {
         let data = try fixture("igrant-vci-draft13")
         let offer = try IGrantDraftCredentialOfferParser().parse(json: data)
-        #expect(offer.configurationIDs == ["ProvisionalOariLPID"])
+        #expect(offer.configurationIDs == ["ExampleLegalPersonID"])
         guard case let .preAuthorizedCode(_, txCodeRequired) = offer.grant else {
             Issue.record("Expected pre-authorized grant")
             return

@@ -419,7 +419,7 @@ struct OpenID4VCW3CBackendTests {
             allowUntrusted: false,
             transactionCode: "123456"
         )
-        #expect(issued.first?.profileID == "oari-ebsi-vcdm2-vc-jwt")
+        #expect(issued.first?.profileID == "ebsi-vcdm2-jwt-vc")
         #expect(issued.first?.representation == .vcdm2Jwt)
     }
 
@@ -466,7 +466,7 @@ struct OpenID4VCW3CBackendTests {
             now: { Date(timeIntervalSince1970: 1_800_000_000) }
         )
         let offerJSON = """
-        {"credential_issuer":"https://issuer.example","credential_configuration_ids":["oari-v2"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":"pre-code","tx_code":{"input_mode":"numeric","length":6}}}}
+        {"credential_issuer":"https://issuer.example","credential_configuration_ids":["example-vcdm2-jwt-vc"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":"pre-code","tx_code":{"input_mode":"numeric","length":6}}}}
         """
         let encoded = offerJSON.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
         let offer = try await backend.resolveOffer(
@@ -486,7 +486,7 @@ struct OpenID4VCW3CBackendTests {
             transactionCode: "123456"
         )
         #expect(issued.count == 1)
-        #expect(issued.first?.configurationID == "oari-v2")
+        #expect(issued.first?.configurationID == "example-vcdm2-jwt-vc")
         #expect(issued.first?.displayName == "Legal Person ID")
         #expect(issued.first?.display?.backgroundColor == "#003366")
         #expect(issued.first?.display?.textColor == "#ffffff")
@@ -511,7 +511,7 @@ struct OpenID4VCW3CBackendTests {
             profile: try .vcdm2JWTVC(),
             trustEnvironment: .production
         )
-        let offerJSON = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["oari-v2"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":"pre-code","tx_code":{"input_mode":"numeric","length":6}}}}"#
+        let offerJSON = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["example-vcdm2-jwt-vc"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":"pre-code","tx_code":{"input_mode":"numeric","length":6}}}}"#
         let encoded = try #require(offerJSON.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed))
         let offer = try await backend.resolveOffer("openid-credential-offer://?credential_offer=\(encoded)")
         #expect(offer.trustOutcome == .allow)
@@ -532,7 +532,7 @@ struct OpenID4VCW3CBackendTests {
             profile: try .vcdm2JWTVC(),
             trustEnvironment: .production
         )
-        let offerJSON = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["oari-v2"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":"pre-code","tx_code":{"input_mode":"numeric","length":6}}}}"#
+        let offerJSON = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["example-vcdm2-jwt-vc"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":"pre-code","tx_code":{"input_mode":"numeric","length":6}}}}"#
         let encoded = try #require(offerJSON.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed))
         let offer = try await backend.resolveOffer("openid-credential-offer://?credential_offer=\(encoded)")
 
@@ -581,7 +581,7 @@ struct OpenID4VCW3CBackendTests {
             profile: try .vcdm2JWTVC(),
             presentationRequestValidator: FixturePresentationRequestValidator()
         )
-        let json = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["oari-v2"],"grants":{"authorization_code":{"issuer_state":"issuer-state"}}}"#
+        let json = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["example-vcdm2-jwt-vc"],"grants":{"authorization_code":{"issuer_state":"issuer-state"}}}"#
         let encoded = json.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
         let offer = try await backend.resolveOffer("openid-credential-offer://?credential_offer=\(encoded)")
         #expect(offer.authorizationRequired)
@@ -687,7 +687,7 @@ struct OpenID4VCW3CBackendTests {
             profile: try .vcdm2JWTVC(),
             presentationRequestValidator: FixturePresentationRequestValidator()
         )
-        let json = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["oari-v2"],"grants":{"authorization_code":{"issuer_state":"issuer-state"}}}"#
+        let json = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["example-vcdm2-jwt-vc"],"grants":{"authorization_code":{"issuer_state":"issuer-state"}}}"#
         let encoded = json.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
         let offer = try await backend.resolveOffer("openid-credential-offer://?credential_offer=\(encoded)")
         let challenge = try await backend.beginPresentationRequired(
@@ -956,7 +956,7 @@ struct OpenID4VCW3CBackendTests {
             "credentialSubject": ["id": holder, "given_name": "Ada", "family_name": "Lovelace"],
         ])
         let stored = StoredEbsiCredential(
-            profileID: "oari-ebsi-vcdm2-vc-jwt",
+            profileID: "ebsi-vcdm2-jwt-vc",
             representation: .vcdm2Jwt,
             rawCredential: Data(credential.utf8),
             holderKeyReference: key.id.rawValue.uuidString
@@ -1049,7 +1049,7 @@ struct OpenID4VCW3CBackendTests {
             "credentialSubject": ["id": holder, "given_name": "Ada", "family_name": "Lovelace"],
         ])
         let stored = StoredEbsiCredential(
-            profileID: "oari-ebsi-vcdm2-vc-jwt",
+            profileID: "ebsi-vcdm2-jwt-vc",
             representation: .vcdm2Jwt,
             rawCredential: Data(credential.utf8),
             holderKeyReference: key.id.rawValue.uuidString
@@ -1301,7 +1301,7 @@ struct OpenID4VCW3CBackendTests {
     @Test("Stored W3C credential deletion is idempotent")
     func storedCredentialDeletion() async throws {
         let credential = StoredEbsiCredential(
-            profileID: "oari-ebsi-vcdm2-vc-jwt",
+            profileID: "ebsi-vcdm2-jwt-vc",
             representation: .vcdm2Jwt,
             rawCredential: Data("credential".utf8),
             holderKeyReference: UUID().uuidString
@@ -1384,7 +1384,7 @@ struct OpenID4VCW3CBackendTests {
     private static func authorizationOffer(
         _ backend: OpenID4VCW3CBackend
     ) async throws -> ResolvedOpenID4VCCredentialOffer {
-        let json = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["oari-v2"],"grants":{"authorization_code":{"issuer_state":"issuer-state"}}}"#
+        let json = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["example-vcdm2-jwt-vc"],"grants":{"authorization_code":{"issuer_state":"issuer-state"}}}"#
         let encoded = try #require(json.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed))
         return try await backend.resolveOffer("openid-credential-offer://?credential_offer=\(encoded)")
     }
@@ -1710,10 +1710,10 @@ private actor FixtureOpenID4VCTransport: OpenID4VCHTTPTransport {
         let response: String
         switch url.path {
         case "/offer":
-            response = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["oari-v2"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":"pre-code","tx_code":{"input_mode":"numeric","length":6}}}}"#
+            response = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["example-vcdm2-jwt-vc"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":"pre-code","tx_code":{"input_mode":"numeric","length":6}}}}"#
         case "/.well-known/openid-credential-issuer":
             response = """
-            {"credential_endpoint":"https://issuer.example/credential","authorization_servers":["https://issuer.example"],"credential_configurations_supported":{"oari-v2":{"format":"\(credentialFormat)","display":[{"name":"Legal Person ID","locale":"en","description":"Legal person credential","background_color":"#003366","text_color":"#ffffff","logo":{"uri":"https://assets.example/logo.png","alt_text":"Issuer mark"},"background_image":{"uri":"https://assets.example/background.png"}}]}}}
+            {"credential_endpoint":"https://issuer.example/credential","authorization_servers":["https://issuer.example"],"credential_configurations_supported":{"example-vcdm2-jwt-vc":{"format":"\(credentialFormat)","display":[{"name":"Legal Person ID","locale":"en","description":"Legal person credential","background_color":"#003366","text_color":"#ffffff","logo":{"uri":"https://assets.example/logo.png","alt_text":"Issuer mark"},"background_image":{"uri":"https://assets.example/background.png"}}]}}}
             """
         case "/.well-known/oauth-authorization-server":
             response = #"{"authorization_challenge_endpoint":"https://issuer.example/authorize-challenge","token_endpoint":"https://issuer.example/token"}"#

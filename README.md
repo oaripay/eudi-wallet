@@ -28,10 +28,6 @@ Packages/Tests/      Package-level tests
 OariWallet.xcodeproj Generated Xcode project
 ```
 
-The adjacent `workspace/` project is a separate issuer, verifier, and portal
-counterpart. Wallet changes must not modify it unless a task explicitly includes
-the workspace.
-
 ## Backends
 
 ### EUDI Wallet Kit
@@ -44,14 +40,13 @@ application metadata, redacted audit, lifecycle UI, and recovery coordination.
 
 The native W3C backend owns W3C credentials and stores them encrypted locally.
 It supports OpenID4VCI and OpenID4VP interoperability, EBSI DID resolution,
-VCDM 1.1, VCDM 2.0, SD-JWT VC, and selected legacy issuance profiles. SpruceKit
-is not used by the app.
+VCDM 1.1, VCDM 2.0, SD-JWT VC, and selected legacy issuance profiles.
 
 The W3C backend uses one persistent canonical holder `did:key`. DPoP,
 credential-response encryption, attestation, and EUDI Wallet Kit keys remain
 separate because they have different protocol and lifecycle responsibilities.
 
-## Supported development flows
+## Supported flows
 
 - EUDI mdoc and SD-JWT VC issuance and presentation through the official EUDI
   Wallet Kit.
@@ -177,23 +172,6 @@ xcodegen generate
 
 `ReleaseTesting` is run once per completed milestone with a reused DerivedData
 directory rather than after every edit.
-
-## Xcode troubleshooting
-
-An interrupted or overlapping build can leave Xcode's `XCBuildData/build.db`
-inconsistent, especially while compiling the `CopyablePlugin` package macro.
-Typical messages include `unexpected incomplete target` or a malformed macro
-plugin response.
-
-First ensure no other build is running, then clean the project:
-
-```sh
-xcodebuild -project OariWallet.xcodeproj -scheme OariWallet clean
-```
-
-If Xcode still reports the stale operation, close Xcode, remove only this
-project's `OariWallet-*` DerivedData directory, reopen the project, and build
-again. Do not run multiple builds against the same DerivedData database.
 
 ## Known limitations
 

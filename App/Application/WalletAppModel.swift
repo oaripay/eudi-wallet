@@ -720,7 +720,7 @@ final class WalletAppModel: ObservableObject {
                 profileID: await eudiWallet.profileID,
                 selectedConfigurationIDs: selectedIssuanceConfigurationIDs,
                 transactionCode: transactionCode,
-                promptMessage: "Authenticate to add this credential to OARI Wallet"
+                promptMessage: "Authenticate to add this credential to Oari Wallet"
             )
             try await refreshWalletState()
             if let pending = result.pendingIssuances.first {

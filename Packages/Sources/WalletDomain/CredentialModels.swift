@@ -45,8 +45,8 @@ public enum LegalClassification: String, Codable, Sendable {
     case eudiPID
     case eudiAttestation
     case ebsiAttestation
-    case provisional = "oariProvisional"
-    case applicationCredential = "oariCredential"
+    case provisional
+    case w3cCredential
     case unclassified
 }
 

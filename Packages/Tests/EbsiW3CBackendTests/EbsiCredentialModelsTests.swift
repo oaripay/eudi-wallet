@@ -6,7 +6,7 @@ import Testing
 
 struct EbsiCredentialModelsTests {
     @Test("VCDM2 VC JWT profile parses top-level credential and ES256")
-    func oariVcdm2JWT() throws {
+    func vcdm2JWT() throws {
         let profile = try EbsiCredentialProfile.vcdm2JWTVC()
         let token = try compactJWT(
             header: ["alg": "ES256", "typ": "vc+jwt"],

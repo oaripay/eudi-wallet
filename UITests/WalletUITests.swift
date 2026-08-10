@@ -19,8 +19,8 @@ final class WalletUITests: XCTestCase {
     func testPopulatedWalletAndHistory() {
         let app = launch(fixture: "populated")
 
-        XCTAssertTrue(app.staticTexts["OARI Legal Person ID"].waitForExistence(timeout: 5))
-        XCTAssertTrue(element(app, "wallet.credential.provisionalOariLPID").exists)
+        XCTAssertTrue(app.staticTexts["Example Legal Person ID"].waitForExistence(timeout: 5))
+        XCTAssertTrue(element(app, "wallet.credential.exampleLegalPersonID").exists)
         app.tabBars.buttons["History"].tap()
         XCTAssertTrue(app.staticTexts["Issuance"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.staticTexts["Completed"].exists)
@@ -28,7 +28,7 @@ final class WalletUITests: XCTestCase {
 
     func testCredentialDetailExplainsUnavailableOperations() {
         let app = launch(fixture: "populated")
-        let credential = element(app, "wallet.credential.provisionalOariLPID")
+        let credential = element(app, "wallet.credential.exampleLegalPersonID")
         XCTAssertTrue(credential.waitForExistence(timeout: 5))
         credential.tap()
         XCTAssertTrue(app.navigationBars["Credential details"].waitForExistence(timeout: 2))

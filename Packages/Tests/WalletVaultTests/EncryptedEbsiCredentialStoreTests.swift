@@ -11,7 +11,7 @@ struct EncryptedEbsiCredentialStoreTests {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let keyStore = StaticVaultKeyStore(key: SymmetricKey(size: .bits256))
         let credential = StoredEbsiCredential(
-            profileID: "oari-ebsi-vcdm2-vc-jwt",
+            profileID: "ebsi-vcdm2-jwt-vc",
             representation: .vcdm2Jwt,
             rawCredential: Data("header.payload.signature".utf8),
             holderKeyReference: "ebsi-holder-key-1",

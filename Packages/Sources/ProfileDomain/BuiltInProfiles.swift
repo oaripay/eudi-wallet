@@ -2,7 +2,7 @@ import Foundation
 import WalletDomain
 
 public enum BuiltInProfiles {
-    public static let vcdm2OpenID4VCProfileID = ProfileID(rawValue: "oari-development-final-1")
+    public static let vcdm2OpenID4VCProfileID = ProfileID(rawValue: "openid4vc-final-vcdm2-jwt-vc-ebsi-1")
     public static let iGrantDraftCompatibilityID = ProfileID(rawValue: "igrant-d13-d18-compatibility-1")
 
     public static func vcdm2OpenID4VCProfile(checkedOn: Date) -> InteroperabilityProfile {

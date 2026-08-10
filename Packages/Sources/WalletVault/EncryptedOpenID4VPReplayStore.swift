@@ -7,7 +7,7 @@ import Foundation
 /// A single encrypted document contains each request-digest/nonce-digest pair, so
 /// accepting either value is committed atomically with accepting the other.
 public actor EncryptedOpenID4VPReplayStore: OpenID4VPReplayProtecting {
-    private static let authenticatedContext = Data("oari.workspace-presentation-replay.v1".utf8)
+    private static let authenticatedContext = Data("oari.presentation-replay.v1".utf8)
 
     private struct Record: Codable, Sendable {
         let requestDigest: String
@@ -31,7 +31,7 @@ public actor EncryptedOpenID4VPReplayStore: OpenID4VPReplayProtecting {
     ) throws {
         files = ProtectedFileStore(directory: directory)
         cipher = VaultCipher(keyStore: keyStore)
-        file = directory.appendingPathComponent("workspace-presentation-replay", isDirectory: false)
+        file = directory.appendingPathComponent("presentation-replay", isDirectory: false)
         self.maximumEntries = max(1, maximumEntries)
         self.maximumRetention = max(1, maximumRetention)
         try files.prepare()

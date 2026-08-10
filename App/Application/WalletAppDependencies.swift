@@ -160,7 +160,7 @@ struct WalletAppDependencies: Sendable {
         let resolver = CompositeDIDResolver(ebsi: EBSIDIDResolver(client: registryClient))
         let keyProvider = DeviceBoundKeyProvider(applicationTagPrefix: "io.oari.wallet.ebsi.key")
         let replayProtection = try EncryptedOpenID4VPReplayStore(
-            directory: root.appendingPathComponent("workspace-presentation-replay", isDirectory: true),
+            directory: root.appendingPathComponent("presentation-replay", isDirectory: true),
             keyStore: keyStore
         )
         let backend = OpenID4VCW3CBackend(
@@ -212,10 +212,10 @@ struct WalletAppDependencies: Sendable {
     private static func populatedFixture() -> WalletAppDependencies {
         let date = Date(timeIntervalSince1970: 1_754_524_800)
         let record = CredentialRecord(
-            configurationID: "provisionalOariLPID",
-            displayName: "OARI Legal Person ID",
+            configurationID: "exampleLegalPersonID",
+            displayName: "Example Legal Person ID",
             format: .jwtVC,
-            profileID: "oari-development-final-1",
+            profileID: "openid4vc-final-vcdm2-jwt-vc-ebsi-1",
             issuerIdentifier: "did:ebsi:fixture-issuer",
             cryptographicValidity: .valid,
             issuerTrust: .trusted,

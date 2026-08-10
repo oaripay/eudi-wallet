@@ -633,9 +633,9 @@ struct WalletAppModelTests {
     func w3cCredentialDeletion() async {
         let backendID = UUID()
         let record = CredentialRecord(
-            configurationID: "oari-v2", backendID: W3CBackendComposition.legacyBackendID,
+            configurationID: "example-vcdm2-jwt-vc", backendID: W3CBackendComposition.backendID,
             backendDocumentID: backendID.uuidString, displayName: "Legal Person ID",
-            format: .jwtVC, profileID: "oari-openID4VC-vcdm2-vc-jwt",
+            format: .jwtVC, profileID: "openid4vc-final-vcdm2-jwt-vc-ebsi-1",
             issuerIdentifier: "https://issuer.example", createdAt: Date()
         )
         let service = FixtureOpenID4VCWallet(outcome: .allow)
@@ -1034,7 +1034,7 @@ private actor FixtureOpenID4VCWallet: OpenID4VCOperating {
             transactionCodeRequired: true,
             transactionCodeLength: 6,
             transactionCodeDescription: "Enter test PIN",
-            configurationIDs: ["oari-v2"], authorizationRequired: true,
+            configurationIDs: ["example-vcdm2-jwt-vc"], authorizationRequired: true,
             representations: ["application/vc+jwt"], credentialDisplay: [:]
         )
     }

@@ -50,7 +50,7 @@ public enum TrustSourceKind: String, Codable, CaseIterable, Hashable, Sendable {
 
 public enum TrustPolicyMode: String, Codable, Sendable {
     case regulatedStrict
-    case productionConsent = "oariProductionConsent"
+    case productionConsent
     case development
 }
 
