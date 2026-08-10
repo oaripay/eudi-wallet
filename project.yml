@@ -44,7 +44,7 @@ targets:
     sources:
       - path: App
     resources:
-      - path: App/PrivacyInfo.xcprivacy
+      - path: App/Resources/PrivacyInfo.xcprivacy
     dependencies:
       - package: OariWalletModules
         product: WalletDomain
@@ -59,7 +59,7 @@ targets:
       - package: OariWalletModules
         product: EbsiW3CBackend
     info:
-      path: App/Info.plist
+      path: App/Resources/Info.plist
       properties:
         CFBundleDisplayName: Oari Wallet
         CFBundleShortVersionString: "0.1.1"
@@ -74,7 +74,7 @@ targets:
           - UIInterfaceOrientationPortrait
         NSFaceIDUsageDescription: Authenticate before sharing credentials or approving sensitive wallet actions.
         NSCameraUsageDescription: Scan credential offers and presentation requests.
-        NSBluetoothAlwaysUsageDescription: OARI Wallet uses Bluetooth to securely exchange mobile documents with nearby devices during wallet presentations.
+        NSBluetoothAlwaysUsageDescription: Oari Wallet uses Bluetooth to securely exchange mobile documents with nearby devices during wallet presentations.
         ITSAppUsesNonExemptEncryption: false
         CFBundleURLTypes:
           - CFBundleURLName: io.oari.wallet.openid4vp
@@ -99,8 +99,7 @@ targets:
         SWIFT_MODULE_NAME: OariWallet
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
-        CODE_SIGN_ENTITLEMENTS: App/OariWallet.entitlements
-        DEVELOPMENT_ASSET_PATHS: '"App/Preview Content"'
+        CODE_SIGN_ENTITLEMENTS: App/Resources/OariWallet.entitlements
         ENABLE_PREVIEWS: YES
         GENERATE_INFOPLIST_FILE: NO
         SUPPORTS_MACCATALYST: NO

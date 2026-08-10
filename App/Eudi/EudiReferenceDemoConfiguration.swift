@@ -16,32 +16,16 @@ enum EudiReferenceDemoConfiguration {
     static let redirectURI = URL(string: "eu.europa.ec.euidi://authorization")!
     static let walletProviderURL = URL(string: "https://wallet-provider.eudiw.dev")!
     static let verifierURL = URL(string: "https://verifier.eudiw.dev")!
-    static let certificateResourceNames = [
-        "pidissuerca02_cz", "pidissuerca02_ee", "pidissuerca02_eu",
-        "pidissuerca02_lu", "pidissuerca02_nl", "pidissuerca02_pt",
-        "pidissuerca02_ut", "r45_staging",
-    ]
 
     struct WalletConfiguration {
         let baseline: EudiWalletKitBaseline
-        let trustSource: EudiTrustAnchorSource
     }
 
     static func makeWalletConfiguration(
-        bundle: Bundle = .main,
         attestationProvider: any EudiWalletAttestationProviding
     ) throws -> WalletConfiguration {
-        let certificates = try loadCertificates(bundle: bundle)
-        let trustSource = try EudiTrustAnchorSource(
-            profileID: profileID,
-            anchors: certificates,
-            approvedSHA256Digests: Set(certificates.map(EudiTrustAnchorSource.sha256Digest))
-        )
         let trustConfiguration = TrustConfiguration(
             trustSource: .etsi(.eudiRef),
-            fallbackTrustSource: .staticList(
-                StaticListTrustSource(rootCertificates: certificates)
-            ),
             defaultPolicy: .warning,
             requireSignedMetadata: true,
             statusTrustPolicy: .warning,
@@ -79,21 +63,8 @@ enum EudiReferenceDemoConfiguration {
                 clientIdSchemes: [.x509SanDns, .x509Hash]
             )
         )
-        return WalletConfiguration(baseline: baseline, trustSource: trustSource)
+        return WalletConfiguration(baseline: baseline)
     }
-
-    private static func loadCertificates(bundle: Bundle) throws -> [Data] {
-        try certificateResourceNames.map { name in
-            let url = bundle.url(forResource: name, withExtension: "der", subdirectory: "ReferenceDemoCertificates")
-                ?? bundle.url(forResource: name, withExtension: "der")
-            guard let url else { throw EudiReferenceDemoConfigurationError.missingCertificate(name) }
-            return try Data(contentsOf: url, options: [.mappedIfSafe])
-        }
-    }
-}
-
-enum EudiReferenceDemoConfigurationError: Error, Equatable {
-    case missingCertificate(String)
 }
 
 struct ReferenceDemoWalletAttestationsProvider: EudiWalletAttestationProviding {

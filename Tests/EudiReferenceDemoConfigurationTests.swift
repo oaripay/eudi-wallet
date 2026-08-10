@@ -15,17 +15,11 @@ struct EudiReferenceDemoConfigurationTests {
             "https://issuer.eudiw.dev",
             "https://issuer-backend.eudiw.dev",
         ])
-        #expect(EudiReferenceDemoConfiguration.certificateResourceNames == [
-            "pidissuerca02_cz", "pidissuerca02_ee", "pidissuerca02_eu",
-            "pidissuerca02_lu", "pidissuerca02_nl", "pidissuerca02_pt",
-            "pidissuerca02_ut", "r45_staging",
-        ])
     }
 
     @Test("Reference demo composes exact VCI, VP, key, and trust policies")
     func exactWalletKitConfiguration() throws {
         let demo = try EudiReferenceDemoConfiguration.makeWalletConfiguration(
-            bundle: .main,
             attestationProvider: ConfigurationAttestationProvider()
         )
         let baseline = demo.baseline

@@ -106,7 +106,7 @@ struct WalletAppDependencies: Sendable {
                             allowUnregisteredDevelopmentCounterparties: true
                         )
                         let adapter = try demo.baseline.makeWallet(
-                            trustSource: demo.trustSource,
+                            trustProfileID: EudiReferenceDemoConfiguration.profileID,
                             operationalConfiguration: operationalConfiguration
                         )
                         Self.eudiLogger.info(

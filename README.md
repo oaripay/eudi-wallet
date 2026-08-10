@@ -60,8 +60,7 @@ separate because they have different protocol and lifecycle responsibilities.
   - Verifier: `verifier.eudiw.dev`.
   - Wallet Provider: `wallet-provider.eudiw.dev`.
   - Wallet Kit `0.39.1`, OpenID4VCI `0.53.0`, and OpenID4VP `0.41.0`.
-  - ETSI reference trust lists with static certificate fallback and warning-mode
-    ecosystem trust.
+   - Online ETSI reference trust lists with warning-mode ecosystem trust.
 - HAIP and EUDI scheme routing:
   - `haip-vci`
   - `haip-vp`

@@ -77,10 +77,37 @@ public struct EudiWalletKitBaseline: Sendable {
         let effectiveTrustConfiguration = derivesTrustConfigurationFromSource
             ? Self.compatibilityTrustConfiguration(anchors: anchors)
             : trustConfiguration
+        return try makeWallet(
+            trustConfiguration: effectiveTrustConfiguration,
+            trustProfileID: trustSource.profileID,
+            operationalConfiguration: operationalConfiguration
+        )
+    }
+
+    public func makeWallet(
+        trustProfileID: String,
+        operationalConfiguration: EudiOperationalConfiguration? = nil
+    ) throws -> EudiWalletKitAdapter {
+        guard !derivesTrustConfigurationFromSource,
+              !trustProfileID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw EudiWalletKitAdapterError.invalidTrustSource
+        }
+        return try makeWallet(
+            trustConfiguration: trustConfiguration,
+            trustProfileID: trustProfileID,
+            operationalConfiguration: operationalConfiguration
+        )
+    }
+
+    private func makeWallet(
+        trustConfiguration: TrustConfiguration,
+        trustProfileID: String,
+        operationalConfiguration: EudiOperationalConfiguration?
+    ) throws -> EudiWalletKitAdapter {
         do {
             let wallet = try EudiWallet(
                 eudiWalletConfig: walletConfiguration(),
-                trustConfig: effectiveTrustConfiguration,
+                trustConfig: trustConfiguration,
                 openID4VpConfig: presentationConfiguration(),
                 openID4VciConfigurations: openID4VciConfigurations,
                 networking: operationalConfiguration.map(EudiNetworkingBridge.init)
@@ -88,7 +115,7 @@ public struct EudiWalletKitBaseline: Sendable {
             return EudiWalletKitAdapter(
                 wallet: wallet,
                 operationalConfiguration: operationalConfiguration,
-                trustProfileID: trustSource.profileID
+                trustProfileID: trustProfileID
             )
         } catch {
             throw EudiWalletKitAdapterError.initializationFailed
