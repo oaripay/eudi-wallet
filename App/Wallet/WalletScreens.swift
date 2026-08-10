@@ -468,6 +468,11 @@ struct WalletScannerView: View {
     @State private var isCameraPresented = false
     @FocusState private var inputFocused: Bool
 
+    private var primaryActionTitle: String {
+        let trimmed = model.scanInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.lowercased().hasPrefix("openid4vp://") ? "Interact" : "Redeem"
+    }
+
     var body: some View {
         NavigationStack {
             OariScreen {
@@ -486,7 +491,7 @@ struct WalletScannerView: View {
                             .accessibilityIdentifier("scanner.input")
                             .focused($inputFocused)
                             .onSubmit { inputFocused = false }
-                        Button("Redeem") {
+                        Button(primaryActionTitle) {
                             inputFocused = false
                             Task { await model.reviewScannedRequest() }
                         }
