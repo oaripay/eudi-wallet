@@ -9,6 +9,9 @@ struct W3CBackendComposition: Sendable {
     static let legacyBackendID = "oari-workspace-w3c"
     static let authorizationClientID = "io.oari.wallet"
     static let authorizationRedirectURI = URL(string: "https://oari.io/oauth/callback")!
+    static let credentialModels = "VCDM 1.1, VCDM 2.0, SD-JWT VC"
+    static let issuanceProfiles = "Final, Draft 13/17/18"
+    static let presentationProfile = "DID, DCQL, direct_post"
 
     let endpoint: EBSIChainEndpoint
     let environmentPolicy: EBSIEnvironmentPolicy

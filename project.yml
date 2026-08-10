@@ -62,7 +62,7 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Oari Wallet
-        CFBundleShortVersionString: "0.1.0"
+        CFBundleShortVersionString: "0.1.1"
         CFBundleVersion: "1"
         UILaunchScreen:
           UIColorName: LaunchBackground
@@ -83,6 +83,13 @@ targets:
           - CFBundleURLName: io.oari.wallet.openid4vci
             CFBundleURLSchemes:
               - openid-credential-offer
+          - CFBundleURLName: io.oari.wallet.eudi
+            CFBundleURLSchemes:
+              - haip-vci
+              - haip-vp
+              - eudi-openid4vp
+              - mdoc-openid4vp
+              - eu.europa.ec.euidi
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.oari.wallet

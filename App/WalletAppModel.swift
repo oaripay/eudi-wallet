@@ -38,16 +38,19 @@ final class WalletAppModel: ObservableObject {
     @Published private(set) var eudiFlow: EudiFlow = .idle
     @Published var selectedIssuanceConfigurationIDs: Set<String> = []
     @Published var selectedClaimIDs: Set<String> = []
-    @Published var transactionCode = ""
     @Published var selectedCredential: CredentialRecord?
     @Published private(set) var walletDocumentSummaries: [String: EudiWalletDocumentSummary] = [:]
     @Published private(set) var credentialActionState: CredentialActionState = .idle
     @Published var showsOnboarding: Bool
     @Published private(set) var eudiAvailability: EudiWalletAvailability = .configurationRequired("Loading wallet profile…")
+    @Published private(set) var isEudiOperationLoading = false
     @Published var openID4VCTrustWarning: EbsiTrustWarning?
     private var openID4VCTransactionCode = ""
     private let allowedHosts: Set<String>
     private var eudiWallet: (any EudiWalletOperating)?
+    private var eudiInitializationTask: Task<EudiInitializationResult, Never>?
+    private var hasLoadedEudiStartupSnapshot = false
+    private var activeEudiWaitID: UUID?
     private var openID4VCWallet: (any OpenID4VCOperating)?
     private var activeOpenID4VCInteractionID: UUID?
     private var activeOpenID4VPPresentationRequest: OpenID4VPPresentationRequest?
@@ -199,14 +202,113 @@ final class WalletAppModel: ObservableObject {
                     eudiFlow = .configurationRequired(message)
                 }
             }
+            loadingState = .loaded
+            if let initializer = dependencies.eudiInitializer {
+                startEudiInitialization(using: initializer)
+            }
             if isAppLockEnabled {
-                await unlockApp()
+                Task { await unlockApp() }
+                await Task.yield()
             } else if !showsOnboarding && !hasCompletedAppLockSetup {
                 showsAppLockSetup = true
             }
-            loadingState = .loaded
         } catch {
             loadingState = .failed("Wallet setup failed: \(Self.setupErrorMessage(error))")
+        }
+    }
+
+    private func startEudiInitialization(using initializer: @escaping WalletAppDependencies.EudiInitializer) {
+        guard eudiInitializationTask == nil, eudiWallet == nil else { return }
+        let task = Task { await initializer() }
+        eudiInitializationTask = task
+        Task {
+            let result = await task.value
+            await finishEudiInitialization(result)
+        }
+    }
+
+    private func finishEudiInitialization(_ result: EudiInitializationResult) async {
+        guard eudiWallet == nil else { return }
+        switch result {
+        case let .success(wallet):
+            eudiWallet = wallet
+            eudiAvailability = .available
+            eudiInitializationTask = nil
+            await loadEudiStartupSnapshot(from: wallet)
+        case let .failure(message):
+            eudiInitializationTask = nil
+            eudiAvailability = .configurationRequired("EUDI Reference Demo is unavailable: \(message)")
+        }
+    }
+
+    private func loadEudiStartupSnapshot(from wallet: any EudiWalletOperating) async {
+        guard !hasLoadedEudiStartupSnapshot else { return }
+        hasLoadedEudiStartupSnapshot = true
+        do {
+            let snapshot = try await wallet.loadStartupSnapshot()
+            if !snapshot.metadata.isEmpty { credentials = snapshot.metadata }
+            walletDocumentSummaries = Dictionary(
+                uniqueKeysWithValues: snapshot.documents.map { ($0.id, $0) }
+            )
+            if let pending = snapshot.pendingIssuances.first {
+                activePendingIssuanceID = pending.id
+                activePendingIssuance = pending
+                if case .configurationRequired = eudiFlow { eudiFlow = .pending(pending) }
+            } else if case .configurationRequired = eudiFlow {
+                eudiFlow = .idle
+            }
+        } catch {
+            // The service remains usable for new requests when an existing
+            // document snapshot cannot be loaded.
+        }
+    }
+
+    private func requireEudiWallet() async throws -> any EudiWalletOperating {
+        if let eudiWallet { return eudiWallet }
+        guard let task = eudiInitializationTask else {
+            throw EudiReadinessError.unavailable
+        }
+        let waitID = UUID()
+        activeEudiWaitID = waitID
+        isEudiOperationLoading = true
+        Task {
+            try? await Task.sleep(for: .seconds(15))
+            guard activeEudiWaitID == waitID else { return }
+            activeEudiWaitID = nil
+            isEudiOperationLoading = false
+            eudiFlow = .failed("EUDI Wallet Kit is taking longer than expected. Try the request again.")
+        }
+        let result = await task.value
+        guard activeEudiWaitID == waitID else { throw EudiReadinessError.timedOut }
+        activeEudiWaitID = nil
+        isEudiOperationLoading = false
+        switch result {
+        case let .success(wallet):
+            if eudiWallet == nil {
+                eudiWallet = wallet
+                eudiAvailability = .available
+                eudiInitializationTask = nil
+                Task { await loadEudiStartupSnapshot(from: wallet) }
+            }
+            return wallet
+        case let .failure(message):
+            eudiInitializationTask = nil
+            eudiAvailability = .configurationRequired("EUDI Reference Demo is unavailable: \(message)")
+            throw EudiReadinessError.initializationFailed(message)
+        }
+    }
+
+    private enum EudiReadinessError: LocalizedError {
+        case unavailable
+        case timedOut
+        case initializationFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .unavailable: "EUDI Reference Demo is unavailable."
+            case .timedOut: "EUDI Wallet Kit is taking longer than expected. Try the request again."
+            case let .initializationFailed(message): "EUDI Reference Demo initialization failed: \(message)"
+            }
         }
     }
 
@@ -354,6 +456,9 @@ final class WalletAppModel: ObservableObject {
             switch try ProtocolInputClassifier(allowedHosts: allowedHosts).classify(scanInput) {
             case .openID4VP: scanResult = .presentation
             case .openID4VCI: scanResult = .issuance
+            case .eudiOpenID4VP: scanResult = .presentation
+            case .eudiOpenID4VCI: scanResult = .issuance
+            case .eudiAuthorizationCallback: scanResult = .idle
             case .unsupported: scanResult = .unsupported
             }
         } catch {
@@ -362,6 +467,10 @@ final class WalletAppModel: ObservableObject {
     }
 
     func handleIncomingURL(_ url: URL) {
+        // This scheme is reserved for Wallet Kit's authorization-session
+        // callback. Even a malformed or stale callback must never be surfaced
+        // to the user as a scanner request.
+        guard url.scheme?.lowercased() != "eu.europa.ec.euidi" else { return }
         handleScannedCode(url.absoluteString)
     }
 
@@ -378,9 +487,17 @@ final class WalletAppModel: ObservableObject {
     func reviewScannedRequest() async {
         classifyScan()
         do {
-            switch scanResult {
-            case .issuance:
+            let route = try ProtocolInputClassifier(allowedHosts: allowedHosts).classify(scanInput)
+            switch route {
+            case .openID4VCI, .eudiOpenID4VCI:
                 eudiFlow = .working("Checking the issuer and credential offer…")
+                if case .eudiOpenID4VCI = route {
+                    let eudiWallet = try await requireEudiWallet()
+                    let offer = try await eudiWallet.resolveIssuanceOffer(uri: scanInput)
+                    selectedIssuanceConfigurationIDs = Set(offer.documents.map(\.configurationID))
+                    eudiFlow = .issuanceReview(offer)
+                    return
+                }
                 var w3cRoutingError: Error?
                 if let openID4VCWallet {
                     do {
@@ -408,7 +525,6 @@ final class WalletAppModel: ObservableObject {
                     do {
                         let offer = try await eudiWallet.resolveIssuanceOffer(uri: scanInput)
                         selectedIssuanceConfigurationIDs = Set(offer.documents.map(\.configurationID))
-                        transactionCode = ""
                         eudiFlow = .issuanceReview(offer)
                     } catch {
                         throw w3cRoutingError
@@ -421,15 +537,16 @@ final class WalletAppModel: ObservableObject {
                     }
                     let offer = try await eudiWallet.resolveIssuanceOffer(uri: scanInput)
                     selectedIssuanceConfigurationIDs = Set(offer.documents.map(\.configurationID))
-                    transactionCode = ""
                     eudiFlow = .issuanceReview(offer)
                 }
                 // W3C resolved the offer and owns the remaining issuance flow.
                 return
-            case .presentation:
+            case .openID4VP, .eudiOpenID4VP:
                 eudiFlow = .working("Checking the verifier and requested claims…")
                 activePendingIssuanceID = nil
-                if let openID4VCWallet {
+                let isEudiOwned: Bool
+                if case .eudiOpenID4VP = route { isEudiOwned = true } else { isEudiOwned = false }
+                if !isEudiOwned, let openID4VCWallet {
                     do {
                         let request = try await openID4VCWallet.beginPresentation(uri: scanInput)
                         activeOpenID4VCInteractionID = request.id
@@ -441,13 +558,11 @@ final class WalletAppModel: ObservableObject {
                         // Non-W3C presentation formats are owned by Wallet Kit.
                     }
                 }
-                guard isEudiOperational, let eudiWallet else {
-                    throw EbsiCredentialError.backendUnavailable
-                }
+                let eudiWallet = try await requireEudiWallet()
                 let request = try await eudiWallet.beginOpenID4VPPresentation(requestURI: scanInput)
                 selectedClaimIDs = Set(request.claims.filter(\.required).map(\.id))
                 eudiFlow = .presentationConsent(request)
-            case .idle, .unsupported, .rejected:
+            case .eudiAuthorizationCallback, .unsupported:
                 break
             }
         } catch {
@@ -593,7 +708,7 @@ final class WalletAppModel: ObservableObject {
         }
     }
 
-    func acceptIssuance() async {
+    func acceptIssuance(transactionCode: String?) async {
         guard isEudiOperational, case let .issuanceReview(offer) = eudiFlow, let eudiWallet else {
             eudiFlow = .configurationRequired(eudiConfigurationMessage)
             return
@@ -602,9 +717,9 @@ final class WalletAppModel: ObservableObject {
         do {
             let result = try await eudiWallet.issueResolvedOffer(
                 id: offer.id,
-                profileID: "eudi-final-1",
+                profileID: await eudiWallet.profileID,
                 selectedConfigurationIDs: selectedIssuanceConfigurationIDs,
-                transactionCode: transactionCode.isEmpty ? nil : transactionCode,
+                transactionCode: transactionCode,
                 promptMessage: "Authenticate to add this credential to OARI Wallet"
             )
             try await refreshWalletState()
@@ -774,7 +889,6 @@ final class WalletAppModel: ObservableObject {
         selectedTab = .wallet
         selectedIssuanceConfigurationIDs = []
         selectedClaimIDs = []
-        transactionCode = ""
         openID4VCTransactionCode = ""
         activeOpenID4VCInteractionID = nil
         activeOpenID4VCInteraction = nil
@@ -1033,7 +1147,7 @@ final class WalletAppModel: ObservableObject {
             return "A response could not be decoded at \(Self.decodingPath(error)): \(Self.decodingReason(error))."
         }
         guard let error = error as? EudiWalletKitAdapterError else {
-            return "Development wallet error: \(String(describing: error))"
+            return "Wallet error: \(String(describing: error))"
         }
         return switch error {
         case .unapprovedIssuer: "This issuer is not approved for the active wallet profile."
@@ -1043,7 +1157,7 @@ final class WalletAppModel: ObservableObject {
         case .recoveryRequired: "Wallet recovery must finish before this action can continue."
         case let .presentationRequestFailedWithReason(reason):
             "Wallet Kit could not resolve the PID presentation request: \(reason)"
-        default: "Development EUDI Wallet Kit error: \(String(describing: error))"
+        default: "EUDI Wallet Kit error: \(String(describing: error))"
         }
     }
 

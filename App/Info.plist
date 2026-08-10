@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.1.1</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -34,6 +34,18 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>openid-credential-offer</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>io.oari.wallet.eudi</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>haip-vci</string>
+				<string>haip-vp</string>
+				<string>eudi-openid4vp</string>
+				<string>mdoc-openid4vp</string>
+				<string>eu.europa.ec.euidi</string>
 			</array>
 		</dict>
 	</array>

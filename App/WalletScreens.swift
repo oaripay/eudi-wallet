@@ -1,4 +1,5 @@
 import OariDesignSystem
+import EudiWalletKitAdapter
 import SwiftUI
 import UIKit
 import WalletDomain
@@ -532,7 +533,7 @@ struct WalletScannerView: View {
                     }
                     .accessibilityIdentifier("scanner.pendingCredential")
                 }
-                ScanResultView(result: model.scanResult, input: model.scanInput)
+                ScanResultView(result: model.scanResult)
             }
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Scan")
@@ -545,25 +546,16 @@ struct WalletScannerView: View {
 
 private struct ScanResultView: View {
     let result: WalletAppModel.ScanResult
-    let input: String
 
     var body: some View {
         switch result {
         case .idle: EmptyView()
         case .presentation:
-            NavigationLink {
-                WalletRequestReviewView(kind: .presentation, source: input)
-            } label: {
-                OariStatusBadge("Review presentation request", kind: .warning)
-            }
-            .accessibilityIdentifier("scanner.result.presentation")
+            detectedRequest("Presentation request detected", icon: "person.badge.shield.checkmark")
+                .accessibilityIdentifier("scanner.result.presentation")
         case .issuance:
-            NavigationLink {
-                WalletRequestReviewView(kind: .issuance, source: input)
-            } label: {
-                OariStatusBadge("Review credential offer", kind: .warning)
-            }
-            .accessibilityIdentifier("scanner.result.issuance")
+            detectedRequest("Credential offer detected", icon: "person.text.rectangle")
+                .accessibilityIdentifier("scanner.result.issuance")
         case .unsupported:
             OariStatusBadge("Unsupported wallet request", kind: .indeterminate)
                 .accessibilityIdentifier("scanner.result.unsupported")
@@ -572,47 +564,15 @@ private struct ScanResultView: View {
                 .accessibilityIdentifier("scanner.result.rejected")
         }
     }
-}
 
-private enum WalletRequestReviewKind {
-    case presentation
-    case issuance
-
-    var title: String {
-        self == .presentation ? "Presentation request" : "Credential offer"
-    }
-}
-
-private struct WalletRequestReviewView: View {
-    @Environment(\.colorScheme) private var scheme
-    let kind: WalletRequestReviewKind
-    let source: String
-
-    var body: some View {
-        OariScreen {
-                OariStatusBadge("Not verified", kind: .warning)
-                    .accessibilityIdentifier("review.not-verified")
-                Text(kind.title)
-                    .font(OariTypography.title)
-                    .accessibilityIdentifier("review.screen")
-                OariCard {
-                    VStack(alignment: .leading, spacing: OariSpacing.x3) {
-                        Label("Review required", systemImage: "exclamationmark.triangle.fill")
-                            .font(OariTypography.heading)
-                        Text("The code was classified, but requester identity, trust evidence and requested claims have not been verified. No wallet action has been performed.")
-                            .font(OariTypography.body)
-                        Text(source)
-                            .font(OariTypography.technical)
-                            .foregroundStyle(OariColor.textSecondary(scheme))
-                            .lineLimit(4)
-                    }
-                }
-                Text("Return to Scan to cancel. A continue action appears only after protocol validation.")
-                    .font(OariTypography.body)
-                    .foregroundStyle(OariColor.textSecondary(scheme))
-        }
-        .navigationTitle("Review")
-        .navigationBarTitleDisplayMode(.inline)
+    private func detectedRequest(_ title: String, icon: String) -> some View {
+        Label(title, systemImage: icon)
+            .font(OariTypography.label)
+            .foregroundStyle(OariColor.action)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, OariSpacing.x3)
+            .padding(.vertical, OariSpacing.x2)
+            .background(OariColor.action.opacity(0.08), in: RoundedRectangle(cornerRadius: OariRadius.medium))
     }
 }
 
@@ -652,6 +612,7 @@ struct WalletHistoryView: View {
 struct WalletSettingsView: View {
     @Environment(\.colorScheme) private var scheme
     @ObservedObject var model: WalletAppModel
+    private let sourceURL = URL(string: "https://github.com/oaripay/eudi-wallet")!
 
     var body: some View {
         NavigationStack {
@@ -671,35 +632,216 @@ struct WalletSettingsView: View {
                         set: { value in Task { await model.configureAppLock(enabled: value) } }
                     ))
                     .disabled(model.appLockState == .authenticating)
+                    .accessibilityIdentifier("settings.app-lock")
                     LabeledContent("Authentication", value: model.appLockAuthenticationName)
                     if model.isAppLockEnabled {
-                        Text("Required every time Oari Wallet returns to the foreground. Device passcode is available as a fallback.")
+                        Text("Required when the wallet returns from the background. Device passcode remains available as a fallback.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    Label("Private keys stay on this device", systemImage: "lock.shield")
-                    Label("Credentials are excluded from backup", systemImage: "externaldrive.badge.xmark")
-                    Label("Development build, not certified", systemImage: "exclamationmark.triangle")
+                    LabeledContent("Private keys", value: "On this device")
+                    LabeledContent("Credential backup", value: "Excluded")
+                }
+                Section("Wallet environments") {
+                    NavigationLink {
+                        EudiReferenceDemoSettingsView(availability: model.eudiAvailability)
+                    } label: {
+                        WalletEnvironmentRow(
+                            title: "EUDI Reference Demo",
+                            subtitle: "Official reference services",
+                            icon: "person.text.rectangle",
+                            status: model.eudiAvailability.isAvailable ? "Interop" : "Unavailable",
+                            statusColor: model.eudiAvailability.isAvailable ? .orange : .red
+                        )
+                    }
+                    .accessibilityIdentifier("settings.eudi")
+
+                    NavigationLink {
+                        EbsiOpenID4VCSettingsView()
+                    } label: {
+                        WalletEnvironmentRow(
+                            title: "EBSI / OpenID4VC",
+                            subtitle: "W3C credential backend",
+                            icon: "network.badge.shield.half.filled",
+                            status: "Interop",
+                            statusColor: .orange
+                        )
+                    }
+                    .accessibilityIdentifier("settings.ebsi")
+                    Text("Interoperability environments, not certified")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                         .accessibilityIdentifier("settings.certification")
                 }
-                Section("EUDI profile") {
-                    switch model.eudiAvailability {
-                    case .available:
-                        Label("Approved EUDI profile installed", systemImage: "checkmark.shield.fill")
-                            .foregroundStyle(.green)
-                    case let .configurationRequired(message):
-                        Label("Profile installation required", systemImage: "exclamationmark.shield.fill")
-                            .foregroundStyle(.orange)
-                        Text(message).font(.caption).foregroundStyle(.secondary)
+                Section("About") {
+                    LabeledContent("Oari Wallet", value: appVersion)
+                        .accessibilityIdentifier("settings.version")
+                    Link(destination: sourceURL) {
+                        Label("Open Source", systemImage: "chevron.left.forwardslash.chevron.right")
                     }
-                    LabeledContent("Callback domain", value: "oari.io")
-                    LabeledContent("Wallet backend", value: "EUDI Wallet Kit 0.39.1")
+                    .accessibilityIdentifier("settings.opensource")
                 }
             }
             .scrollContentBackground(.hidden)
             .background(OariColor.background(scheme))
             .navigationTitle("Settings")
         }
+    }
+
+    private var appVersion: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "-"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "-"
+        return "\(version) (\(build))"
+    }
+}
+
+private extension EudiWalletAvailability {
+    var isAvailable: Bool {
+        if case .available = self { return true }
+        return false
+    }
+}
+
+private struct WalletEnvironmentRow: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    let status: String
+    let statusColor: Color
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .foregroundStyle(OariColor.action)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(status)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(statusColor)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(statusColor.opacity(0.12), in: Capsule())
+        }
+    }
+}
+
+private struct EudiReferenceDemoSettingsView: View {
+    @Environment(\.colorScheme) private var scheme
+    let availability: EudiWalletAvailability
+
+    var body: some View {
+        Form {
+            Section {
+                OariCard {
+                    Label {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Interoperability environment").font(.headline)
+                            Text("Uses official EUDI reference services and development trust infrastructure. It is not a production identity environment.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+            }
+            Section("Status") {
+                LabeledContent("Environment", value: "Reference Demo")
+                LabeledContent("Wallet Kit", value: EudiWalletKitBaseline.selectedVersion)
+                LabeledContent("Trust policy", value: "Warning")
+                LabeledContent("Signed metadata", value: "Required")
+                LabeledContent("Unregistered parties", value: "Allowed")
+                LabeledContent("Availability", value: availability.isAvailable ? "Available" : "Unavailable")
+            }
+            Section("Services") {
+                TechnicalValueRow("Issuer", value: "issuer.eudiw.dev")
+                TechnicalValueRow("Backend issuer", value: "issuer-backend.eudiw.dev")
+                TechnicalValueRow("Wallet Provider", value: EudiReferenceDemoConfiguration.walletProviderURL.host ?? "-")
+                TechnicalValueRow("Verifier", value: EudiReferenceDemoConfiguration.verifierURL.host ?? "-")
+            }
+            Section("Protocol") {
+                TechnicalValueRow("Client ID", value: EudiReferenceDemoConfiguration.clientID)
+                TechnicalValueRow("Callback", value: EudiReferenceDemoConfiguration.redirectURI.absoluteString)
+                LabeledContent("PAR", value: "Required")
+                LabeledContent("DPoP", value: "Required")
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .background(OariColor.background(scheme))
+        .navigationTitle("EUDI Reference Demo")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct EbsiOpenID4VCSettingsView: View {
+    @Environment(\.colorScheme) private var scheme
+    private let composition = try? W3CBackendComposition.make()
+
+    var body: some View {
+        Form {
+            Section {
+                OariCard {
+                    Label {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Standards interoperability").font(.headline)
+                            Text("Uses pinned EBSI registries with cryptographic verification and explicit warnings when signer accreditation is unavailable.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "network.badge.shield.half.filled").foregroundStyle(OariColor.action)
+                    }
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+            }
+            Section("Status") {
+                LabeledContent("Environment", value: composition?.environmentPolicy == .production ? "Production registries" : "Unavailable")
+                LabeledContent("Unknown signer", value: "Warning")
+                LabeledContent("Signature checks", value: "Required")
+                LabeledContent("Transport", value: W3CBackendComposition.issuanceProfiles)
+            }
+            Section("Registries") {
+                TechnicalValueRow("DID Registry", value: composition?.endpoint.didRegistryURL.absoluteString ?? "Unavailable")
+                TechnicalValueRow("Trusted Issuers", value: composition?.endpoint.trustedIssuersRegistryURL.absoluteString ?? "Unavailable")
+                TechnicalValueRow("Trusted Schemas", value: composition?.endpoint.trustedSchemasRegistryURL.absoluteString ?? "Unavailable")
+            }
+            Section("OpenID4VC") {
+                TechnicalValueRow("Client ID", value: W3CBackendComposition.authorizationClientID)
+                TechnicalValueRow("Callback", value: W3CBackendComposition.authorizationRedirectURI.absoluteString)
+                LabeledContent("Credentials", value: W3CBackendComposition.credentialModels)
+                LabeledContent("Presentation", value: W3CBackendComposition.presentationProfile)
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .background(OariColor.background(scheme))
+        .navigationTitle("EBSI / OpenID4VC")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct TechnicalValueRow: View {
+    let label: String
+    let value: String
+
+    init(_ label: String, value: String) {
+        self.label = label
+        self.value = value
+    }
+
+    var body: some View {
+        LabeledContent(label) {
+            Text(value)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+        }
+        .contextMenu { Button("Copy") { UIPasteboard.general.string = value } }
     }
 }
 

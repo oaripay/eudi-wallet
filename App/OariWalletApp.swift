@@ -23,7 +23,7 @@ struct OariWalletApp: App {
         WindowGroup {
             ZStack {
                 if showsStartupSplash {
-                    WalletStartupSplash()
+                    WalletLoadingOverlay(accessibilityLabel: "Oari Wallet is preparing your secure wallet")
                         .task { await bootstrapWallet() }
                         .transition(.opacity)
                         .zIndex(10)
@@ -34,7 +34,11 @@ struct OariWalletApp: App {
             .preferredColorScheme(model.theme.colorScheme)
             .onOpenURL(perform: model.handleIncomingURL)
             .overlay {
-                if model.shouldShowInactivePrivacyShield || model.isAppLockBlocking {
+                if model.isEudiOperationLoading {
+                    WalletLoadingOverlay(accessibilityLabel: "Preparing your wallet")
+                        .transition(.identity)
+                        .zIndex(110)
+                } else if model.shouldShowInactivePrivacyShield || model.isAppLockBlocking {
                     WalletPrivacyShield(
                         model: model,
                         isSpinning: model.shouldShowInactivePrivacyShield || model.appLockState == .authenticating
@@ -67,12 +71,22 @@ struct OariWalletApp: App {
 
     private func bootstrapWallet() async {
         await Task.yield()
-        let bootstrap = await Task.detached(priority: .userInitiated) {
+        let task = Task.detached(priority: .userInitiated) {
             switch WalletAppDependencies.make(configuration: configuration) {
             case let .success(dependencies): WalletBootstrapResult.success(dependencies)
             case let .failure(error): WalletBootstrapResult.failure(WalletBootstrapError(message: String(describing: error)))
             }
-        }.value
+        }
+        let bootstrap = await withCheckedContinuation { continuation in
+            let gate = ContinuationGate<WalletBootstrapResult>()
+            Task { gate.resume(continuation, returning: await task.value) }
+            Task {
+                try? await Task.sleep(for: .seconds(12))
+                gate.resume(continuation, returning: .failure(WalletBootstrapError(
+                    message: "Wallet startup is taking longer than expected. Try again."
+                )))
+            }
+        }
         let dependencies: Result<WalletAppDependencies, Error> = switch bootstrap {
         case let .success(value): .success(value)
         case let .failure(error): .failure(error)
@@ -92,6 +106,22 @@ struct OariWalletApp: App {
     }
 }
 
+private final class ContinuationGate<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didResume = false
+
+    func resume(_ continuation: CheckedContinuation<Value, Never>, returning value: Value) {
+        lock.lock()
+        guard !didResume else {
+            lock.unlock()
+            return
+        }
+        didResume = true
+        lock.unlock()
+        continuation.resume(returning: value)
+    }
+}
+
 private enum WalletBootstrapResult: Sendable {
     case success(WalletAppDependencies)
     case failure(WalletBootstrapError)
@@ -102,9 +132,10 @@ private struct WalletBootstrapError: LocalizedError, Sendable {
     var errorDescription: String? { message }
 }
 
-private struct WalletStartupSplash: View {
+struct WalletLoadingOverlay: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var rotation: Double = 0
+    let accessibilityLabel: String
 
     var body: some View {
         ZStack {
@@ -117,7 +148,7 @@ private struct WalletStartupSplash: View {
                 .rotationEffect(.degrees(rotation))
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Oari Wallet is preparing your secure wallet")
+        .accessibilityLabel(accessibilityLabel)
         .onAppear {
             guard !reduceMotion else { return }
             withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) { rotation = 360 }

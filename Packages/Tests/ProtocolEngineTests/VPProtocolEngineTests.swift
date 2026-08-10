@@ -32,6 +32,48 @@ struct VPProtocolEngineTests {
         }
     }
 
+    @Test("HAIP and EUDI schemes carry explicit Wallet Kit ownership")
+    func eudiDeepLinkClassification() throws {
+        let classifier = ProtocolInputClassifier(allowedHosts: [])
+        guard case let .eudiOpenID4VCI(url) = try classifier.classify(
+            "haip-vci://authorize?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffer%3Fx%3D1"
+        ) else {
+            Issue.record("Expected Wallet Kit issuance route")
+            return
+        }
+        #expect(url.scheme == "haip-vci")
+
+        for scheme in ["haip-vp", "eudi-openid4vp", "mdoc-openid4vp"] {
+            guard case .eudiOpenID4VP = try classifier.classify(
+                "\(scheme)://authorize?request_uri=https%3A%2F%2Fverifier.example%2Frequest"
+            ) else {
+                Issue.record("Expected Wallet Kit presentation route for \(scheme)")
+                continue
+            }
+        }
+
+        guard case .eudiAuthorizationCallback = try classifier.classify(
+            "eu.europa.ec.euidi://authorization?code=a%2Bb&state=state"
+        ) else {
+            Issue.record("Expected EUDI authorization callback")
+            return
+        }
+        #expect(throws: ProtocolInputError.unsupportedHost) {
+            try classifier.classify("eu.europa.ec.euidi://scan?request=x")
+        }
+    }
+
+    @Test("Generic schemes retain automatic ownership routes")
+    func genericDeepLinkOwnership() throws {
+        let classifier = ProtocolInputClassifier(allowedHosts: [])
+        guard case .openID4VCI = try classifier.classify(
+            "openid-credential-offer://authorize?credential_offer=fixture"
+        ) else { Issue.record("Expected generic VCI route"); return }
+        guard case .openID4VP = try classifier.classify(
+            "openid4vp://authorize?request=fixture"
+        ) else { Issue.record("Expected generic VP route"); return }
+    }
+
     @Test("VP request parser requires HTTPS response, nonce, and query")
     func requestParsing() throws {
         let data = Data("""

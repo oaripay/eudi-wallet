@@ -3,6 +3,7 @@ import Foundation
 import WalletDomain
 
 protocol EudiWalletOperating: Sendable {
+    var profileID: String { get async }
     func resolveIssuanceOffer(uri: String) async throws -> EudiIssuanceOffer
     func issueResolvedOffer(
         id: UUID,
@@ -35,6 +36,7 @@ enum EudiPresentationCompletion: Equatable, Sendable {
 actor LiveEudiWalletService: EudiWalletOperating {
     private let adapter: EudiWalletKitAdapter
     init(adapter: EudiWalletKitAdapter) { self.adapter = adapter }
+    var profileID: String { adapter.trustProfileID }
 
     func resolveIssuanceOffer(uri: String) async throws -> EudiIssuanceOffer {
         try await adapter.resolveIssuanceOffer(uri: uri)

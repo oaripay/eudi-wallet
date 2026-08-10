@@ -1,12 +1,11 @@
 # Oari Wallet
 
-Oari Wallet is a native SwiftUI iOS development wallet for EUDI and
-W3C interoperability testing. The app display name is **Oari
-Wallet**, the technical target is `OariWallet`, and the bundle identifier is
-`io.oari.wallet`.
+Oari Wallet is an open-source native SwiftUI iOS wallet for EUDI and W3C
+credential interoperability. The app display name is **Oari Wallet**, the
+technical target is `OariWallet`, and the bundle identifier is `io.oari.wallet`.
 
-This repository is development and interoperability software. It does not claim
-certification, eIDAS legal recognition, or production readiness.
+This repository is interoperability software. It does not claim certification,
+eIDAS legal recognition, or production readiness.
 
 ## Requirements
 
@@ -41,11 +40,12 @@ The pinned EUDI Wallet Kit owns EUDI wallet documents, secure keys, storage,
 SD-JWT, mdoc, OpenID4VCI, OpenID4VP, DCQL, and BLE behavior. Oari owns consent,
 application metadata, redacted audit, lifecycle UI, and recovery coordination.
 
-### Development W3C backend
+### W3C / OpenID4VC backend
 
-The development W3C backend speaks to Oari issuer and verifier services through
-explicitly enabled profiles. It owns W3C credentials and stores them encrypted
-locally. SpruceKit is not used by the app.
+The native W3C backend owns W3C credentials and stores them encrypted locally.
+It supports OpenID4VCI and OpenID4VP interoperability, EBSI DID resolution,
+VCDM 1.1, VCDM 2.0, SD-JWT VC, and selected legacy issuance profiles. SpruceKit
+is not used by the app.
 
 The W3C backend uses one persistent canonical holder `did:key`. DPoP,
 credential-response encryption, attestation, and EUDI Wallet Kit keys remain
@@ -53,7 +53,20 @@ separate because they have different protocol and lifecycle responsibilities.
 
 ## Supported development flows
 
-- EUDI mdoc and SD-JWT VC issuance and presentation through Wallet Kit.
+- EUDI mdoc and SD-JWT VC issuance and presentation through the official EUDI
+  Wallet Kit.
+- Official EUDI Reference Demo interoperability:
+  - Issuers: `issuer.eudiw.dev` and `issuer-backend.eudiw.dev`.
+  - Verifier: `verifier.eudiw.dev`.
+  - Wallet Provider: `wallet-provider.eudiw.dev`.
+  - Wallet Kit `0.39.1`, OpenID4VCI `0.53.0`, and OpenID4VP `0.41.0`.
+  - ETSI reference trust lists with static certificate fallback and warning-mode
+    ecosystem trust.
+- HAIP and EUDI scheme routing:
+  - `haip-vci`
+  - `haip-vp`
+  - `eudi-openid4vp`
+  - `mdoc-openid4vp`
 - W3C VCDM 1.1 JWT VC formats advertised by issuer metadata.
 - W3C VCDM 2.0 `application/vc+jwt` credentials.
 - Native `dc+sd-jwt` presentations with a trailing Key Binding JWT.
@@ -61,8 +74,8 @@ separate because they have different protocol and lifecycle responsibilities.
 - OpenID4VCI 1.1 Interactive Authorization using
   `authorization_challenge_endpoint` and `ia_post`.
 - OpenID4VP and DCQL consent with query-ID-based `vp_token` responses.
-- OpenID4VC final and selected draft interaction profiles where an
-  interoperability fixture requires them.
+- OpenID4VC final profiles and HTTPS issuer paths ending in `draft-13`,
+  `draft-17`, or `draft-18` for legacy interoperability.
 
 For final Interactive Authorization, the initial challenge request carries
 `issuer_state` but not `auth_session`. Follow-up requests carry the server-issued
@@ -87,12 +100,20 @@ positive and negative interoperability coverage.
 Missing signer accreditation can produce an explicit user warning. It never
 disables cryptographic credential verification.
 
-## Development configuration
+EUDI Reference Demo counterparties are accepted with explicit warning-mode
+ecosystem trust. Signature verification, expiry, holder binding, nonce,
+audience, HTTPS, replay checks, and user consent remain mandatory.
+
+## Interoperability configuration
 
 The W3C backend uses the same pinned production registry and interoperability
 profile in every build configuration. HTTPS issuer paths ending in `draft-13`,
 `draft-17`, or `draft-18` select the corresponding compatibility contract;
 other issuers use the final contract.
+
+EUDI Wallet Kit initializes lazily after the root UI is available. Dedicated
+EUDI and HAIP requests wait for the same initializer behind a generic Oari
+loading overlay. Native W3C requests remain available during this initialization.
 
 Supported launch arguments:
 
@@ -178,11 +199,17 @@ again. Do not run multiple builds against the same DerivedData database.
 ## Known limitations
 
 - `ia_post.jwt` encrypted Interactive Authorization responses are unsupported.
-- Full browser-based OAuth authorization is not implemented by the W3C backend.
-- Selected draft compatibility remains for development counterpart profiles.
-- Full multi-query DCQL and every optional claim-set combination are not yet
+- `direct_post.jwt` and OpenID4VP 1.1 HPKE responses are unsupported by the
+  native W3C backend.
+- Full multi-query DCQL, credential-set evaluation, claim-set evaluation, and
+  `multiple=true` are unsupported by the native W3C backend.
+- Credential-status evaluation before native W3C presentation is not yet
   implemented.
-- Native SD-JWT verifiers must validate nonce and audience in the trailing Key
-  Binding JWT rather than treating the issuer JWT as an ordinary JWT VP.
-- Development trust warnings are not a substitute for a production trust and
-  accreditation policy.
+- EUDI Reference Demo credential status is currently reported as not evaluated
+  by the app-level status provider.
+- EUDI Reference Demo is an interoperability environment, not a certified or
+  production EUDI Wallet environment.
+- Verifiers receiving native SD-JWT presentations must validate nonce and
+  audience in the trailing Key Binding JWT, not in the issuer-signed SD-JWT.
+- Interoperability trust warnings are not a substitute for a production trust,
+  registration, attestation, status, and accreditation policy.

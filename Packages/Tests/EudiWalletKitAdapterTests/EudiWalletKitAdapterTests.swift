@@ -1,10 +1,70 @@
 @testable import EudiWalletKitAdapter
+import EudiWalletKit
 import Foundation
+import MdocSecurity18013
 import Security
 import Testing
 import WalletDomain
 
 struct EudiWalletKitAdapterTests {
+    @Test("HAIP issuance is normalized only at the Wallet Kit boundary")
+    func haipIssuanceNormalization() throws {
+        let source = "haip-vci://authorize?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffer%3Fpin%3Da%252Bb&state=x%2By"
+        let normalized = try EudiWalletKitAdapter.validatedOfferURI(
+            source,
+            allowedOrigins: ["https://issuer.example"]
+        )
+        let before = try #require(URLComponents(string: source))
+        let after = try #require(URLComponents(string: normalized))
+        #expect(after.scheme == "openid-credential-offer")
+        #expect(after.host == before.host)
+        #expect(after.path == before.path)
+        #expect(after.queryItems == before.queryItems)
+        #expect(normalized.dropFirst("openid-credential-offer".count) == source.dropFirst("haip-vci".count))
+        #expect(throws: EudiWalletKitAdapterError.unapprovedIssuer) {
+            try EudiWalletKitAdapter.validatedOfferURI(
+                "haip-vci://authorize?credential_offer_uri=https%3A%2F%2Fevil.example%2Foffer",
+                allowedOrigins: ["https://issuer.example"]
+            )
+        }
+    }
+
+    @Test("EUDI presentation schemes normalize to OpenID4VP without changing query values")
+    func eudiPresentationNormalization() throws {
+        for scheme in ["haip-vp", "eudi-openid4vp", "mdoc-openid4vp"] {
+            let source = "\(scheme)://authorize?request_uri=https%3A%2F%2Fverifier.example%2Frequest%3Fx%3Da%252Bb&state=a%2Bb"
+            let normalized = try EudiWalletKitAdapter.validatedPresentationURI(
+                source,
+                allowedOrigins: ["https://verifier.example"]
+            )
+            let before = try #require(URLComponents(string: source))
+            let after = try #require(URLComponents(string: normalized))
+            #expect(after.scheme == "openid4vp")
+            #expect(after.host == before.host)
+            #expect(after.path == before.path)
+            #expect(after.queryItems == before.queryItems)
+            #expect(normalized.dropFirst("openid4vp".count) == source.dropFirst(scheme.count))
+        }
+        #expect(throws: EudiWalletKitAdapterError.unapprovedVerifier) {
+            try EudiWalletKitAdapter.validatedPresentationURI(
+                "haip-vp://authorize?request_uri=https%3A%2F%2Fevil.example%2Frequest",
+                allowedOrigins: ["https://verifier.example"]
+            )
+        }
+    }
+
+    @Test("Generic Wallet Kit URIs are not rewritten")
+    func genericURIsRemainUnchanged() throws {
+        let offer = "openid-credential-offer://authorize?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffer%3Fx%3Da%252Bb&state=a%2Bb"
+        #expect(try EudiWalletKitAdapter.validatedOfferURI(
+            offer, allowedOrigins: ["https://issuer.example"]
+        ) == offer)
+        let presentation = "openid4vp://authorize?request_uri=https%3A%2F%2Fverifier.example%2Frequest%3Fx%3Da%252Bb&state=a%2Bb"
+        #expect(try EudiWalletKitAdapter.validatedPresentationURI(
+            presentation, allowedOrigins: ["https://verifier.example"]
+        ) == presentation)
+    }
+
     @Test("Wallet Kit inline display artwork becomes offline credential metadata")
     func walletKitDisplayArtwork() throws {
         let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
@@ -43,7 +103,7 @@ struct EudiWalletKitAdapterTests {
 
     @Test("Wallet configuration disables SDK file logging and requires authentication")
     func safeConfiguration() throws {
-        let baseline = try EudiWalletKitBaseline(serviceName: "io.oari.wallet.documents")
+        let baseline = try testBaseline(serviceName: "io.oari.wallet.documents")
         let configuration = baseline.walletConfiguration()
 
         #expect(configuration.serviceName == "io.oari.wallet.documents")
@@ -54,10 +114,10 @@ struct EudiWalletKitAdapterTests {
     @Test("Invalid Keychain service names fail before Wallet Kit initialization")
     func invalidServiceName() {
         #expect(throws: EudiWalletKitAdapterError.invalidServiceName) {
-            try EudiWalletKitBaseline(serviceName: "io.oari:wallet")
+            try testBaseline(serviceName: "io.oari:wallet")
         }
         #expect(throws: EudiWalletKitAdapterError.invalidServiceName) {
-            try EudiWalletKitBaseline(serviceName: "  ")
+            try testBaseline(serviceName: "  ")
         }
     }
 
@@ -74,85 +134,8 @@ struct EudiWalletKitAdapterTests {
 
     @Test("Wallet Kit initializes behind the adapter with explicit trust input")
     func walletInitialization() throws {
-        let baseline = try EudiWalletKitBaseline(
-            serviceName: "io.oari.wallet.adapter-tests"
-        )
+        let baseline = try testBaseline(serviceName: "io.oari.wallet.adapter-tests")
         _ = try baseline.makeWallet(trustSource: try approvedSystemTrustSource())
-    }
-
-    @Test("Operational Wallet Kit flows are blocked in Debug logging builds")
-    func debugLoggingGate() throws {
-        let baseline = try EudiWalletKitBaseline(
-            serviceName: "io.oari.wallet.debug-gate-tests"
-        )
-        let adapter = try baseline.makeWallet(trustSource: try approvedSystemTrustSource())
-        #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
-            try adapter.requireOperationalRuntime()
-        }
-    }
-
-    @Test("Every exposed Wallet Kit operation is gated in Debug")
-    func allOperationsAreGated() async throws {
-        let baseline = try EudiWalletKitBaseline(
-            serviceName: "io.oari.wallet.operation-gate-tests"
-        )
-        let adapter = try baseline.makeWallet(trustSource: try approvedSystemTrustSource())
-        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
-            _ = try await adapter.loadDocumentSummaries()
-        }
-        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
-            try await adapter.deleteAllDocuments()
-        }
-        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
-            try await adapter.reconcilePendingOperations()
-        }
-        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
-            try await adapter.deleteDocument(id: "document", status: "issued")
-        }
-        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
-            _ = try await adapter.resolveIssuanceOffer(
-                uri: "https://issuer.example/credential-offer"
-            )
-        }
-        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
-            _ = try await adapter.issueResolvedOffer(
-                id: UUID(),
-                profileID: "test-profile",
-                selectedConfigurationIDs: ["pid"],
-                transactionCode: nil,
-                promptMessage: "Issue PID"
-            )
-        }
-        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
-            _ = try await adapter.retryDeferredIssuance(
-                issuerName: "https://issuer.example",
-                documentID: "document"
-            )
-        }
-        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
-            _ = try await adapter.loadPendingIssuances()
-        }
-        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
-            _ = try await adapter.beginPendingIssuancePresentation(id: UUID())
-        }
-        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
-            _ = try await adapter.beginOpenID4VPPresentation(
-                requestURI: "openid4vp://authorize?request=fixture"
-            )
-        }
-        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
-            _ = try await adapter.beginBLEEngagement()
-        }
-        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
-            _ = try await adapter.receiveBLEPresentationRequest(id: UUID())
-        }
-        await #expect(throws: EudiWalletKitAdapterError.unsafeDebugLogging) {
-            _ = try await adapter.submitPresentation(
-                id: UUID(),
-                selectedClaimIDs: [],
-                userAccepted: false
-            )
-        }
     }
 
     @Test("Operational configuration requires a private redirect scheme and client identifier")
@@ -233,7 +216,8 @@ struct EudiWalletKitAdapterTests {
             statusProvider: FixtureStatusProvider(),
             allowedIssuerOrigins: ["https://issuer.example"],
             allowedVerifierOrigins: ["https://verifier.example"],
-            allowedApplicationRedirectOrigins: ["https://wallet.example"]
+            allowedApplicationRedirectOrigins: ["https://wallet.example"],
+            allowUnregisteredDevelopmentCounterparties: false
         )
         #expect(configuration.clientID == "oari-wallet")
         #expect(try configuration.validateIssuanceOfferURI(
@@ -293,9 +277,7 @@ struct EudiWalletKitAdapterTests {
 
     @Test("Wallet Kit registers strict VCI operational configuration behind adapter")
     func operationalWalletInitialization() throws {
-        let baseline = try EudiWalletKitBaseline(
-            serviceName: "io.oari.wallet.operational-configuration-tests"
-        )
+        let baseline = try testBaseline(serviceName: "io.oari.wallet.operational-configuration-tests")
         let configuration = try EudiOperationalConfiguration(
             clientID: "oari-wallet",
             authorizationRedirectURI: URL(string: "https://wallet.example/oauth/callback")!,
@@ -416,9 +398,7 @@ struct EudiWalletKitAdapterTests {
 
     @Test("Malformed trust anchors fail before Wallet Kit initialization")
     func malformedTrustAnchor() throws {
-        let baseline = try EudiWalletKitBaseline(
-            serviceName: "io.oari.wallet.invalid-anchor-tests"
-        )
+        let baseline = try testBaseline(serviceName: "io.oari.wallet.invalid-anchor-tests")
         let malformed = Data([0x30, 0x00])
         let source = try EudiTrustAnchorSource(
             profileID: "test",
@@ -432,7 +412,7 @@ struct EudiWalletKitAdapterTests {
 
     @Test("Valid leaf and unapproved CA certificates cannot become trust anchors")
     func trustAnchorAuthorization() throws {
-        let baseline = try EudiWalletKitBaseline(serviceName: "io.oari.wallet.anchor-policy-tests")
+        let baseline = try testBaseline(serviceName: "io.oari.wallet.anchor-policy-tests")
         let leaf = try #require(Data(
             base64Encoded: Self.nonCABase64,
             options: .ignoreUnknownCharacters
@@ -463,6 +443,35 @@ struct EudiWalletKitAdapterTests {
             profileID: "adapter-tests",
             anchors: [anchor],
             approvedSHA256Digests: [EudiTrustAnchorSource.sha256Digest(of: anchor)]
+        )
+    }
+
+    private func testBaseline(serviceName: String) throws -> EudiWalletKitBaseline {
+        let anchor = try systemRootCertificate()
+        #if canImport(EudiEtsi1196x2)
+        let trustConfiguration = TrustConfiguration(
+            trustSource: .staticList(StaticListTrustSource(rootCertificates: [anchor])),
+            defaultPolicy: .warning,
+            requireSignedMetadata: true,
+            statusTrustPolicy: .warning,
+            wrprcTrustPolicy: .warning
+        )
+        #else
+        let trustConfiguration = TrustConfiguration(
+            rootIaca: [[anchor]],
+            defaultPolicy: .warning,
+            requireSignedMetadata: true,
+            statusTrustPolicy: .warning,
+            wrprcTrustPolicy: .warning
+        )
+        #endif
+        return try EudiWalletKitBaseline(
+            serviceName: serviceName,
+            trustConfiguration: trustConfiguration,
+            openID4VciConfigurations: [:],
+            openID4VpConfiguration: OpenId4VpConfiguration(
+                clientIdSchemes: [.x509SanDns, .x509Hash]
+            )
         )
     }
 

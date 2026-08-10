@@ -5,15 +5,11 @@ import EudiWalletKitAdapter
 struct EudiFlowView: View {
     @ObservedObject var model: WalletAppModel
     @Environment(\.colorScheme) private var scheme
-    @FocusState private var focusedField: Field?
-
-    private enum Field { case transactionCode, openID4VCPIN }
 
     var body: some View {
         NavigationStack {
             OariScreen { content }
             .scrollDismissesKeyboard(.interactively)
-            .onTapGesture { focusedField = nil }
             .navigationTitle("Wallet request")
             .navigationBarTitleDisplayMode(.inline)
         }
@@ -32,7 +28,15 @@ struct EudiFlowView: View {
         case let .issuanceReview(offer):
             Label("Credential offer", systemImage: "person.text.rectangle")
                 .font(OariTypography.heading)
-            Text(offer.issuerName).foregroundStyle(OariColor.textSecondary(scheme))
+            HStack(spacing: 10) {
+                if let issuerLogoURL = offer.issuerLogoURL {
+                    OfferArtworkImage(url: issuerLogoURL, contentMode: .fit)
+                        .frame(width: 44, height: 44)
+                        .padding(5)
+                        .background(OariColor.surface(scheme), in: RoundedRectangle(cornerRadius: 10))
+                }
+                Text(offer.issuerName).foregroundStyle(OariColor.textSecondary(scheme))
+            }
             ForEach(offer.documents, id: \.configurationID) { document in
                 Toggle(isOn: Binding(
                     get: { model.selectedIssuanceConfigurationIDs.contains(document.configurationID) },
@@ -44,9 +48,7 @@ struct EudiFlowView: View {
                     ZStack(alignment: .leading) {
                         OariColor.safeColor(document.display?.backgroundColor, fallback: OariColor.surface(scheme))
                         if let backgroundURL = document.display?.backgroundImageURL {
-                            AsyncImage(url: backgroundURL) { image in
-                                image.resizable().scaledToFill()
-                            } placeholder: { Color.clear }
+                            OfferArtworkImage(url: backgroundURL, contentMode: .fill)
                             .opacity(0.72)
                             LinearGradient(
                                 colors: [.black.opacity(0.04), .black.opacity(0.48)],
@@ -56,9 +58,7 @@ struct EudiFlowView: View {
                         }
                         HStack(spacing: 12) {
                             if let logoURL = document.display?.logoURL {
-                                AsyncImage(url: logoURL) { image in
-                                    image.resizable().scaledToFit()
-                                } placeholder: { ProgressView() }
+                                OfferArtworkImage(url: logoURL, contentMode: .fit)
                                 .padding(6)
                                 .frame(width: 42, height: 42)
                                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
@@ -86,26 +86,8 @@ struct EudiFlowView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
             }
-            if offer.transactionCode != nil {
-                if let requirement = offer.transactionCode, requirement.inputMode == "numeric" {
-                    SecurePINCodeField(
-                        value: $model.transactionCode,
-                        length: requirement.length ?? 4,
-                        label: "Transaction code",
-                        focus: $focusedField,
-                        focusValue: .transactionCode
-                    )
-                } else {
-                    SecureField("Transaction code", text: $model.transactionCode)
-                        .textContentType(.oneTimeCode)
-                        .keyboardType(.asciiCapable)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($focusedField, equals: .transactionCode)
-                }
-            }
-            primaryButton("Add to wallet", icon: "plus.circle.fill", disabled: !validTransactionCode(offer.transactionCode)) {
-                focusedField = nil
-                await model.acceptIssuance()
+            EudiTransactionCodeEntry(requirement: offer.transactionCode) { transactionCode in
+                await model.acceptIssuance(transactionCode: transactionCode)
             }
 
         case let .openID4VCIssuanceReview(interaction):
@@ -264,13 +246,79 @@ struct EudiFlowView: View {
         .disabled(disabled)
     }
 
-    private func validTransactionCode(_ requirement: EudiTransactionCodeRequirement?) -> Bool {
-        guard let requirement else { return true }
-        let value = model.transactionCode
-        guard !value.isEmpty, value.count == requirement.length else { return false }
-        return requirement.inputMode != "numeric" || value.unicodeScalars.allSatisfy { $0.value >= 48 && $0.value <= 57 }
+}
+
+private struct OfferArtworkImage: View {
+    let url: URL
+    let contentMode: ContentMode
+
+    var body: some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case let .success(image):
+                image.resizable().aspectRatio(contentMode: contentMode)
+            case .empty:
+                ProgressView()
+            case .failure:
+                Image(systemName: "person.text.rectangle")
+                    .resizable()
+                    .scaledToFit()
+                    .padding(8)
+                    .foregroundStyle(.secondary)
+            @unknown default:
+                Color.clear
+            }
+        }
+    }
+}
+
+private struct EudiTransactionCodeEntry: View {
+    private enum Field { case code }
+
+    let requirement: EudiTransactionCodeRequirement?
+    let onSubmit: @MainActor (String?) async -> Void
+
+    @State private var value = ""
+    @FocusState private var focusedField: Field?
+
+    var body: some View {
+        if let requirement {
+            if requirement.inputMode == "numeric" {
+                SecurePINCodeField(
+                    value: $value,
+                    length: requirement.length ?? 4,
+                    label: "Transaction code",
+                    focus: $focusedField,
+                    focusValue: .code
+                )
+            } else {
+                SecureField("Transaction code", text: $value)
+                    .textContentType(.oneTimeCode)
+                    .keyboardType(.asciiCapable)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($focusedField, equals: .code)
+            }
+        }
+
+        Button {
+            focusedField = nil
+            Task { await onSubmit(value.isEmpty ? nil : value) }
+        } label: {
+            Label("Add to wallet", systemImage: "plus.circle.fill")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(OariPrimaryButtonStyle())
+        .disabled(!isValid)
     }
 
+    private var isValid: Bool {
+        guard let requirement else { return true }
+        guard !value.isEmpty else { return false }
+        if let length = requirement.length, value.count != length { return false }
+        return requirement.inputMode != "numeric" || value.unicodeScalars.allSatisfy {
+            $0.value >= 48 && $0.value <= 57
+        }
+    }
 }
 
 private struct OpenID4VCTransactionCodeEntry: View {

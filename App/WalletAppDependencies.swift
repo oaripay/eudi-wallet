@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import EbsiW3CBackend
 import EudiWalletKitAdapter
 import IdentityDomain
@@ -7,12 +8,16 @@ import WalletDomain
 import WalletVault
 
 struct WalletAppDependencies: Sendable {
+    typealias EudiInitializer = @Sendable () async -> EudiInitializationResult
+    private static let eudiLogger = Logger(subsystem: "io.oari.wallet", category: "eudi-startup")
+
     let credentials: any CredentialMetadataRepository
     let audit: any AuditRepository
     let localAuthenticator: any LocalAuthenticator
     let appLockAuthenticator: any AppLockAuthenticating
     let eudiWallet: (any EudiWalletOperating)?
     let eudiAvailability: EudiWalletAvailability
+    let eudiInitializer: EudiInitializer?
     let openID4VCWallet: (any OpenID4VCOperating)?
 
     init(
@@ -22,6 +27,7 @@ struct WalletAppDependencies: Sendable {
         appLockAuthenticator: any AppLockAuthenticating = SystemLocalAuthenticator(),
         eudiWallet: (any EudiWalletOperating)?,
         eudiAvailability: EudiWalletAvailability,
+        eudiInitializer: EudiInitializer? = nil,
         openID4VCWallet: (any OpenID4VCOperating)?
     ) {
         self.credentials = credentials
@@ -30,6 +36,7 @@ struct WalletAppDependencies: Sendable {
         self.appLockAuthenticator = appLockAuthenticator
         self.eudiWallet = eudiWallet
         self.eudiAvailability = eudiAvailability
+        self.eudiInitializer = eudiInitializer
         self.openID4VCWallet = openID4VCWallet
     }
 
@@ -64,10 +71,53 @@ struct WalletAppDependencies: Sendable {
                 directory: root.appendingPathComponent("audit", isDirectory: true),
                 keyStore: keyStore
             )
-            let eudiWallet: (any EudiWalletOperating)? = nil
-            let eudiAvailability = EudiWalletAvailability.configurationRequired(
-                "Install an approved production EUDI trust profile to enable wallet operations."
-            )
+            let eudiInitializer: EudiInitializer = {
+                await Task.detached(priority: .utility) {
+                    do {
+                        let startedAt = ContinuousClock.now
+                        let recoveryStore = try EncryptedWalletOperationRecoveryStore(
+                            directory: root.appendingPathComponent("eudi-operation-recovery", isDirectory: true),
+                            keyStore: keyStore
+                        )
+                        let attestationProvider = ReferenceDemoWalletAttestationsProvider()
+                        let demo = try EudiReferenceDemoConfiguration.makeWalletConfiguration(
+                            attestationProvider: attestationProvider
+                        )
+                        Self.eudiLogger.info(
+                            "Reference Demo configuration ready in \(startedAt.duration(to: .now), privacy: .public)"
+                        )
+                        let adapterStartedAt = ContinuousClock.now
+                        let operationalConfiguration = try EudiOperationalConfiguration(
+                            clientID: EudiReferenceDemoConfiguration.clientID,
+                            authorizationRedirectURI: EudiReferenceDemoConfiguration.redirectURI,
+                            attestationProvider: attestationProvider,
+                            auditRepository: auditRepository,
+                            auditPolicy: .productionConsent,
+                            auditPolicyVersion: AuditPolicyVersion(rawValue: 1),
+                            metadataRepository: metadataRepository,
+                            recoveryStore: recoveryStore,
+                            statusProvider: ReferenceDemoCredentialStatusProvider(),
+                            allowedIssuerOrigins: EudiReferenceDemoConfiguration.issuerOrigins,
+                            allowedVerifierOrigins: [
+                                "https://verifier.eudiw.dev",
+                                "https://verifier-backend.eudiw.dev",
+                            ],
+                            allowedApplicationRedirectOrigins: ["https://wallet-provider.eudiw.dev"],
+                            allowUnregisteredDevelopmentCounterparties: true
+                        )
+                        let adapter = try demo.baseline.makeWallet(
+                            trustSource: demo.trustSource,
+                            operationalConfiguration: operationalConfiguration
+                        )
+                        Self.eudiLogger.info(
+                            "Wallet Kit constructed in \(adapterStartedAt.duration(to: .now), privacy: .public)"
+                        )
+                        return .success(LiveEudiWalletService(adapter: adapter))
+                    } catch {
+                        return .failure(String(describing: error))
+                    }
+                }.value
+            }
             let openID4VCWallet = try makeW3CWallet(
                 root: root,
                 keyStore: keyStore,
@@ -78,8 +128,9 @@ struct WalletAppDependencies: Sendable {
                 credentials: metadataRepository,
                 audit: auditRepository,
                 localAuthenticator: SystemLocalAuthenticator(),
-                eudiWallet: eudiWallet,
-                eudiAvailability: eudiAvailability,
+                eudiWallet: nil,
+                eudiAvailability: .configurationRequired("EUDI Reference Demo is initializing…"),
+                eudiInitializer: eudiInitializer,
                 openID4VCWallet: openID4VCWallet
             )
         }
@@ -189,6 +240,11 @@ struct WalletAppDependencies: Sendable {
         )
     }
 #endif
+}
+
+enum EudiInitializationResult: Sendable {
+    case success(any EudiWalletOperating)
+    case failure(String)
 }
 
 #if DEBUG

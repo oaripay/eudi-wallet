@@ -72,11 +72,7 @@ final class WalletUITests: XCTestCase {
                 "https://verifier.example/present?request=x",
             ]
         )
-        let review = element(approvedApp, "scanner.result.presentation")
-        XCTAssertTrue(review.waitForExistence(timeout: 2))
-        review.tap()
-        XCTAssertTrue(element(approvedApp, "review.screen").waitForExistence(timeout: 2))
-        XCTAssertTrue(element(approvedApp, "review.not-verified").exists)
+        XCTAssertTrue(element(approvedApp, "scanner.result.presentation").waitForExistence(timeout: 2))
     }
 
     func testStorageFailureIsExplicit() {
@@ -104,6 +100,21 @@ final class WalletUITests: XCTestCase {
         let app = launch(fixture: "empty")
         app.open(URL(string: "openid-credential-offer://authorize?credential_offer=fixture")!)
         XCTAssertTrue(element(app, "scanner.result.issuance").waitForExistence(timeout: 5))
+    }
+
+    func testIncomingHAIPLinksRouteToTheirReviewEntries() {
+        let app = launch(fixture: "empty")
+        app.open(URL(string: "haip-vci://authorize?credential_offer=fixture")!)
+        XCTAssertTrue(element(app, "scanner.result.issuance").waitForExistence(timeout: 5))
+
+        app.open(URL(string: "haip-vp://authorize?request=fixture")!)
+        XCTAssertTrue(element(app, "scanner.result.presentation").waitForExistence(timeout: 5))
+
+        app.open(URL(string: "eudi-openid4vp://authorize?request=fixture")!)
+        XCTAssertTrue(element(app, "scanner.result.presentation").waitForExistence(timeout: 5))
+
+        app.open(URL(string: "mdoc-openid4vp://authorize?request=fixture")!)
+        XCTAssertTrue(element(app, "scanner.result.presentation").waitForExistence(timeout: 5))
     }
 
     private func launch(

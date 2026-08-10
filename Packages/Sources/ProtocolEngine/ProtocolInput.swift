@@ -3,6 +3,11 @@ import Foundation
 public enum ProtocolInputRoute: Equatable, Sendable {
     case openID4VP(URL)
     case openID4VCI(URL)
+    /// A presentation deep link whose protocol owner is EUDI Wallet Kit.
+    case eudiOpenID4VP(URL)
+    /// An issuance deep link whose protocol owner is EUDI Wallet Kit.
+    case eudiOpenID4VCI(URL)
+    case eudiAuthorizationCallback(URL)
     case unsupported(URL)
 }
 
@@ -34,8 +39,21 @@ public struct ProtocolInputClassifier: Sendable {
         guard let url = URL(string: raw), let scheme = url.scheme?.lowercased() else {
             throw ProtocolInputError.malformedURL
         }
-        guard ["https", "openid4vp", "openid-credential-offer"].contains(scheme) else {
+        let eudiPresentationSchemes = ["haip-vp", "eudi-openid4vp", "mdoc-openid4vp"]
+        let supportedSchemes = [
+            "https", "openid4vp", "openid-credential-offer", "haip-vci",
+            "eu.europa.ec.euidi",
+        ] + eudiPresentationSchemes
+        guard supportedSchemes.contains(scheme) else {
             throw ProtocolInputError.unsupportedScheme
+        }
+        if scheme == "eu.europa.ec.euidi" {
+            guard url.host?.lowercased() == "authorization",
+                  url.user == nil, url.password == nil, url.port == nil,
+                  url.path.isEmpty || url.path == "/" else {
+                throw ProtocolInputError.unsupportedHost
+            }
+            return .eudiAuthorizationCallback(url)
         }
         if scheme == "https" {
             guard !allowedHosts.isEmpty else {
@@ -50,6 +68,12 @@ public struct ProtocolInputClassifier: Sendable {
             throw ProtocolInputError.missingProtocolPayload
         }
 
+        if eudiPresentationSchemes.contains(scheme) {
+            return .eudiOpenID4VP(url)
+        }
+        if scheme == "haip-vci" {
+            return .eudiOpenID4VCI(url)
+        }
         if scheme == "openid4vp" || url.queryItems?.contains(where: { $0.name == "request_uri" || $0.name == "request" }) == true {
             return .openID4VP(url)
         }

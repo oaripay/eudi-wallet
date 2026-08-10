@@ -13,11 +13,7 @@ enum WalletKitRuntimeProbe {
             approvedSHA256Digests: [EudiTrustAnchorSource.sha256Digest(of: trustAnchor)]
         )
         let adapter = try baseline.makeWallet(trustSource: trustSource)
-        do {
-            return try await adapter.loadDocumentSummaries().count
-        } catch EudiWalletKitAdapterError.unsafeDebugLogging {
-            throw WalletKitRuntimeProbeError.debugLoggingBlocked
-        }
+        return try await adapter.loadDocumentSummaries().count
     }
 
     static func rejectMalformedOperationalInputs(trustAnchor: Data) async throws {
@@ -206,7 +202,6 @@ enum WalletKitRuntimeProbe {
 }
 
 enum WalletKitRuntimeProbeError: Error, Equatable {
-    case debugLoggingBlocked
     case unsafeInputAccepted
     case fixtureUnexpectedlySucceeded
     case injectedTransportNotUsed

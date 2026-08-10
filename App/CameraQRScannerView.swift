@@ -8,6 +8,7 @@ struct CameraQRScannerSheet: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var scannerError: String?
     @State private var didRecognizeCode = false
+    @State private var pendingCode: String?
     let onCode: @MainActor @Sendable (String) -> Void
 
     var body: some View {
@@ -19,14 +20,9 @@ struct CameraQRScannerSheet: View {
                       DataScannerViewController.isAvailable {
                 CameraQRScannerView { code in
                     didRecognizeCode = true
+                    pendingCode = code
                     UINotificationFeedbackGenerator().notificationOccurred(.success)
-                    Task { @MainActor in
-                        if !reduceMotion {
-                            try? await Task.sleep(for: .milliseconds(240))
-                        }
-                        onCode(code)
-                        dismiss()
-                    }
+                    dismiss()
                 } onFailure: {
                     scannerError = "Camera access was interrupted or denied. Paste the wallet code instead."
                 }
@@ -37,6 +33,11 @@ struct CameraQRScannerSheet: View {
             }
         }
         .statusBarHidden()
+        .onDisappear {
+            guard let pendingCode else { return }
+            self.pendingCode = nil
+            onCode(pendingCode)
+        }
     }
 
     private var scannerOverlay: some View {
@@ -72,10 +73,11 @@ struct CameraQRScannerSheet: View {
                         .shadow(color: .black.opacity(0.35), radius: 8, y: 3)
                         .overlay {
                             if didRecognizeCode {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 58, weight: .semibold))
-                                    .symbolRenderingMode(.palette)
-                                    .foregroundStyle(.white, .green)
+                                ProgressView()
+                                    .controlSize(.large)
+                                    .tint(.white)
+                                    .padding(18)
+                                    .background(.black.opacity(0.65), in: Circle())
                                     .transition(.scale.combined(with: .opacity))
                             }
                         }

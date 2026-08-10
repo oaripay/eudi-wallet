@@ -126,6 +126,29 @@ struct WalletAppModelTests {
         #expect(await restartedAuthenticator.callCount == 1)
     }
 
+    @Test("Startup reaches loaded before foreground authentication completes")
+    func startupDoesNotWaitForAppLockAuthentication() async {
+        let suiteName = "WalletAppModelTests.nonblocking-startup-auth.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: "oari.security.app-lock.enabled")
+        let authenticator = SuspendingAppLockAuthenticator()
+        let model = WalletAppModel(showsOnboarding: false, userDefaults: defaults)
+
+        await model.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), appLockAuthenticator: authenticator,
+            eudiWallet: nil, eudiAvailability: .configurationRequired("Unavailable"), openID4VCWallet: nil
+        )))
+
+        #expect(model.loadingState == .loaded)
+        #expect(model.isAppLockBlocking)
+        await authenticator.waitForCallCount(1)
+        await authenticator.completeNext()
+        for _ in 0..<20 where model.isAppLockBlocking { await Task.yield() }
+        #expect(!model.isAppLockBlocking)
+    }
+
     @Test("Enabling App Lock authentication does not present the foreground lock screen")
     func appLockSetupAuthenticationDoesNotBlock() async {
         let suiteName = "WalletAppModelTests.app-lock-setup-auth.\(UUID().uuidString)"
@@ -270,6 +293,80 @@ struct WalletAppModelTests {
         #expect(model.selectedTab == .scan)
     }
 
+    @Test("EUDI authorization callback never enters the scanner")
+    func eudiAuthorizationCallback() {
+        let model = WalletAppModel()
+        model.handleIncomingURL(URL(string: "eu.europa.ec.euidi://authorization?code=a%2Bb&state=state")!)
+        #expect(model.scanResult == .idle)
+        #expect(model.scanInput.isEmpty)
+        #expect(model.selectedTab == .wallet)
+
+        model.handleIncomingURL(URL(string: "eu.europa.ec.euidi://unexpected?request=not-a-scan")!)
+        #expect(model.scanResult == .idle)
+        #expect(model.scanInput.isEmpty)
+        #expect(model.selectedTab == .wallet)
+    }
+
+    @Test("HAIP links route directly to Wallet Kit and never to native W3C")
+    func haipRoutesDirectlyToEudi() async {
+        let presentation = fixturePresentationRequest()
+        let eudi = FixtureEudiWallet(presentationRequest: presentation)
+        let w3c = FixtureOpenID4VCWallet(
+            outcome: .allow,
+            standalonePresentationRequest: presentation
+        )
+        let model = WalletAppModel()
+        await model.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), eudiWallet: eudi,
+            eudiAvailability: .available, openID4VCWallet: w3c
+        )))
+
+        model.scanInput = "haip-vci://authorize?credential_offer=fixture"
+        await model.reviewScannedRequest()
+        #expect(await eudi.lastIssuanceOfferURI?.hasPrefix("haip-vci:") == true)
+        #expect(await w3c.resolveCount == 0)
+
+        for scheme in ["haip-vp", "eudi-openid4vp", "mdoc-openid4vp"] {
+            model.scanInput = "\(scheme)://authorize?request=fixture"
+            await model.reviewScannedRequest()
+            #expect(await eudi.lastPresentationRequestURI?.hasPrefix("\(scheme):") == true)
+            #expect(await w3c.presentationBeginCount == 0)
+        }
+    }
+
+    @Test("HAIP waits for one in-progress EUDI initialization without blocking app load")
+    func haipWaitsForEudiInitialization() async throws {
+        let eudi = FixtureEudiWallet()
+        let initializationCalls = InitializationCounter()
+        let model = WalletAppModel()
+        await model.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(),
+            audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(),
+            eudiWallet: nil,
+            eudiAvailability: .configurationRequired("Initializing"),
+            eudiInitializer: {
+                await initializationCalls.recordCall()
+                try? await Task.sleep(for: .milliseconds(100))
+                return .success(eudi)
+            },
+            openID4VCWallet: nil
+        )))
+        #expect(model.loadingState == .loaded)
+
+        model.scanInput = "haip-vci://credential_offer?credential_offer=fixture"
+        let review = Task { await model.reviewScannedRequest() }
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(model.isEudiOperationLoading)
+        await review.value
+
+        #expect(!model.isEudiOperationLoading)
+        #expect(model.eudiAvailability == .available)
+        #expect(await initializationCalls.count == 1)
+        #expect(await eudi.lastIssuanceOfferURI?.hasPrefix("haip-vci:") == true)
+    }
+
     @Test("Privacy cover state follows explicit lifecycle input")
     func privacyCover() async {
         let model = WalletAppModel()
@@ -321,11 +418,13 @@ struct WalletAppModelTests {
             Issue.record("Expected issuance review")
             return
         }
-        await model.acceptIssuance()
+        await model.acceptIssuance(transactionCode: "1234")
         #expect(model.eudiFlow == .idle)
         #expect(model.scanInput.isEmpty)
         #expect(model.selectedTab == .wallet)
         #expect(await service.issueCount == 1)
+        #expect(await service.lastIssuedProfileID == "fixture-eudi-profile")
+        #expect(await service.lastTransactionCode == "1234")
     }
 
     @Test("Presentation consent preselects required claims and completes")
@@ -907,6 +1006,8 @@ private actor FixtureOpenID4VCWallet: OpenID4VCOperating {
     private(set) var completedPIDClaimIDs: [Set<String>] = []
     private(set) var completedStandaloneClaimIDs: [Set<String>] = []
     private(set) var deletedCredentials: [(UUID, CredentialID)] = []
+    private(set) var resolveCount = 0
+    private(set) var presentationBeginCount = 0
     let pidPresentationRequest: EudiPresentationRequest?
     let standalonePresentationRequest: EudiPresentationRequest?
     init(
@@ -925,7 +1026,8 @@ private actor FixtureOpenID4VCWallet: OpenID4VCOperating {
         self.standalonePresentationRequest = standalonePresentationRequest
     }
     func resolveInteraction(uri: String) async throws -> OpenID4VCResolvedInteraction {
-        OpenID4VCResolvedInteraction(
+        resolveCount += 1
+        return OpenID4VCResolvedInteraction(
             id: interactionID, kind: .issuance,
             counterpartyIdentifier: "did:ebsi:unregistered-issuer",
             displayName: "Development issuer", trustOutcome: outcome,
@@ -937,6 +1039,7 @@ private actor FixtureOpenID4VCWallet: OpenID4VCOperating {
         )
     }
     func beginPresentation(uri: String) async throws -> EudiPresentationRequest {
+        presentationBeginCount += 1
         guard let standalonePresentationRequest else { throw EbsiCredentialError.unsupportedRepresentation }
         return standalonePresentationRequest
     }
@@ -989,6 +1092,7 @@ private actor FixtureOpenID4VCWallet: OpenID4VCOperating {
 }
 
 private actor FixtureEudiWallet: EudiWalletOperating {
+    let profileID = "fixture-eudi-profile"
     private(set) var issueCount = 0
     private(set) var operationCount = 0
     private(set) var lastSelectedClaims: Set<String> = []
@@ -1001,6 +1105,9 @@ private actor FixtureEudiWallet: EudiWalletOperating {
     private(set) var lastDeleted: String?
     private(set) var lastRetried: String?
     private(set) var lastPresentationRequestURI: String?
+    private(set) var lastIssuanceOfferURI: String?
+    private(set) var lastIssuedProfileID: String?
+    private(set) var lastTransactionCode: String?
 
     init(
         pendingAtLoad: [EudiPendingIssuance] = [],
@@ -1019,6 +1126,7 @@ private actor FixtureEudiWallet: EudiWalletOperating {
     }
     func resolveIssuanceOffer(uri: String) async throws -> EudiIssuanceOffer {
         operationCount += 1
+        lastIssuanceOfferURI = uri
         return EudiIssuanceOffer(
             id: UUID(),
             issuerName: "Fixture issuer",
@@ -1041,6 +1149,8 @@ private actor FixtureEudiWallet: EudiWalletOperating {
     ) async throws -> EudiIssuanceResult {
         operationCount += 1
         issueCount += 1
+        lastIssuedProfileID = profileID
+        lastTransactionCode = transactionCode
         return EudiIssuanceResult(documents: [], metadata: [], warningCount: 0, pendingIssuances: [])
     }
     func beginOpenID4VPPresentation(requestURI: String) async throws -> EudiPresentationRequest {
@@ -1140,6 +1250,11 @@ private actor FixtureAppLockAuthenticator: AppLockAuthenticating {
         callCount += 1
         if shouldFail { throw TestFailure.unavailable }
     }
+}
+
+private actor InitializationCounter {
+    private(set) var count = 0
+    func recordCall() { count += 1 }
 }
 
 private actor SuspendingAppLockAuthenticator: AppLockAuthenticating {

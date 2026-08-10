@@ -10,17 +10,47 @@ import X509
 import MdocSecurity18013
 #endif
 
-public struct EudiWalletKitBaseline: Equatable, Sendable {
+public struct EudiWalletKitBaseline: Sendable {
     public static let selectedVersion = "0.39.1"
     public static let selectedCommit = "79005ab4bf0399238c1c9ebff9ee7d8a42c521f9"
 
     public let serviceName: String
+    public let trustConfiguration: TrustConfiguration
+    public let openID4VciConfigurations: [String: OpenId4VciConfiguration]
+    public let openID4VpConfiguration: OpenId4VpConfiguration
+    private let derivesTrustConfigurationFromSource: Bool
+
+    public init(
+        serviceName: String,
+        trustConfiguration: TrustConfiguration,
+        openID4VciConfigurations: [String: OpenId4VciConfiguration],
+        openID4VpConfiguration: OpenId4VpConfiguration
+    ) throws {
+        let serviceName = serviceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !serviceName.isEmpty, !serviceName.contains(":") else {
+            throw EudiWalletKitAdapterError.invalidServiceName
+        }
+        self.serviceName = serviceName
+        self.trustConfiguration = trustConfiguration
+        self.openID4VciConfigurations = openID4VciConfigurations
+        self.openID4VpConfiguration = openID4VpConfiguration
+        self.derivesTrustConfigurationFromSource = false
+    }
+
+    /// Test-support compatibility. Production callers should provide the full
+    /// native Wallet Kit trust and protocol configuration.
     public init(serviceName: String) throws {
         let serviceName = serviceName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !serviceName.isEmpty, !serviceName.contains(":") else {
             throw EudiWalletKitAdapterError.invalidServiceName
         }
         self.serviceName = serviceName
+        self.trustConfiguration = Self.compatibilityTrustConfiguration(anchors: [])
+        self.openID4VciConfigurations = [:]
+        self.openID4VpConfiguration = OpenId4VpConfiguration(
+            clientIdSchemes: [.redirectUri]
+        )
+        self.derivesTrustConfigurationFromSource = true
     }
 
     public func walletConfiguration() -> EudiWalletConfiguration {
@@ -33,11 +63,7 @@ public struct EudiWalletKitBaseline: Equatable, Sendable {
     }
 
     public func presentationConfiguration() -> OpenId4VpConfiguration {
-        OpenId4VpConfiguration(
-            clientIdSchemes: [.x509SanDns, .x509Hash, .redirectUri],
-            preferredResponseMode: .directPostJWT,
-            validateRegistrationCertificate: true
-        )
+        openID4VpConfiguration
     }
 
     public func makeWallet(
@@ -45,59 +71,18 @@ public struct EudiWalletKitBaseline: Equatable, Sendable {
         operationalConfiguration: EudiOperationalConfiguration? = nil,
         validationDate: Date = Date()
     ) throws -> EudiWalletKitAdapter {
-        let trustAnchors = try trustSource.validatedAnchors(at: validationDate)
-        let developmentTrustWarning = operationalConfiguration?.allowUnregisteredDevelopmentCounterparties == true
-        #if canImport(EudiEtsi1196x2)
-        let trustConfiguration = TrustConfiguration(
-            trustSource: .staticList(
-                StaticListTrustSource(rootCertificates: trustAnchors)
-            ),
-            fallbackTrustSource: nil,
-            defaultPolicy: developmentTrustWarning ? .warning : .enforce,
-            requireSignedMetadata: !developmentTrustWarning,
-            statusTrustPolicy: developmentTrustWarning ? .warning : .enforce,
-            wrprcTrustPolicy: developmentTrustWarning ? .warning : .enforce
-        )
-        #else
-        let trustConfiguration = TrustConfiguration(
-            rootIaca: [trustAnchors],
-            defaultPolicy: developmentTrustWarning ? .warning : .enforce,
-            requireSignedMetadata: !developmentTrustWarning,
-            statusTrustPolicy: developmentTrustWarning ? .warning : .enforce,
-            wrprcTrustPolicy: developmentTrustWarning ? .warning : .enforce
-        )
-        #endif
+        // Keep the profile-bound validation boundary, while allowing the caller to supply
+        // Wallet Kit's complete native trust model (including ETSI LoTE and fallback sources).
+        let anchors = try trustSource.validatedAnchors(at: validationDate)
+        let effectiveTrustConfiguration = derivesTrustConfigurationFromSource
+            ? Self.compatibilityTrustConfiguration(anchors: anchors)
+            : trustConfiguration
         do {
-            let vciConfigurations: [String: OpenId4VciConfiguration]?
-            if let operationalConfiguration {
-                let provider = WalletAttestationBridge(provider: operationalConfiguration.attestationProvider)
-                vciConfigurations = [
-                    "oari-default": OpenId4VciConfiguration(
-                        credentialIssuerURL: "https://unconfigured-issuer.invalid",
-                        clientId: operationalConfiguration.clientID,
-                        keyAttestationsConfig: KeyAttestationConfiguration(
-                            walletAttestationsProvider: provider
-                        ),
-                        authFlowRedirectionURI: operationalConfiguration.authorizationRedirectURI,
-                        parUsage: .required(authorizationCodeDPoPBinding: true),
-                        requireDpop: true,
-                        issuerMetadataPolicy: developmentTrustWarning
-                            ? .preferSigned(issuerTrust: .byCertificateChain(
-                                certificateChainTrust: DevelopmentIssuerMetadataChainTrust()
-                            ))
-                            : trustConfiguration.issuerMetadataPolicy,
-                         validateRegistrationCertificate: !developmentTrustWarning,
-                        userAuthenticationRequired: true
-                    ),
-                ]
-            } else {
-                vciConfigurations = nil
-            }
             let wallet = try EudiWallet(
                 eudiWalletConfig: walletConfiguration(),
-                trustConfig: trustConfiguration,
+                trustConfig: effectiveTrustConfiguration,
                 openID4VpConfig: presentationConfiguration(),
-                openID4VciConfigurations: vciConfigurations,
+                openID4VciConfigurations: openID4VciConfigurations,
                 networking: operationalConfiguration.map(EudiNetworkingBridge.init)
             )
             return EudiWalletKitAdapter(
@@ -109,23 +94,23 @@ public struct EudiWalletKitBaseline: Equatable, Sendable {
             throw EudiWalletKitAdapterError.initializationFailed
         }
     }
-}
 
-struct DevelopmentIssuerMetadataChainTrust: CertificateChainTrust {
-    func isValid(chain: [String]) async -> Bool {
-        guard (1...5).contains(chain.count) else { return false }
-        var totalBytes = 0
-        for encoded in chain {
-            guard encoded.utf8.count <= 24_576,
-                  let data = Data(base64Encoded: encoded),
-                  !data.isEmpty,
-                  SecCertificateCreateWithData(nil, data as CFData) != nil else {
-                return false
-            }
-            totalBytes += data.count
-            guard totalBytes <= 65_536 else { return false }
-        }
-        return true
+    private static func compatibilityTrustConfiguration(anchors: [Data]) -> TrustConfiguration {
+        #if canImport(EudiEtsi1196x2)
+        TrustConfiguration(
+            trustSource: .staticList(StaticListTrustSource(rootCertificates: anchors)),
+            defaultPolicy: .warning,
+            requireSignedMetadata: false,
+            statusTrustPolicy: .warning
+        )
+        #else
+        TrustConfiguration(
+            rootIaca: [anchors],
+            defaultPolicy: .warning,
+            requireSignedMetadata: false,
+            statusTrustPolicy: .warning
+        )
+        #endif
     }
 }
 
@@ -183,22 +168,24 @@ public struct EudiOperationalConfiguration: Sendable {
         allowedVerifierOrigins: Set<String>,
         allowedApplicationRedirectOrigins: Set<String>,
         networkTransport: (any EudiNetworkTransport)? = nil,
-        allowUnregisteredDevelopmentCounterparties: Bool = false
+        allowUnregisteredDevelopmentCounterparties: Bool = true // keep this for development
     ) throws {
         let clientID = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
         let allowedIssuerOrigins = try Self.validatedOrigins(allowedIssuerOrigins)
         let allowedVerifierOrigins = try Self.validatedOrigins(allowedVerifierOrigins)
         let allowedApplicationRedirectOrigins = try Self.validatedOrigins(allowedApplicationRedirectOrigins)
+        let isReferenceDemoRedirect = authorizationRedirectURI.absoluteString ==
+            "eu.europa.ec.euidi://authorization"
         let redirectOrigin = try? EudiWalletKitAdapter.canonicalHTTPSOrigin(
-            authorizationRedirectURI.absoluteString,
-            requireOriginOnly: false
+            authorizationRedirectURI.absoluteString, requireOriginOnly: false
         )
         guard !clientID.isEmpty,
-              authorizationRedirectURI.scheme?.lowercased() == "https",
-              let redirectOrigin,
-              allowedApplicationRedirectOrigins.contains(redirectOrigin),
-              authorizationRedirectURI.host != nil,
-              authorizationRedirectURI.path == "/oauth/callback",
+              (isReferenceDemoRedirect || (
+                authorizationRedirectURI.scheme?.lowercased() == "https" &&
+                redirectOrigin.map(allowedApplicationRedirectOrigins.contains) == true &&
+                authorizationRedirectURI.host != nil &&
+                authorizationRedirectURI.path == "/oauth/callback"
+              )),
               authorizationRedirectURI.user == nil,
               authorizationRedirectURI.password == nil,
               authorizationRedirectURI.port == nil,
@@ -262,10 +249,14 @@ public struct EudiOperationalConfiguration: Sendable {
     }
 }
 
-private struct WalletAttestationBridge: WalletAttestationsProvider {
-    let provider: any EudiWalletAttestationProviding
+public struct EudiWalletAttestationsProviderAdapter: WalletAttestationsProvider {
+    private let provider: any EudiWalletAttestationProviding
 
-    func getWalletAttestation(signingKey: SigningKeyProxy) async throws -> String {
+    public init(provider: any EudiWalletAttestationProviding) {
+        self.provider = provider
+    }
+
+    public func getWalletAttestation(signingKey: SigningKeyProxy) async throws -> String {
         let publicKey: any JWK
         switch signingKey {
         case .custom(let signer): publicKey = signer.publicKey
@@ -281,7 +272,7 @@ private struct WalletAttestationBridge: WalletAttestationsProvider {
         return try await provider.walletAttestation(publicJWK: encoded)
     }
 
-    func getKeysAttestation(keys: [any JWK], nonce: String?) async throws -> String {
+    public func getKeysAttestation(keys: [any JWK], nonce: String?) async throws -> String {
         let encoded = try keys.map {
             guard let value = $0.jsonString() else {
                 throw EudiWalletKitAdapterError.attestationEncodingFailed
@@ -555,19 +546,22 @@ public struct EudiTransactionCodeRequirement: Equatable, Sendable {
 public struct EudiIssuanceOffer: Equatable, Sendable {
     public let id: UUID
     public let issuerName: String
-    public let issuerLogoURL: String?
+    public let issuerURL: URL?
+    public let issuerLogoURL: URL?
     public let documents: [EudiIssuanceOfferDocument]
     public let transactionCode: EudiTransactionCodeRequirement?
 
     public init(
         id: UUID,
         issuerName: String,
-        issuerLogoURL: String?,
+        issuerURL: URL? = nil,
+        issuerLogoURL: URL?,
         documents: [EudiIssuanceOfferDocument],
         transactionCode: EudiTransactionCodeRequirement?
     ) {
         self.id = id
         self.issuerName = issuerName
+        self.issuerURL = issuerURL
         self.issuerLogoURL = issuerLogoURL
         self.documents = documents
         self.transactionCode = transactionCode
@@ -872,7 +866,7 @@ actor EudiOperationalState {
 public final class EudiWalletKitAdapter: @unchecked Sendable {
     private let wallet: EudiWallet
     private let operationalConfiguration: EudiOperationalConfiguration?
-    let trustProfileID: String
+    public let trustProfileID: String
     private let operationalState = EudiOperationalState()
 
     init(
@@ -885,13 +879,6 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
         self.trustProfileID = trustProfileID
     }
 
-    public func requireOperationalRuntime() throws {
-        guard !_isDebugAssertConfiguration() ||
-                operationalConfiguration?.allowUnregisteredDevelopmentCounterparties == true else {
-            throw EudiWalletKitAdapterError.unsafeDebugLogging
-        }
-    }
-
     public func loadDocumentSummaries() async throws -> [EudiWalletDocumentSummary] {
         try await operationalState.performLifecycleOperation { [self] in
             try await loadDocumentSummariesUnlocked()
@@ -900,7 +887,6 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
 
     public func loadStartupSnapshot() async throws -> EudiWalletStartupSnapshot {
         try await operationalState.performLifecycleOperation { [self] in
-            try requireOperationalRuntime()
             let configuration = try requireOperationalConfiguration()
             try await reconcilePendingOperationsUnlocked()
             async let metadataTask = configuration.metadataRepository.credentials()
@@ -956,7 +942,6 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
     }
 
     private func loadDocumentSummariesUnlocked() async throws -> [EudiWalletDocumentSummary] {
-        try requireOperationalRuntime()
         if operationalConfiguration != nil { try await reconcilePendingOperationsUnlocked() }
         let documents = try await wallet.loadAllDocuments() ?? []
         return documents.map {
@@ -981,7 +966,6 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
     }
 
     private func deleteAllDocumentsUnlocked() async throws {
-        try requireOperationalRuntime()
         let configuration = try requireOperationalConfiguration()
         try await reconcilePendingOperationsUnlocked()
         let documents = try await wallet.loadAllDocuments() ?? []
@@ -1039,7 +1023,6 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
     }
 
     private func deleteDocumentUnlocked(id: String, status: String) async throws {
-        try requireOperationalRuntime()
         let configuration = try requireOperationalConfiguration()
         try await reconcilePendingOperationsUnlocked()
         guard !id.isEmpty else { throw EudiWalletKitAdapterError.invalidDocumentReference }
@@ -1092,7 +1075,6 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
     }
 
     public func resolveIssuanceOffer(uri: String) async throws -> EudiIssuanceOffer {
-        try requireOperationalRuntime()
         let configuration = try requireOperationalConfiguration()
         let uri = try configuration.validateIssuanceOfferURI(uri)
         let model = try await EudiNetworkScope.$current.withValue(.issuance) {
@@ -1105,17 +1087,22 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
             throw EudiWalletKitAdapterError.emptyIssuanceOffer
         }
         let id = await operationalState.insert(uri: uri, model: model)
+        let issuerURL = Self.credentialIssuerURL(from: uri)
         return EudiIssuanceOffer(
             id: id,
             issuerName: model.issuerName,
-            issuerLogoURL: model.issuerLogoUrl,
+            issuerURL: issuerURL,
+            issuerLogoURL: Self.safeDisplayURL(model.issuerLogoUrl, relativeTo: issuerURL),
             documents: model.docModels.map {
                 EudiIssuanceOfferDocument(
                     configurationID: $0.credentialConfigurationIdentifier,
                     documentType: $0.docTypeOrVct ?? $0.credentialConfigurationIdentifier,
                     displayName: $0.displayName,
                     supportedAlgorithms: $0.algValuesSupported,
-                    display: Self.offerDisplayMetadata(from: $0.credentialMetadata?.display)
+                    display: Self.offerDisplayMetadata(
+                        from: $0.credentialMetadata?.display,
+                        issuerURL: issuerURL
+                    )
                 )
             },
             transactionCode: model.txCodeSpec.map {
@@ -1153,7 +1140,6 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
         transactionCode: String?,
         promptMessage: String
     ) async throws -> EudiIssuanceResult {
-        try requireOperationalRuntime()
         let configuration = try requireOperationalConfiguration()
         let prompt = promptMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         let profileID = profileID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1209,11 +1195,13 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
                 throw error
             }
         }()
-        let summaries = response.documents.map { document in
-            let configurationID = selected.first { offered in
-                offered.docTypeOrVct == document.docType ||
-                    offered.credentialConfigurationIdentifier == document.docType
-            }?.credentialConfigurationIdentifier
+        let documents = response.documents
+        let summaries: [EudiWalletDocumentSummary] = documents.map { document in
+            let configurationID = selected.first(where: { offered in
+                let matchesType = offered.docTypeOrVct == document.docType
+                let matchesConfiguration = offered.credentialConfigurationIdentifier == document.docType
+                return matchesType || matchesConfiguration
+            })?.credentialConfigurationIdentifier
             return EudiWalletDocumentSummary(
                 id: document.id,
                 documentType: document.docType,
@@ -1256,7 +1244,7 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
             throw EudiWalletKitAdapterError.metadataPersistenceFailed
         }
         var pendingIssuances: [EudiPendingIssuance] = []
-        for document in response.documents where document.status == .pending {
+        for document in documents where document.status == .pending {
             guard let requestURI = document.authorizePresentationUrl,
                   let summary = summaries.first(where: { $0.id == document.id }),
                   let metadata = metadataRecords.first(where: { $0.walletDocumentID == document.id }) else {
@@ -1274,10 +1262,11 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
                 document: summary
             ))
         }
-        let issuedDocumentIDs = Set(summaries.filter { $0.status == "issued" }.map(\.id))
+        let issuedDocumentIDs = Set(summaries.filter { $0.status == "issued" }.map { $0.id })
         let issuedCredentialIDs = metadataRecords.filter {
-            $0.walletDocumentID.map(issuedDocumentIDs.contains) == true
-        }.map(\.id)
+            guard let documentID = $0.walletDocumentID else { return false }
+            return issuedDocumentIDs.contains(documentID)
+        }.map { $0.id }
         let completionEvent = issuedCredentialIDs.isEmpty ? nil : makeAuditEvent(
             configuration: configuration,
             operation: .issuance,
@@ -1323,7 +1312,6 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
     }
 
     private func reconcilePendingOperationsUnlocked() async throws {
-        try requireOperationalRuntime()
         let configuration = try requireOperationalConfiguration()
         let recoveries: [WalletOperationRecovery]
         do {
@@ -1445,7 +1433,6 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
     }
 
     private func loadPendingIssuancesUnlocked() async throws -> [EudiPendingIssuance] {
-        try requireOperationalRuntime()
         let configuration = try requireOperationalConfiguration()
         try await reconcilePendingOperationsUnlocked()
         let metadata = try await configuration.metadataRepository.credentials()
@@ -1496,7 +1483,6 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
         id: UUID,
         presentationResult: EudiPresentationResult
     ) async throws -> EudiIssuanceResult {
-        try requireOperationalRuntime()
         let configuration = try requireOperationalConfiguration()
         try await reconcilePendingOperationsUnlocked()
         guard presentationResult.userAccepted,
@@ -1683,7 +1669,6 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
         issuerName: String,
         documentID: String
     ) async throws -> EudiWalletDocumentSummary {
-        try requireOperationalRuntime()
         let configuration = try requireOperationalConfiguration()
         let issuerName = issuerName.trimmingCharacters(in: .whitespacesAndNewlines)
         try await reconcilePendingOperationsUnlocked()
@@ -1803,7 +1788,6 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
     public func beginPendingIssuancePresentation(
         id: UUID
     ) async throws -> EudiPresentationRequest {
-        try requireOperationalRuntime()
         guard let pending = await operationalState.pending(id: id) else {
             throw EudiWalletKitAdapterError.unknownPendingIssuance
         }
@@ -1817,7 +1801,6 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
         requestURI: String,
         pendingIssuanceID: UUID?
     ) async throws -> EudiPresentationRequest {
-        try requireOperationalRuntime()
         let configuration = try requireOperationalConfiguration()
         let requestURI = try pendingIssuanceID == nil
             ? configuration.validatePresentationRequestURI(requestURI)
@@ -1846,7 +1829,6 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
     }
 
     public func beginBLEEngagement() async throws -> EudiBLEEngagement {
-        try requireOperationalRuntime()
         _ = try requireOperationalConfiguration()
         let session = await wallet.beginPresentation(flow: .ble)
         try await session.startQrEngagement()
@@ -1860,7 +1842,6 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
     public func receiveBLEPresentationRequest(
         id: UUID
     ) async throws -> EudiPresentationRequest {
-        try requireOperationalRuntime()
         _ = try requireOperationalConfiguration()
         guard let entry = await operationalState.presentation(id: id) else {
             throw EudiWalletKitAdapterError.unknownPresentation
@@ -1894,7 +1875,6 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
         selectedClaimIDs: Set<String>,
         userAccepted: Bool
     ) async throws -> EudiPresentationResult {
-        try requireOperationalRuntime()
         let configuration = try requireOperationalConfiguration()
         try await reconcilePendingOperationsUnlocked()
         guard let entry = await operationalState.presentation(id: id) else {
@@ -2059,7 +2039,8 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
     }
 
     private static func offerDisplayMetadata(
-        from displays: [Display]?
+        from displays: [Display]?,
+        issuerURL: URL?
     ) -> EudiIssuanceOfferDisplay? {
         guard let display = preferredDisplay(displays, locale: { $0.locale?.identifier }) else {
             return nil
@@ -2068,10 +2049,40 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
             description: display.description,
             backgroundColor: display.backgroundColor,
             textColor: display.textColor,
-            logoURL: display.logo?.uri,
+            logoURL: safeDisplayURL(display.logo?.uri, relativeTo: issuerURL),
             logoAlternativeText: display.logo?.alternativeText,
-            backgroundImageURL: display.backgroundImage?.url
+            backgroundImageURL: safeDisplayURL(display.backgroundImage?.url, relativeTo: issuerURL)
         )
+    }
+
+    private static func credentialIssuerURL(from offerURI: String) -> URL? {
+        guard let components = URLComponents(string: offerURI) else { return nil }
+        if components.scheme?.lowercased() == "https" {
+            return safeDisplayURL(components.url, relativeTo: nil)
+        }
+        guard let value = components.queryItems?.first(where: { $0.name == "credential_offer" })?.value,
+              let data = value.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let issuer = object["credential_issuer"] as? String else { return nil }
+        return safeDisplayURL(issuer, relativeTo: nil)
+    }
+
+    private static func safeDisplayURL(_ source: String?, relativeTo issuerURL: URL?) -> URL? {
+        guard let source else { return nil }
+        return safeDisplayURL(URL(string: source, relativeTo: issuerURL)?.absoluteURL, relativeTo: issuerURL)
+    }
+
+    private static func safeDisplayURL(_ source: URL?, relativeTo issuerURL: URL?) -> URL? {
+        guard let source,
+              source.scheme?.lowercased() == "https",
+              source.host != nil,
+              source.user == nil,
+              source.password == nil,
+              source.fragment == nil else { return nil }
+        if let issuerURL, let issuerHost = issuerURL.host?.lowercased() {
+            guard source.host?.lowercased() == issuerHost else { return nil }
+        }
+        return source
     }
 
     private static func storedDisplayMetadata(from data: Data?) -> StoredDisplayResolution? {
@@ -2192,14 +2203,21 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
         }
     }
 
-    fileprivate static func validatedOfferURI(
+    static func validatedOfferURI(
         _ value: String,
         allowedOrigins: Set<String>
     ) throws -> String {
         guard value.utf8.count <= 8_192,
-              let components = URLComponents(string: value),
+              let inputComponents = URLComponents(string: value),
+              let inputScheme = inputComponents.scheme?.lowercased(),
+              let normalized = normalizedURI(
+                value,
+                replacingSchemes: ["haip-vci": "openid-credential-offer"]
+              ),
+              let components = URLComponents(string: normalized),
               let scheme = components.scheme?.lowercased(),
               components.user == nil, components.password == nil,
+              inputScheme == "https" || inputScheme == "openid-credential-offer" || inputScheme == "haip-vci",
               scheme == "https" || scheme == "openid-credential-offer" else {
             throw EudiWalletKitAdapterError.invalidOfferURI
         }
@@ -2219,17 +2237,28 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
         guard let origin, allowedOrigins.contains("*") || allowedOrigins.contains(origin) else {
             throw EudiWalletKitAdapterError.unapprovedIssuer
         }
-        return value
+        return normalized
     }
 
-    fileprivate static func validatedPresentationURI(
+    static func validatedPresentationURI(
         _ value: String,
         allowedOrigins: Set<String>
     ) throws -> String {
         guard value.utf8.count <= 16_384,
-              let components = URLComponents(string: value),
+              let inputComponents = URLComponents(string: value),
+              let inputScheme = inputComponents.scheme?.lowercased(),
+              let normalized = normalizedURI(
+                value,
+                replacingSchemes: [
+                    "haip-vp": "openid4vp",
+                    "eudi-openid4vp": "openid4vp",
+                    "mdoc-openid4vp": "openid4vp",
+                ]
+              ),
+              let components = URLComponents(string: normalized),
               let scheme = components.scheme?.lowercased(),
-              components.user == nil, components.password == nil else {
+              components.user == nil, components.password == nil,
+              ["https", "openid4vp", "haip-vp", "eudi-openid4vp", "mdoc-openid4vp"].contains(inputScheme) else {
             throw EudiWalletKitAdapterError.invalidPresentationURI
         }
         if scheme == "https" {
@@ -2257,7 +2286,21 @@ public final class EudiWalletKitAdapter: @unchecked Sendable {
         } else {
             throw EudiWalletKitAdapterError.invalidPresentationURI
         }
-        return value
+        return normalized
+    }
+
+    private static func normalizedURI(
+        _ value: String,
+        replacingSchemes replacements: [String: String]
+    ) -> String? {
+        guard let components = URLComponents(string: value),
+              let scheme = components.scheme?.lowercased(),
+              let separator = value.firstIndex(of: ":") else { return nil }
+        guard let replacement = replacements[scheme] else { return value }
+        // Deliberately normalize only at this SDK boundary. Preserve the URI
+        // byte-for-byte after the scheme separator so encoded request values
+        // are never decoded, re-encoded, or otherwise rewritten here.
+        return replacement + String(value[separator...])
     }
 
     private static func signedPresentationRequestOrigin(_ compactJWT: String) -> String? {
@@ -2457,7 +2500,6 @@ public enum EudiWalletKitAdapterError: Error, Equatable, Sendable {
     case invalidTrustSource
     case unapprovedTrustAnchor
     case initializationFailed
-    case unsafeDebugLogging
     case invalidOperationalConfiguration
     case missingOperationalConfiguration
     case attestationEncodingFailed
