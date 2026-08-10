@@ -3,6 +3,10 @@ import IdentityDomain
 
 public struct VerifiedOpenID4VPRequestObject: Equatable, Sendable {
     public let clientID: String
+    /// The `iss` claim of the Request Object. OpenID4VP requires wallets to
+    /// ignore it for identification, but it is retained so callers can accept
+    /// the dynamic-discovery audience rule (`aud` == `iss`) from Section 5.8.
+    public let issuer: String?
     public let audience: String?
     public let responseType: String?
     public let responseMode: String
@@ -13,12 +17,16 @@ public struct VerifiedOpenID4VPRequestObject: Equatable, Sendable {
     /// Presentation signing algorithms advertised by the verifier, keyed by credential format.
     public let vpFormatsSupported: [String: Set<String>]?
     /// DID that controlled the verification method used for the Request Object.
+    /// `nil` when the Client Identifier Prefix does not provide a verifiable
+    /// key (for example `redirect_uri:`), in which case the caller must anchor
+    /// trust in the envelope instead (response URI binding).
     public let signingDID: String?
     public let issuedAt: Date?
     public let expiresAt: Date?
 
     public init(
         clientID: String,
+        issuer: String? = nil,
         audience: String? = nil,
         responseType: String? = nil,
         responseMode: String,
@@ -32,6 +40,7 @@ public struct VerifiedOpenID4VPRequestObject: Equatable, Sendable {
         expiresAt: Date? = nil
     ) {
         self.clientID = clientID
+        self.issuer = issuer
         self.audience = audience
         self.responseType = responseType
         self.responseMode = responseMode
@@ -66,17 +75,15 @@ public struct NativeOpenID4VPRequestObjectValidator: OpenID4VPRequestObjectValid
               let clientID = payload["client_id"]?.string,
                let responseMode = payload["response_mode"]?.string,
                let nonce = payload["nonce"]?.string,
-               let dcqlQuery = payload["dcql_query"]?.object,
-               let kid = header["kid"]?.string else {
+               let dcqlQuery = payload["dcql_query"]?.object else {
             throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request object was malformed")
         }
-        guard let signingDID = Self.signingDID(from: clientID) else {
-            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "unsupported client_id prefix")
-        }
-        guard Self.isDIDURL(kid, under: signingDID) else {
-            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request kid was not bound to client_id")
-        }
-        guard payload["transaction_data"] == nil else {
+        // OpenID4VP defines transaction_data as a non-empty array of base64url
+        // strings that the wallet must either process or reject. This wallet
+        // does not implement transaction data processing, so conforming values
+        // are rejected. Non-array values do not match the parameter definition
+        // and are ignored as unrecognized extension parameters.
+        if case .array? = payload["transaction_data"] {
             throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "transaction_data is not supported")
         }
         guard Self.isValidURLSafeValue(nonce), Self.hasValidOptionalURLSafeValue(payload["state"]) else {
@@ -89,6 +96,41 @@ public struct NativeOpenID4VPRequestObjectValidator: OpenID4VPRequestObjectValid
         }
         if case let .number(expiresAt)? = payload["exp"], Int(expiresAt) <= timestamp {
             throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request object expired")
+        }
+        if Self.signingDID(from: clientID) == nil {
+            // OpenID4VP Section 5.9.3: requests using the redirect_uri Client
+            // Identifier Prefix cannot carry a wallet-verifiable signature
+            // because there is no mechanism to obtain a trusted key. The JWT
+            // envelope is still required (typ, claims syntax, lifetime), but
+            // its signature is not verified; callers MUST anchor trust in the
+            // response URI binding of the envelope instead.
+            guard Self.redirectURIClient(from: clientID) != nil else {
+                throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "unsupported client_id prefix")
+            }
+            return VerifiedOpenID4VPRequestObject(
+                clientID: clientID,
+                issuer: payload["iss"]?.string,
+                audience: payload["aud"]?.string,
+                responseType: payload["response_type"]?.string,
+                responseMode: responseMode,
+                responseURI: payload["response_uri"]?.string,
+                nonce: nonce,
+                state: payload["state"]?.string,
+                dcqlQuery: dcqlQuery,
+                vpFormatsSupported: vpFormatsSupported,
+                signingDID: nil,
+                issuedAt: payload["iat"]?.numericValue.map { Date(timeIntervalSince1970: $0) },
+                expiresAt: payload["exp"]?.numericValue.map { Date(timeIntervalSince1970: $0) }
+            )
+        }
+        guard let signingDID = Self.signingDID(from: clientID) else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "unsupported client_id prefix")
+        }
+        guard let kid = header["kid"]?.string else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request object was malformed")
+        }
+        guard Self.isDIDURL(kid, under: signingDID) else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "signed request kid was not bound to client_id")
         }
         let document: DIDDocument
         do {
@@ -147,6 +189,7 @@ public struct NativeOpenID4VPRequestObjectValidator: OpenID4VPRequestObjectValid
         }
         return VerifiedOpenID4VPRequestObject(
             clientID: clientID,
+            issuer: payload["iss"]?.string,
             audience: payload["aud"]?.string,
             responseType: payload["response_type"]?.string,
             responseMode: responseMode,
@@ -159,6 +202,19 @@ public struct NativeOpenID4VPRequestObjectValidator: OpenID4VPRequestObjectValid
             issuedAt: payload["iat"]?.numericValue.map { Date(timeIntervalSince1970: $0) },
             expiresAt: payload["exp"]?.numericValue.map { Date(timeIntervalSince1970: $0) }
         )
+    }
+
+    /// Parses a `redirect_uri:` Client Identifier and returns the embedded
+    /// HTTPS URL when the value is well-formed.
+    static func redirectURIClient(from clientID: String) -> URL? {
+        let prefix = "redirect_uri:"
+        guard clientID.hasPrefix(prefix) else { return nil }
+        let raw = String(clientID.dropFirst(prefix.count))
+        guard let url = URL(string: raw),
+              url.scheme?.lowercased() == "https",
+              url.host != nil,
+              url.user == nil, url.password == nil, url.fragment == nil else { return nil }
+        return url
     }
 
     private static func signingDID(from clientID: String) -> String? {

@@ -1028,6 +1028,147 @@ struct OpenID4VCW3CBackendTests {
         }
     }
 
+    @Test("Standalone redirect_uri JAR request presents a stored jwt_vc_json credential")
+    func standaloneRedirectURIJARPresentation() async throws {
+        let keys = FixtureKeyProvider()
+        let key = try await keys.createKey(
+            purpose: .credentialBinding,
+            algorithm: .es256,
+            requiresUserPresence: false,
+            protection: .keychainSoftware
+        )
+        let holder = try KeyDIDResolver().derive(
+            publicKeyX963: try await keys.publicKey(id: key.id).x963Representation
+        )
+        let credential = try Self.compactJWT(payload: [
+            "iss": "did:key:issuer",
+            "issuer": "did:key:issuer",
+            "sub": holder,
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential", "PersonIdentificationData"],
+            "credentialSubject": ["id": holder, "given_name": "Ada", "family_name": "Lovelace"],
+        ])
+        let stored = StoredEbsiCredential(
+            profileID: "oari-ebsi-vcdm2-vc-jwt",
+            representation: .vcdm2Jwt,
+            rawCredential: Data(credential.utf8),
+            holderKeyReference: key.id.rawValue.uuidString
+        )
+        let transport = RedirectURIStandaloneTransport()
+        let backend = OpenID4VCW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: keys,
+            credentialStore: FixtureCredentialStore(values: [stored]),
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .vcdm2JWTVC(),
+            presentationRequestValidator: FixturePresentationRequestValidator()
+        )
+        let deepLink = "openid4vp://?client_id=redirect_uri%3Ahttps%3A%2F%2Fwallet.dev.oari.io"
+            + "%2Fopenid%2Fvp%2F7ecf09ec-162a-4792-a097-a0cae714fdcb"
+            + "&request_uri=https%3A%2F%2Fwallet.dev.oari.io%2Fopenid%2Fvp%2F7ecf09ec-162a-4792-a097-a0cae714fdcb"
+        let request = try await backend.beginStoredOpenID4VPPresentation(uri: deepLink)
+        #expect(request.verifierName == RedirectURIStandaloneTransport.clientID)
+        let redirectURI = try await backend.completeStoredOpenID4VPPresentation(
+            id: request.id,
+            selectedClaimIDs: Set(request.claims.map(\.id)),
+            userAccepted: true
+        )
+        #expect(redirectURI == URL(string: "https://verifier.example/done"))
+        let fetch = try #require((await transport.requests).first)
+        #expect(fetch.method == "GET")
+        #expect(fetch.headers["Accept"] == "application/oauth-authz-req+jwt")
+        let post = try #require((await transport.requests).last { $0.method == "POST" })
+        #expect(post.url == URL(string: RedirectURIStandaloneTransport.endpoint))
+        let fields = Dictionary(uniqueKeysWithValues: try #require(
+            URLComponents(string: "?\(String(decoding: post.body ?? Data(), as: UTF8.self))")?.queryItems
+        ).compactMap { item in item.value.map { (item.name, $0) } })
+        let token = try #require(fields["vp_token"])
+        let object = try #require(JSONSerialization.jsonObject(with: Data(token.utf8)) as? [String: [String]])
+        let vpJWT = try #require(object["user"]?.first)
+        let payload = try Self.jwtPayload(vpJWT)
+        #expect(payload["aud"] as? String == RedirectURIStandaloneTransport.clientID)
+        #expect(payload["nonce"] as? String == "vp-nonce")
+    }
+
+    @Test("Standalone redirect_uri client_id must exactly match the signed response_uri")
+    func standaloneRedirectURIRequiresMatchingResponseURI() async throws {
+        let backend = try Self.standaloneEnvelopeBackend(
+            transport: StandaloneEnvelopeTransport(response: .init(statusCode: 500, body: Data()))
+        )
+        let jwt = try Self.standaloneRequestJWT(
+            clientID: "redirect_uri:https://verifier.example/expected",
+            responseURI: "https://verifier.example/other"
+        )
+        let encoded = try #require(jwt.addingPercentEncoding(withAllowedCharacters: .alphanumerics))
+        await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(
+            reason: "redirect_uri client_id did not match the response_uri"
+        )) {
+            _ = try await backend.beginStoredOpenID4VPPresentation(
+                uri: "openid4vp://?client_id=redirect_uri%3Ahttps%3A%2F%2Fverifier.example%2Fexpected&request=\(encoded)"
+            )
+        }
+    }
+
+    @Test("Standalone redirect_uri request_uri must share the client_id origin")
+    func standaloneRedirectURIRequiresMatchingRequestURIOrigin() async throws {
+        let jwt = try Self.standaloneRequestJWT(
+            clientID: "redirect_uri:https://verifier.example/openid/vp/1",
+            responseURI: "https://verifier.example/openid/vp/1"
+        )
+        let backend = try Self.standaloneEnvelopeBackend(
+            transport: StandaloneEnvelopeTransport(response: .init(
+                statusCode: 200,
+                body: Data(jwt.utf8),
+                headers: ["Content-Type": "application/oauth-authz-req+jwt"]
+            ))
+        )
+        await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(
+            reason: "request_uri origin did not match the redirect_uri client_id"
+        )) {
+            _ = try await backend.beginStoredOpenID4VPPresentation(
+                uri: "openid4vp://?client_id=redirect_uri%3Ahttps%3A%2F%2Fverifier.example%2Fopenid%2Fvp%2F1"
+                    + "&request_uri=https%3A%2F%2Fattacker.example%2Frequest"
+            )
+        }
+    }
+
+    @Test("Standalone audience accepts self-issued or a matching iss and rejects others")
+    func standaloneAudienceRules() async throws {
+        let clientID = "redirect_uri:https://verifier.example/openid/vp/1"
+        let envelope = "openid4vp://?client_id=redirect_uri%3Ahttps%3A%2F%2Fverifier.example%2Fopenid%2Fvp%2F1&request="
+        let accepted = try Self.standaloneRequestJWT(
+            clientID: clientID,
+            responseURI: "https://verifier.example/openid/vp/1",
+            audience: "did:ebsi:zVerifier",
+            issuer: "did:ebsi:zVerifier"
+        )
+        let acceptedBackend = try Self.standaloneEnvelopeBackend(
+            transport: StandaloneEnvelopeTransport(response: .init(statusCode: 500, body: Data()))
+        )
+        let encodedAccepted = try #require(accepted.addingPercentEncoding(withAllowedCharacters: .alphanumerics))
+        await #expect(throws: OpenID4VCBackendError.presentationCredentialUnavailable) {
+            _ = try await acceptedBackend.beginStoredOpenID4VPPresentation(uri: envelope + encodedAccepted)
+        }
+        for (audience, issuer) in [("did:ebsi:zVerifier", "did:ebsi:zSomeoneElse"), ("did:ebsi:zVerifier", nil)] {
+            let jwt = try Self.standaloneRequestJWT(
+                clientID: clientID,
+                responseURI: "https://verifier.example/openid/vp/1",
+                audience: audience,
+                issuer: issuer
+            )
+            let backend = try Self.standaloneEnvelopeBackend(
+                transport: StandaloneEnvelopeTransport(response: .init(statusCode: 500, body: Data()))
+            )
+            let encoded = try #require(jwt.addingPercentEncoding(withAllowedCharacters: .alphanumerics))
+            await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(
+                reason: "unsupported standalone response mode or response URI"
+            )) {
+                _ = try await backend.beginStoredOpenID4VPPresentation(uri: envelope + encoded)
+            }
+        }
+    }
+
     @Test("Standalone envelope enforces request source and request_uri_method singletons")
     func standaloneEnvelopeValidation() async throws {
         let transport = StandaloneEnvelopeTransport(response: .init(statusCode: 500, body: Data()))
@@ -1184,15 +1325,18 @@ struct OpenID4VCW3CBackendTests {
     }
 
     private static func standaloneRequestJWT(
+        clientID: String = "decentralized_identifier:did:key:verifier",
         clientMetadata: [String: Any]? = ["vp_formats_supported": [
             "jwt_vc_json": ["alg_values": ["ES256"]],
         ]],
-        responseURI: String = "https://issuer.example/response"
+        responseURI: String = "https://issuer.example/response",
+        audience: String = "https://self-issued.me/v2",
+        issuer: String? = nil
     ) throws -> String {
         let issuedAt = Int(Date().timeIntervalSince1970)
         var payload: [String: Any] = [
-            "aud": "https://self-issued.me/v2",
-            "client_id": "decentralized_identifier:did:key:verifier",
+            "aud": audience,
+            "client_id": clientID,
             "response_type": "vp_token",
             "response_mode": "direct_post",
             "response_uri": responseURI,
@@ -1205,6 +1349,7 @@ struct OpenID4VCW3CBackendTests {
             ]]],
         ]
         payload["client_metadata"] = clientMetadata
+        payload["iss"] = issuer
         return try compactJWT(payload: payload)
     }
 
@@ -1471,6 +1616,48 @@ private actor DraftIARFallbackTransport: OpenID4VCHTTPTransport {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
+    }
+}
+
+private actor RedirectURIStandaloneTransport: OpenID4VCHTTPTransport {
+    static let endpoint = "https://wallet.dev.oari.io/openid/vp/7ecf09ec-162a-4792-a097-a0cae714fdcb"
+    static let clientID = "redirect_uri:" + endpoint
+
+    struct Request: Sendable { let url: URL; let method: String; let headers: [String: String]; let body: Data? }
+    private(set) var requests: [Request] = []
+
+    func send(
+        url: URL, method: String, headers: [String: String], body: Data?
+    ) async throws -> OpenID4VCHTTPResponse {
+        requests.append(Request(url: url, method: method, headers: headers, body: body))
+        guard url.absoluteString == Self.endpoint else {
+            return OpenID4VCHTTPResponse(statusCode: 404, body: Data())
+        }
+        if method == "GET" {
+            return OpenID4VCHTTPResponse(
+                statusCode: 200,
+                body: Data(Self.requestObject().utf8),
+                headers: ["Content-Type": "application/oauth-authz-req+jwt"]
+            )
+        }
+        return OpenID4VCHTTPResponse(
+            statusCode: 200,
+            body: Data(#"{"redirect_uri":"https://verifier.example/done"}"#.utf8),
+            headers: ["Content-Type": "application/json"]
+        )
+    }
+
+    private static func requestObject() -> String {
+        func encode(_ value: String) -> String {
+            Data(value.utf8).base64EncodedString().replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        }
+        let header = encode(#"{"alg":"ES256","typ":"oauth-authz-req+jwt"}"#)
+        let issuedAt = Int(Date().timeIntervalSince1970)
+        let payload = encode("""
+        {"iss":"did:ebsi:zVerifier","aud":"did:ebsi:zVerifier","client_id":"\(clientID)","response_type":"vp_token","response_mode":"direct_post","response_uri":"\(endpoint)","nonce":"vp-nonce","iat":\(issuedAt),"exp":\(issuedAt + 300),"dcql_query":{"credentials":[{"id":"user","format":"jwt_vc_json","meta":{"type_values":[["VerifiableCredential"]]},"claims":[{"path":["credentialSubject","given_name"]},{"path":["credentialSubject","family_name"]}]}]},"client_metadata":{"client_name":"TigMar GmbH","vp_formats_supported":{"jwt_vc_json":{"alg_values":["ES256"]}}}}
+        """)
+        return "\(header).\(payload).signature"
     }
 }
 
@@ -1826,9 +2013,13 @@ private struct FixturePresentationRequestValidator: OpenID4VPRequestObjectValida
               let dcqlQuery = payload["dcql_query"]?.object else {
             throw OpenID4VCBackendError.invalidResponse
         }
-        let signingDID = clientID.hasPrefix("decentralized_identifier:")
-            ? String(clientID.dropFirst("decentralized_identifier:".count))
-            : "did:key:interactive-verifier"
+        let signingDID: String? = if clientID.hasPrefix("decentralized_identifier:") {
+            String(clientID.dropFirst("decentralized_identifier:".count))
+        } else if clientID.hasPrefix("redirect_uri:") {
+            nil
+        } else {
+            "did:key:interactive-verifier"
+        }
         let issuedAt: Date? = if case let .number(value)? = payload["iat"] {
             Date(timeIntervalSince1970: value)
         } else { nil }
@@ -1856,6 +2047,7 @@ private struct FixturePresentationRequestValidator: OpenID4VPRequestObjectValida
         }
         return VerifiedOpenID4VPRequestObject(
             clientID: clientID,
+            issuer: payload["iss"]?.string,
             audience: payload["aud"]?.string,
             responseType: payload["response_type"]?.string,
             responseMode: responseMode,

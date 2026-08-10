@@ -844,6 +844,7 @@ public actor OpenID4VCW3CBackend {
             }
         }
         let compactRequest: String
+        var fetchedRequestURI: URL?
         if let inlineRequest {
             guard !inlineRequest.isEmpty else {
                 throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "inline request was empty")
@@ -854,6 +855,7 @@ public actor OpenID4VCW3CBackend {
                   requestURI.scheme?.lowercased() == "https" else {
                 throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "request_uri was malformed")
             }
+            fetchedRequestURI = requestURI
             let response = try await successfulHTTPResponse(
                 requestURI,
                 method: "GET",
@@ -884,8 +886,33 @@ public actor OpenID4VCW3CBackend {
                     reason: "decentralized_identifier client_id was not bound to the signing DID"
                 )
             }
+        } else if let redirectClient = NativeOpenID4VPRequestObjectValidator.redirectURIClient(from: verified.clientID) {
+            // OpenID4VP Section 5.9.3: with the redirect_uri Client Identifier
+            // Prefix the request signature cannot be verified by the wallet, so
+            // trust is anchored in the envelope: the response_uri must be the
+            // exact URI embedded in the client_id, and a request_uri, when
+            // used, must share its origin so the Request Object provably comes
+            // from the party that will receive the presentation.
+            guard verified.responseURI == redirectClient.absoluteString else {
+                throw OpenID4VCBackendError.invalidPresentationChallenge(
+                    reason: "redirect_uri client_id did not match the response_uri"
+                )
+            }
+            if let fetchedRequestURI {
+                guard try Self.origin(of: fetchedRequestURI) == Self.origin(of: redirectClient) else {
+                    throw OpenID4VCBackendError.invalidPresentationChallenge(
+                        reason: "request_uri origin did not match the redirect_uri client_id"
+                    )
+                }
+            }
+        } else {
+            throw OpenID4VCBackendError.invalidPresentationChallenge(reason: "unsupported client_id prefix")
         }
-        guard verified.audience == "https://self-issued.me/v2",
+        // Section 5.8: aud is the static-discovery symbolic value, or equal to
+        // iss when the verifier performed dynamic discovery of this wallet.
+        let validAudience = verified.audience == "https://self-issued.me/v2"
+            || (verified.issuer != nil && verified.audience == verified.issuer)
+        guard validAudience,
               verified.responseType == "vp_token",
               verified.responseMode == "direct_post",
               let responseURIValue = verified.responseURI,

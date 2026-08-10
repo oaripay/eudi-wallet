@@ -91,18 +91,64 @@ struct OpenID4VPRequestObjectValidatorTests {
         }
     }
 
-    @Test("Only the decentralized_identifier client ID prefix is supported")
+    @Test("Only the decentralized_identifier and redirect_uri client ID prefixes are supported")
     func rejectsUnsupportedClientIDPrefixes() async throws {
         let key = P256.Signing.PrivateKey()
         let did = try KeyDIDResolver().derive(publicKeyX963: key.publicKey.x963Representation)
         let document = try await KeyDIDResolver().resolve(did)
         let kid = try #require(document.authentication.first)
-        for clientID in ["did:key:without-prefix", "redirect_uri:https://evil.example/callback", "https://evil.example"] {
+        for clientID in [
+            "did:key:without-prefix", "https://evil.example",
+            "x509_san_dns:evil.example", "redirect_uri:http://evil.example/callback",
+            "redirect_uri:not-a-url", "redirect_uri:https://user@evil.example/callback",
+            "redirect_uri:https://evil.example/callback#fragment",
+        ] {
             let jwt = try requestJWT(key: key, kid: kid, clientID: clientID)
             await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(reason: "unsupported client_id prefix")) {
                 _ = try await NativeOpenID4VPRequestObjectValidator(resolver: KeyDIDResolver())
                     .validate(compactJWT: jwt, at: Date())
             }
+        }
+    }
+
+    @Test("redirect_uri client ID accepts an unverifiable JAR envelope without a signing DID")
+    func acceptsRedirectURIClientIdentifier() async throws {
+        let key = P256.Signing.PrivateKey()
+        var payload = requestPayload(clientID: "redirect_uri:https://verifier.example/openid/vp/1")
+        payload["iss"] = "did:ebsi:zVerifier"
+        payload["aud"] = "did:ebsi:zVerifier"
+        payload["response_type"] = "vp_token"
+        payload["response_uri"] = "https://verifier.example/openid/vp/1"
+        // Non-array transaction_data does not match the OpenID4VP parameter
+        // definition and is ignored as an unrecognized extension parameter.
+        payload["transaction_data"] = ["action": "Login"]
+        let jwt = try Self.sign(
+            key: key,
+            header: ["alg": "ES256", "typ": "oauth-authz-req+jwt"],
+            payload: payload
+        )
+        let verified = try await NativeOpenID4VPRequestObjectValidator(resolver: KeyDIDResolver())
+            .validate(compactJWT: jwt, at: Date())
+        #expect(verified.clientID == "redirect_uri:https://verifier.example/openid/vp/1")
+        #expect(verified.signingDID == nil)
+        #expect(verified.issuer == "did:ebsi:zVerifier")
+        #expect(verified.audience == "did:ebsi:zVerifier")
+        #expect(verified.responseURI == "https://verifier.example/openid/vp/1")
+    }
+
+    @Test("Spec-conforming transaction_data arrays are rejected for redirect_uri clients")
+    func rejectsTransactionDataArrayForRedirectURIClients() async throws {
+        let key = P256.Signing.PrivateKey()
+        var payload = requestPayload(clientID: "redirect_uri:https://verifier.example/openid/vp/1")
+        payload["transaction_data"] = ["eyJ0eXBlIjoiZXhhbXBsZSJ9"]
+        let jwt = try Self.sign(
+            key: key,
+            header: ["alg": "ES256", "typ": "oauth-authz-req+jwt"],
+            payload: payload
+        )
+        await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(reason: "transaction_data is not supported")) {
+            _ = try await NativeOpenID4VPRequestObjectValidator(resolver: KeyDIDResolver())
+                .validate(compactJWT: jwt, at: Date())
         }
     }
 
