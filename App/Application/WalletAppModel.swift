@@ -70,6 +70,7 @@ final class WalletAppModel: ObservableObject {
     private var backgroundGeneration = 0
     private var activeAuthenticationID: UUID?
     private var deferredSchedulerTask: Task<Void, Never>?
+    private(set) var autoReviewTask: Task<Void, Never>?
     private let userDefaults: UserDefaults
 
     private static let themePreferenceKey = "oari.appearance.theme"
@@ -496,6 +497,22 @@ final class WalletAppModel: ObservableObject {
         scanInput = code
         classifyScan()
         selectedTab = .scan
+        // A scan that classified as a credential offer or presentation
+        // request enters the review flow immediately instead of waiting
+        // for a manual redeem action. Requests are only auto-entered when a
+        // wallet backend exists (or is still initializing); otherwise the
+        // scanner keeps showing the configuration-required guidance instead
+        // of a guaranteed failure sheet.
+        guard scanResult == .issuance || scanResult == .presentation,
+              canAutoEnterScannedRequest else { return }
+        autoReviewTask?.cancel()
+        autoReviewTask = Task { [weak self] in
+            await self?.reviewScannedRequest()
+        }
+    }
+
+    private var canAutoEnterScannedRequest: Bool {
+        isEudiOperational || eudiInitializationTask != nil || openID4VCWallet != nil
     }
 
     func reviewScannedRequest() async {

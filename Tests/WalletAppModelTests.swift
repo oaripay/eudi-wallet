@@ -480,6 +480,57 @@ struct WalletAppModelTests {
         #expect(model.selectedTab == .scan)
     }
 
+    @Test("Valid scanned offers enter the review flow automatically")
+    func scannedOfferAutoEntersReview() async {
+        let service = FixtureEudiWallet()
+        let model = WalletAppModel(allowedHosts: ["issuer.example"])
+        await model.load(.success(testDependencies(service)))
+        model.handleScannedCode("https://issuer.example/offer?credential_offer=fixture")
+        await model.autoReviewTask?.value
+        guard case .issuanceReview = model.eudiFlow else {
+            Issue.record("Expected automatic issuance review after a valid scan")
+            return
+        }
+        #expect(await service.lastIssuanceOfferURI?.contains("credential_offer=fixture") == true)
+    }
+
+    @Test("Valid scanned presentation requests enter the consent flow automatically")
+    func scannedPresentationAutoEntersReview() async {
+        let request = fixturePresentationRequest()
+        let service = FixtureEudiWallet(presentationRequest: request)
+        let model = WalletAppModel()
+        await model.load(.success(testDependencies(service)))
+        model.handleScannedCode("openid4vp://authorize?request_uri=https%3A%2F%2Fwallet.dev.oari.io%2Frequest")
+        await model.autoReviewTask?.value
+        #expect(model.eudiFlow == .presentationConsent(request))
+        #expect(model.selectedClaimIDs == ["required-pid"])
+    }
+
+    @Test("Rejected or unsupported scans never auto-enter a flow")
+    func rejectedScanDoesNotAutoEnterReview() async {
+        let service = FixtureEudiWallet()
+        let model = WalletAppModel(allowedHosts: ["issuer.example"])
+        await model.load(.success(testDependencies(service)))
+        model.handleScannedCode("https://evil.example/offer?credential_offer=x")
+        #expect(model.autoReviewTask == nil)
+        #expect(model.eudiFlow == .idle)
+        #expect(await service.lastIssuanceOfferURI == nil)
+    }
+
+    @Test("Scans without a configured wallet keep the passive scanner guidance")
+    func scanWithoutBackendDoesNotAutoEnterReview() async {
+        let model = WalletAppModel(allowedHosts: ["issuer.example"])
+        await model.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), eudiWallet: nil,
+            eudiAvailability: .configurationRequired("fixture"), openID4VCWallet: nil
+        )))
+        model.handleScannedCode("https://issuer.example/offer?credential_offer=fixture")
+        #expect(model.autoReviewTask == nil)
+        #expect(model.scanResult == .issuance)
+        #expect(model.eudiFlow == .configurationRequired("fixture"))
+    }
+
     @Test("Repository failure is explicit and does not imply an empty loaded wallet")
     func repositoryFailure() async {
         let model = WalletAppModel()
