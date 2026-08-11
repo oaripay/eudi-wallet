@@ -176,6 +176,8 @@ public struct OpenID4VPPresentationRequest: Equatable, Identifiable, Sendable {
     public let dcqlQuery: [String: AnySendableJSON]
     public let signedRequest: String?
     public let clientID: String?
+    /// Decoded `transaction_data` objects supplied by the verifier.
+    public let transactionData: [[String: AnySendableJSON]]
 
     public init(
         id: UUID,
@@ -188,7 +190,8 @@ public struct OpenID4VPPresentationRequest: Equatable, Identifiable, Sendable {
         state: String?,
         dcqlQuery: [String: AnySendableJSON],
         signedRequest: String?,
-        clientID: String? = nil
+        clientID: String? = nil,
+        transactionData: [[String: AnySendableJSON]] = []
     ) {
         self.id = id
         self.authorizationEndpoint = authorizationEndpoint
@@ -201,6 +204,7 @@ public struct OpenID4VPPresentationRequest: Equatable, Identifiable, Sendable {
         self.dcqlQuery = dcqlQuery
         self.signedRequest = signedRequest
         self.clientID = clientID
+        self.transactionData = transactionData
     }
 }
 
@@ -215,6 +219,21 @@ public struct DCQLCredentialPresentationRequest: Equatable, Identifiable, Sendab
     public let id: UUID
     public let verifierName: String?
     public let claims: [DCQLRequestedClaim]
+    /// Decoded `transaction_data` objects supplied by the verifier, to be
+    /// displayed to the user alongside the requested claims.
+    public let transactionData: [[String: AnySendableJSON]]
+
+    public init(
+        id: UUID,
+        verifierName: String?,
+        claims: [DCQLRequestedClaim],
+        transactionData: [[String: AnySendableJSON]] = []
+    ) {
+        self.id = id
+        self.verifierName = verifierName
+        self.claims = claims
+        self.transactionData = transactionData
+    }
 }
 
 public struct IssuedW3CCredential: Codable, Equatable, Sendable {
@@ -836,7 +855,8 @@ public actor OpenID4VCW3CBackend {
             state: signedClaims?.state ?? request.state ?? request.requestObject?.state,
             dcqlQuery: dcqlQuery,
             signedRequest: request.request,
-            clientID: signedClaims?.clientID ?? request.clientID ?? request.requestObject?.clientID
+            clientID: signedClaims?.clientID ?? request.clientID ?? request.requestObject?.clientID,
+            transactionData: signedClaims?.transactionData ?? []
         )
         return challenge
     }
@@ -911,7 +931,8 @@ public actor OpenID4VCW3CBackend {
             return DCQLCredentialPresentationRequest(
                 id: id,
                 verifierName: challenge.clientID,
-                claims: claims
+                claims: claims,
+                transactionData: challenge.transactionData
             )
         }
         throw OpenID4VCBackendError.presentationCredentialUnavailable
@@ -1064,7 +1085,8 @@ public actor OpenID4VCW3CBackend {
             state: verified.state,
             dcqlQuery: verified.dcqlQuery,
             signedRequest: compactRequest,
-            clientID: verified.clientID
+            clientID: verified.clientID,
+            transactionData: verified.transactionData
         )
         interactiveAuthorizationContexts[id] = InteractiveAuthorizationContext(
             generationID: UUID(),

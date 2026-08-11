@@ -655,6 +655,19 @@ public struct EudiRequestedClaim: Equatable, Sendable {
     }
 }
 
+/// A single key/value field of a verifier-supplied transaction data object,
+/// prepared for display in the presentation consent dialog.
+public struct EudiTransactionDataField: Equatable, Identifiable, Sendable {
+    public let key: String
+    public let value: String
+    public var id: String { key }
+
+    public init(key: String, value: String) {
+        self.key = key
+        self.value = value
+    }
+}
+
 public struct EudiPresentationRequest: Equatable, Sendable {
     public let id: UUID
     public let verifierName: String?
@@ -662,6 +675,9 @@ public struct EudiPresentationRequest: Equatable, Sendable {
     public let verifierCertificateValid: Bool?
     public let claims: [EudiRequestedClaim]
     public let warningCount: Int
+    /// Verifier-supplied transaction data entries. Each entry is a flat list
+    /// of key/value fields rendered as a table alongside the claims.
+    public let transactionData: [[EudiTransactionDataField]]
 
     public init(
         id: UUID,
@@ -669,7 +685,8 @@ public struct EudiPresentationRequest: Equatable, Sendable {
         verifierLegalName: String?,
         verifierCertificateValid: Bool?,
         claims: [EudiRequestedClaim],
-        warningCount: Int
+        warningCount: Int,
+        transactionData: [[EudiTransactionDataField]] = []
     ) {
         self.id = id
         self.verifierName = verifierName
@@ -677,6 +694,7 @@ public struct EudiPresentationRequest: Equatable, Sendable {
         self.verifierCertificateValid = verifierCertificateValid
         self.claims = claims
         self.warningCount = warningCount
+        self.transactionData = transactionData
     }
 }
 

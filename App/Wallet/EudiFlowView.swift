@@ -172,6 +172,25 @@ struct EudiFlowView: View {
                 Label("Verifier certificate was not validated", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
             }
+            if !request.transactionData.isEmpty {
+                Text("Transaction details")
+                    .font(.subheadline.weight(.semibold))
+                ForEach(Array(request.transactionData.enumerated()), id: \.offset) { _, fields in
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(fields) { field in
+                            LabeledContent(field.key) {
+                                Text(field.value)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.trailing)
+                            }
+                            .font(.caption)
+                        }
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
             ForEach(request.claims, id: \.id) { claim in
                 Toggle(isOn: Binding(
                     get: { model.selectedClaimIDs.contains(claim.id) },

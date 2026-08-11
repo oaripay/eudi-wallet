@@ -510,8 +510,34 @@ actor LiveOpenID4VCService: OpenID4VCOperating {
                     intentToRetain: false
                 )
             },
-            warningCount: 0
+            warningCount: 0,
+            transactionData: request.transactionData.map(Self.transactionDataFields)
         )
+    }
+
+    private static func transactionDataFields(
+        _ object: [String: AnySendableJSON]
+    ) -> [EudiTransactionDataField] {
+        object.keys.sorted().map { key in
+            EudiTransactionDataField(key: key, value: Self.displayValue(object[key] ?? .null))
+        }
+    }
+
+    private static func displayValue(_ value: AnySendableJSON) -> String {
+        switch value {
+        case let .string(string): string
+        case let .number(number):
+            number == number.rounded() && abs(number) < 1e15
+                ? String(Int64(number))
+                : String(number)
+        case let .bool(bool): bool ? "Yes" : "No"
+        case let .array(values): values.map(Self.displayValue).joined(separator: ", ")
+        case let .object(object):
+            object.keys.sorted()
+                .map { "\($0): \(Self.displayValue(object[$0] ?? .null))" }
+                .joined(separator: ", ")
+        case .null: "—"
+        }
     }
 
     func completePIDPresentation(

@@ -134,22 +134,23 @@ struct OpenID4VPRequestObjectValidatorTests {
         #expect(verified.issuer == "did:ebsi:zVerifier")
         #expect(verified.audience == "did:ebsi:zVerifier")
         #expect(verified.responseURI == "https://verifier.example/openid/vp/1")
+        #expect(verified.transactionData.isEmpty)
     }
 
-    @Test("Spec-conforming transaction_data arrays are rejected for redirect_uri clients")
-    func rejectsTransactionDataArrayForRedirectURIClients() async throws {
+    @Test("Spec-conforming transaction_data arrays are decoded for redirect_uri clients")
+    func decodesTransactionDataArrayForRedirectURIClients() async throws {
         let key = P256.Signing.PrivateKey()
         var payload = requestPayload(clientID: "redirect_uri:https://verifier.example/openid/vp/1")
+        // base64url({"type":"example"})
         payload["transaction_data"] = ["eyJ0eXBlIjoiZXhhbXBsZSJ9"]
         let jwt = try Self.sign(
             key: key,
             header: ["alg": "ES256", "typ": "oauth-authz-req+jwt"],
             payload: payload
         )
-        await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(reason: "transaction_data is not supported")) {
-            _ = try await NativeOpenID4VPRequestObjectValidator(resolver: KeyDIDResolver())
-                .validate(compactJWT: jwt, at: Date())
-        }
+        let verified = try await NativeOpenID4VPRequestObjectValidator(resolver: KeyDIDResolver())
+            .validate(compactJWT: jwt, at: Date())
+        #expect(verified.transactionData == [["type": .string("example")]])
     }
 
     @Test("iss is ignored, including when absent or mismatched")
@@ -236,23 +237,54 @@ struct OpenID4VPRequestObjectValidatorTests {
         }
     }
 
-    @Test("Unsupported transaction data is rejected explicitly")
-    func rejectsTransactionData() async throws {
+    @Test("Malformed transaction data is rejected explicitly")
+    func rejectsMalformedTransactionData() async throws {
+        let key = P256.Signing.PrivateKey()
+        let did = try KeyDIDResolver().derive(publicKeyX963: key.publicKey.x963Representation)
+        let document = try await KeyDIDResolver().resolve(did)
+        let kid = try #require(document.authentication.first)
+        // Empty arrays, non-string entries, invalid base64url, and encoded
+        // non-object JSON all violate the transaction_data definition.
+        for invalid: Any in [[], [42], ["not base64url!"], ["WyJhcnJheSJd"]] {
+            var payload = requestPayload(clientID: "decentralized_identifier:\(did)")
+            payload["transaction_data"] = invalid
+            let jwt = try Self.sign(
+                key: key,
+                header: ["alg": "ES256", "typ": "oauth-authz-req+jwt", "kid": kid],
+                payload: payload
+            )
+            await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(reason: "transaction_data was malformed")) {
+                _ = try await NativeOpenID4VPRequestObjectValidator(resolver: KeyDIDResolver())
+                    .validate(compactJWT: jwt, at: Date())
+            }
+        }
+    }
+
+    @Test("Transaction data objects are decoded for DID-signed requests")
+    func decodesTransactionData() async throws {
         let key = P256.Signing.PrivateKey()
         let did = try KeyDIDResolver().derive(publicKeyX963: key.publicKey.x963Representation)
         let document = try await KeyDIDResolver().resolve(did)
         let kid = try #require(document.authentication.first)
         var payload = requestPayload(clientID: "decentralized_identifier:\(did)")
-        payload["transaction_data"] = []
+        let object = Data("{\"type\":\"payment\",\"amount\":12.5,\"recurring\":false}".utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        payload["transaction_data"] = [object]
         let jwt = try Self.sign(
             key: key,
             header: ["alg": "ES256", "typ": "oauth-authz-req+jwt", "kid": kid],
             payload: payload
         )
-        await #expect(throws: OpenID4VCBackendError.invalidPresentationChallenge(reason: "transaction_data is not supported")) {
-            _ = try await NativeOpenID4VPRequestObjectValidator(resolver: KeyDIDResolver())
-                .validate(compactJWT: jwt, at: Date())
-        }
+        let verified = try await NativeOpenID4VPRequestObjectValidator(resolver: KeyDIDResolver())
+            .validate(compactJWT: jwt, at: Date())
+        #expect(verified.transactionData == [[
+            "type": .string("payment"),
+            "amount": .number(12.5),
+            "recurring": .bool(false),
+        ]])
     }
 
     @Test("Nonce and state are bounded URL-safe ASCII")
