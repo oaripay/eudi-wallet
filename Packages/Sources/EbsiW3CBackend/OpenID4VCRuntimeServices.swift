@@ -531,21 +531,37 @@ public struct NativeW3CCredentialValidator: W3CCredentialValidating, Sendable {
             } catch {
                 throw EbsiCredentialError.issuerDIDUnresolved
             }
-            return try document.verificationMethod.map { method in
-                guard method.publicKeyJwk.crv == "P-256",
-                      let encodedY = method.publicKeyJwk.y else {
-                    throw EbsiCredentialError.algorithmNotAllowed
+            let methods = try document.verificationMethod.compactMap { method -> EbsiVerificationMethod? in
+                guard method.publicKeyJwk.kty == "EC", let encodedY = method.publicKeyJwk.y else {
+                    return nil
                 }
+                let key: EbsiVerificationKey
+                switch method.publicKeyJwk.crv {
+                case "P-256":
+                    key = .p256(
+                        x: try Self.decodeBase64URL(method.publicKeyJwk.x),
+                        y: try Self.decodeBase64URL(encodedY)
+                    )
+                case "secp256k1":
+                    key = .secp256k1(
+                        x: try Self.decodeBase64URL(method.publicKeyJwk.x),
+                        y: try Self.decodeBase64URL(encodedY)
+                    )
+                default:
+                    return nil
+                }
+                var relationships: Set<EbsiVerificationRelationship> = []
+                if document.assertionMethod.contains(method.id) { relationships.insert(.assertionMethod) }
+                if document.authentication.contains(method.id) { relationships.insert(.authentication) }
                 return EbsiVerificationMethod(
                     id: method.id,
                     controller: method.controller,
-                    key: .p256(
-                        x: try Self.decodeBase64URL(method.publicKeyJwk.x),
-                        y: try Self.decodeBase64URL(encodedY)
-                    ),
-                    relationships: document.assertionMethod.contains(method.id) ? [.assertionMethod] : []
+                    key: key,
+                    relationships: relationships
                 )
             }
+            guard !methods.isEmpty else { throw EbsiCredentialError.algorithmNotAllowed }
+            return methods
         }
         guard let issuerURL = URL(string: issuer),
               issuerURL.scheme?.lowercased() == "https",
