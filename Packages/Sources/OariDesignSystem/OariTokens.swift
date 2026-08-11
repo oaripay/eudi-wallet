@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 public enum OariColor {
     public static let action = Color(red: 0, green: 157 / 255, blue: 1)
@@ -6,15 +9,25 @@ public enum OariColor {
     public static let textOnAction = Color(red: 1, green: 1, blue: 1)
 
     public static func background(_ scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(red: 30 / 255, green: 30 / 255, blue: 30 / 255)
-            : Color(red: 254 / 255, green: 254 / 255, blue: 254 / 255)
+        if scheme == .dark {
+            return Color(red: 30 / 255, green: 30 / 255, blue: 30 / 255)
+        }
+#if canImport(UIKit)
+        return Color(uiColor: .systemGroupedBackground)
+#else
+        return Color(red: 242 / 255, green: 242 / 255, blue: 247 / 255)
+#endif
     }
 
     public static func surface(_ scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(red: 42 / 255, green: 42 / 255, blue: 42 / 255)
-            : Color.white
+        if scheme == .dark {
+            return Color(red: 42 / 255, green: 42 / 255, blue: 42 / 255)
+        }
+#if canImport(UIKit)
+        return Color(uiColor: .secondarySystemGroupedBackground)
+#else
+        return .white
+#endif
     }
 
     public static func surfaceInset(_ scheme: ColorScheme) -> Color {

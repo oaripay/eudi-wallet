@@ -10,6 +10,98 @@ import WalletVault
 
 @MainActor
 struct WalletAppModelTests {
+    @Test("Deferred retry classification is bounded and distinguishes terminal responses")
+    func deferredRetryClassification() {
+        #expect(LiveOpenID4VCService.isTransient(URLError(.timedOut)))
+        #expect(LiveOpenID4VCService.isTransient(
+            OpenID4VCBackendError.remoteHTTPError(status: 503, detail: nil)
+        ))
+        #expect(!LiveOpenID4VCService.isTransient(
+            OpenID4VCBackendError.remoteHTTPError(status: 400, detail: nil)
+        ))
+        #expect(LiveOpenID4VCService.backoff(after: 1) == 15)
+        #expect(LiveOpenID4VCService.backoff(after: 100) == 900)
+    }
+
+    @Test("Native deferred transactions load and can be cancelled")
+    @MainActor
+    func nativeDeferredTransactionLifecycle() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let issuance = DeferredIssuance(
+            continuation: Data("encrypted-by-repository".utf8),
+            issuerIdentifier: "https://issuer.example",
+            configurationIDs: ["pid"],
+            displayName: "PID",
+            nextAttemptAt: now.addingTimeInterval(60),
+            createdAt: now,
+            updatedAt: now
+        )
+        let service = FixtureOpenID4VCWallet(outcome: .allow, deferred: [issuance])
+        let model = WalletAppModel()
+        await model.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), eudiWallet: nil,
+            eudiAvailability: .configurationRequired("fixture"), openID4VCWallet: service
+        )))
+
+        #expect(model.deferredIssuances == [issuance])
+        await model.removeDeferredIssuance(id: issuance.id)
+        #expect(model.deferredIssuances.isEmpty)
+    }
+
+    @Test("Deferred scheduler tracks earliest deadline and stops in background")
+    @MainActor
+    func deferredForegroundScheduler() async {
+        let first = Date().addingTimeInterval(600)
+        let later = first.addingTimeInterval(60)
+        let issuances = [first, later].map { deadline in
+            DeferredIssuance(
+                continuation: Data("fixture".utf8), issuerIdentifier: "https://issuer.example",
+                configurationIDs: ["pid"], displayName: "PID", nextAttemptAt: deadline,
+                createdAt: Date(), updatedAt: Date()
+            )
+        }
+        let service = FixtureOpenID4VCWallet(outcome: .allow, deferred: issuances)
+        let model = WalletAppModel()
+        await model.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(), eudiWallet: nil,
+            eudiAvailability: .configurationRequired("fixture"), openID4VCWallet: service
+        )))
+        #expect(model.deferredSchedulerDeadline == first)
+        await model.checkDeferredIssuance(id: issuances[0].id)
+        #expect(await service.deferredCheckCount == 0)
+
+        await model.handleScenePhase(.background)
+        #expect(model.deferredSchedulerDeadline == nil)
+    }
+
+    @Test("Deferred polling waits for successful app unlock")
+    @MainActor
+    func deferredPollingWaitsForUnlock() async {
+        let suite = "WalletAppModelTests.deferred-lock.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "oari.security.app-lock.enabled")
+        let issuance = DeferredIssuance(
+            continuation: Data("fixture".utf8), issuerIdentifier: "https://issuer.example",
+            configurationIDs: ["pid"], displayName: "PID", nextAttemptAt: Date().addingTimeInterval(-1),
+            createdAt: Date(), updatedAt: Date()
+        )
+        let service = FixtureOpenID4VCWallet(outcome: .allow, deferred: [issuance])
+        let model = WalletAppModel(userDefaults: defaults)
+        await model.load(.success(WalletAppDependencies(
+            credentials: EmptyMetadataRepository(), audit: EmptyAuditRepository(),
+            localAuthenticator: FixtureAuthenticator(),
+            appLockAuthenticator: FixtureAppLockAuthenticator(shouldFail: true),
+            eudiWallet: nil, eudiAvailability: .configurationRequired("fixture"),
+            openID4VCWallet: service
+        )))
+        await Task.yield()
+        #expect(await service.deferredResumeCount == 0)
+        #expect(model.deferredSchedulerDeadline == nil)
+    }
+
     @Test("Build configuration keeps only test fixture controls")
     func buildConfigurationGatesDevelopmentControls() {
         #if DEBUG
@@ -1008,6 +1100,9 @@ private actor FixtureOpenID4VCWallet: OpenID4VCOperating {
     private(set) var deletedCredentials: [(UUID, CredentialID)] = []
     private(set) var resolveCount = 0
     private(set) var presentationBeginCount = 0
+    private(set) var deferredResumeCount = 0
+    private(set) var deferredCheckCount = 0
+    private var deferred: [DeferredIssuance]
     let pidPresentationRequest: EudiPresentationRequest?
     let standalonePresentationRequest: EudiPresentationRequest?
     init(
@@ -1016,7 +1111,8 @@ private actor FixtureOpenID4VCWallet: OpenID4VCOperating {
         continuationDelayNanoseconds: UInt64 = 0,
         continuation: OpenID4VCInteractionCompletion = .completed("EBSI development flow completed."),
         pidPresentationRequest: EudiPresentationRequest? = nil,
-        standalonePresentationRequest: EudiPresentationRequest? = nil
+        standalonePresentationRequest: EudiPresentationRequest? = nil,
+        deferred: [DeferredIssuance] = []
     ) {
         self.outcome = outcome
         self.interactionID = interactionID
@@ -1024,6 +1120,7 @@ private actor FixtureOpenID4VCWallet: OpenID4VCOperating {
         self.continuation = continuation
         self.pidPresentationRequest = pidPresentationRequest
         self.standalonePresentationRequest = standalonePresentationRequest
+        self.deferred = deferred
     }
     func resolveInteraction(uri: String) async throws -> OpenID4VCResolvedInteraction {
         resolveCount += 1
@@ -1066,6 +1163,16 @@ private actor FixtureOpenID4VCWallet: OpenID4VCOperating {
         return continuation
     }
     func cancelInteraction(id: UUID) async { cancelCount += 1 }
+    func deferredIssuances() async throws -> [DeferredIssuance] { deferred }
+    func checkDeferredIssuance(
+        id: UUID,
+        allowUntrustedSigner: Bool
+    ) async throws -> OpenID4VCInteractionCompletion {
+        deferredCheckCount += 1
+        return .pending("Credential is still pending at the issuer.")
+    }
+    func removeDeferredIssuance(id: UUID) async throws { deferred.removeAll { $0.id == id } }
+    func resumeEligibleDeferredIssuances() async { deferredResumeCount += 1 }
     func preparePIDPresentation(id: UUID) async throws -> EudiPresentationRequest {
         guard let pidPresentationRequest else { throw TestFailure.unavailable }
         return pidPresentationRequest

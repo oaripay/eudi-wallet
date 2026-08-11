@@ -28,7 +28,20 @@ public actor EncryptedEbsiCredentialStore: EbsiCredentialStore {
 
     public func save(_ credential: StoredEbsiCredential) async throws {
         let file = fileURL(credential.id)
-        guard !files.exists(file) else { throw WalletRepositoryError.duplicateCredential }
+        if files.exists(file) {
+            do {
+                let plaintext = try cipher.open(files.read(file), authenticating: context(credential.id))
+                let existing = try decoder.decode(StoredEbsiCredential.self, from: plaintext)
+                guard existing == credential else { throw WalletRepositoryError.duplicateCredential }
+                return
+            } catch let error as WalletRepositoryError {
+                throw error
+            } catch let error as VaultError {
+                throw error
+            } catch {
+                throw WalletRepositoryError.storageFailure
+            }
+        }
         do {
             try files.write(
                 cipher.seal(try encoder.encode(credential), authenticating: context(credential.id)),

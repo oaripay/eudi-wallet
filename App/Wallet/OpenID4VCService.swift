@@ -2,6 +2,7 @@ import EbsiW3CBackend
 import EudiWalletKitAdapter
 import Foundation
 import WalletDomain
+import WalletVault
 
 enum OpenID4VCInteractionKind: Equatable, Sendable {
     case issuance
@@ -44,6 +45,10 @@ protocol OpenID4VCOperating: Sendable {
         transactionCode: String?
     ) async throws -> OpenID4VCInteractionCompletion
     func cancelInteraction(id: UUID) async
+    func deferredIssuances() async throws -> [DeferredIssuance]
+    func checkDeferredIssuance(id: UUID, allowUntrustedSigner: Bool) async throws -> OpenID4VCInteractionCompletion
+    func removeDeferredIssuance(id: UUID) async throws
+    func resumeEligibleDeferredIssuances() async
     func preparePIDPresentation(id: UUID) async throws -> EudiPresentationRequest
     func completePIDPresentation(
         id: UUID,
@@ -59,20 +64,61 @@ protocol OpenID4VCOperating: Sendable {
 }
 
 actor LiveOpenID4VCService: OpenID4VCOperating {
+    private struct PersistedDeferredContinuation: Codable {
+        let backend: DeferredW3CCredential
+        let signerWarning: PersistedSignerWarning?
+        let issuerUntrusted: Bool
+        let completion: DeferredCompletion?
+    }
+
+    private struct DeferredCompletion: Codable {
+        let records: [CredentialRecord]
+        let auditEvent: AuditEvent
+    }
+
+    private struct PersistedSignerWarning: Codable {
+        let id: UUID
+        let counterpartyIdentifier: String
+        let role: EbsiTrustWarning.Role
+        let reasons: [String]
+        let evidenceSources: [String]
+        let nextAction: String
+
+        init(_ warning: EbsiTrustWarning) {
+            id = warning.id
+            counterpartyIdentifier = warning.counterpartyIdentifier
+            role = warning.role
+            reasons = warning.reasons.map(\.rawValue)
+            evidenceSources = warning.evidenceSources
+            nextAction = warning.nextAction
+        }
+
+        var value: EbsiTrustWarning {
+            EbsiTrustWarning(
+                id: id, counterpartyIdentifier: counterpartyIdentifier, role: role,
+                reasons: reasons.compactMap { .init(rawValue: $0) },
+                evidenceSources: evidenceSources, nextAction: nextAction
+            )
+        }
+    }
     private let backend: OpenID4VCW3CBackend
     private let metadata: any CredentialMetadataRepository
     private let audit: any AuditRepository
+    private let deferredRepository: any DeferredIssuanceRepository
     private var issuers: [UUID: String] = [:]
     private var authorizationRequired: Set<UUID> = []
+    private var activeDeferredChecks: Set<UUID> = []
 
     init(
         backend: OpenID4VCW3CBackend,
         metadata: any CredentialMetadataRepository,
-        audit: any AuditRepository
+        audit: any AuditRepository,
+        deferredRepository: any DeferredIssuanceRepository
     ) {
         self.backend = backend
         self.metadata = metadata
         self.audit = audit
+        self.deferredRepository = deferredRepository
     }
 
     func resolveInteraction(uri: String) async throws -> OpenID4VCResolvedInteraction {
@@ -134,9 +180,9 @@ actor LiveOpenID4VCService: OpenID4VCOperating {
                 interactionTypes: ["urn:openid:dcp:ia:openid4vp_presentation"]
             ))
         }
-        let credentials: [IssuedW3CCredential]
+        let outcome: W3CCredentialIssuanceOutcome
         do {
-            credentials = try await backend.issue(
+            outcome = try await backend.issueOutcome(
                 id: id,
                 allowUntrusted: allowUntrusted,
                 transactionCode: transactionCode
@@ -144,8 +190,263 @@ actor LiveOpenID4VCService: OpenID4VCOperating {
         } catch OpenID4VCBackendError.credentialSignerTrustWarning(let warning) {
             return .credentialSignerTrustWarning(warning)
         }
+        if case let .deferred(continuation) = outcome {
+            let now = Date()
+            let expectation = continuation.configurationIDs.compactMap { continuation.expectations[$0] }.first
+            try await deferredRepository.saveDeferredIssuance(DeferredIssuance(
+                id: continuation.transactionID,
+                continuation: try encodeContinuation(continuation, issuerUntrusted: allowUntrusted),
+                issuerIdentifier: continuation.issuer.absoluteString,
+                configurationIDs: continuation.configurationIDs,
+                displayName: expectation?.displayName ?? "Pending credential",
+                display: expectation?.display,
+                nextAttemptAt: continuation.nextPollAt,
+                createdAt: now,
+                updatedAt: now
+            ))
+            issuers.removeValue(forKey: id)
+            authorizationRequired.remove(id)
+            return .pending("Credential issuance is pending. You can check it from your wallet.")
+        }
+        guard case let .issued(credentials) = outcome else { throw OpenID4VCBackendError.invalidResponse }
         let issuer = issuers.removeValue(forKey: id) ?? "unknown"
         authorizationRequired.remove(id)
+        try await saveIssuedCredentials(credentials, issuer: issuer, allowUntrusted: allowUntrusted)
+        return .completed("Issued and stored \(credentials.count) W3C credential(s).")
+    }
+
+    func deferredIssuances() async throws -> [DeferredIssuance] {
+        try await deferredRepository.deferredIssuances()
+    }
+
+    func checkDeferredIssuance(
+        id: UUID,
+        allowUntrustedSigner: Bool
+    ) async throws -> OpenID4VCInteractionCompletion {
+        guard !activeDeferredChecks.contains(id) else { return .pending("A check is already in progress.") }
+        activeDeferredChecks.insert(id)
+        defer { activeDeferredChecks.remove(id) }
+        guard let envelope = try await deferredRepository.deferredIssuances().first(where: { $0.id == id }) else {
+            throw WalletRepositoryError.deferredIssuanceNotFound
+        }
+        let persisted = try JSONDecoder().decode(PersistedDeferredContinuation.self, from: envelope.continuation)
+        var continuation = persisted.backend
+        if let completion = persisted.completion {
+            do {
+                return try await finishDeferredCompletion(envelope: envelope, completion: completion)
+            } catch {
+                try? await replace(
+                    envelope, continuation: continuation, state: .pending,
+                    nextAttemptAt: Date().addingTimeInterval(Self.backoff(after: envelope.attempts + 1)),
+                    completion: completion
+                )
+                return .pending("The credential is stored. Wallet bookkeeping will retry while active.")
+            }
+        }
+        if envelope.state == .signerTrustRequired, !allowUntrustedSigner,
+           let warning = persisted.signerWarning {
+            return .credentialSignerTrustWarning(warning.value)
+        }
+        do {
+            var outcome: W3CCredentialIssuanceOutcome
+            if envelope.state == .signerTrustRequired && allowUntrustedSigner {
+                outcome = try await backend.commitDeferredCredential(continuation, allowUntrusted: true)
+            } else {
+                outcome = try await backend.retrieveDeferredCredential(continuation)
+            }
+            if case let .deferred(updated) = outcome, updated.remoteTransactionIDs.isEmpty {
+                // The final credential response is staged before signer trust and
+                // durable storage. Finish that local-only phase in this check rather
+                // than scheduling an immediately eligible second poll.
+                continuation = updated
+                outcome = try await backend.retrieveDeferredCredential(updated)
+            }
+            switch outcome {
+            case let .deferred(updated):
+                try await replace(envelope, continuation: updated, state: .pending)
+                return .pending("Credential is still pending at the issuer.")
+            case let .issued(credentials):
+                let completion = makeCompletion(
+                    credentials,
+                    issuer: envelope.issuerIdentifier,
+                    allowUntrusted: persisted.issuerUntrusted || allowUntrustedSigner
+                )
+                try await replace(
+                    envelope, continuation: continuation, state: .completing,
+                    completion: completion
+                )
+                let checkpoint = try await deferredRepository.deferredIssuances().first { $0.id == id } ?? envelope
+                do {
+                    return try await finishDeferredCompletion(envelope: checkpoint, completion: completion)
+                } catch {
+                    try? await replace(
+                        checkpoint, continuation: continuation, state: .pending,
+                        nextAttemptAt: Date().addingTimeInterval(Self.backoff(after: checkpoint.attempts + 1)),
+                        completion: completion
+                    )
+                    return .pending("The credential is stored. Wallet bookkeeping will resume while active.")
+                }
+            }
+        } catch OpenID4VCBackendError.deferredCredentialNotReady(let nextPollAt) {
+            try await replace(
+                envelope, continuation: continuation, state: .pending,
+                nextAttemptAt: nextPollAt, incrementAttempts: false
+            )
+            return .pending("The issuer asked the wallet to wait before checking again.")
+        } catch OpenID4VCBackendError.deferredCredentialSignerTrustWarning(let warning, let updated) {
+            continuation = updated
+            try await replace(
+                envelope, continuation: updated, state: .signerTrustRequired, signerWarning: warning
+            )
+            return .credentialSignerTrustWarning(warning)
+        } catch OpenID4VCBackendError.authorizationFailed {
+            try await replace(envelope, continuation: continuation, state: .authorizationRequired)
+            return .pending("Issuer authorization is required before this credential can be retrieved.")
+        } catch OpenID4VCBackendError.remoteOAuthError(let code, _) where code == "invalid_token" || code == "invalid_grant" {
+            try await replace(envelope, continuation: continuation, state: .authorizationRequired)
+            return .pending("Issuer authorization is required before this credential can be retrieved.")
+        } catch {
+            if Self.isTransient(error) {
+                let retryAt = Date().addingTimeInterval(Self.backoff(after: envelope.attempts + 1))
+                try? await replace(
+                    envelope, continuation: continuation, state: .pending,
+                    nextAttemptAt: retryAt
+                )
+                return .pending("The check could not complete. The wallet will retry while active.")
+            }
+            try? await replace(envelope, continuation: continuation, state: .failed)
+            throw error
+        }
+    }
+
+    func removeDeferredIssuance(id: UUID) async throws {
+        try await deferredRepository.deleteDeferredIssuance(id: id)
+    }
+
+    func resumeEligibleDeferredIssuances() async {
+        guard let issuances = try? await deferredRepository.deferredIssuances() else { return }
+        for issuance in issuances where issuance.state == .completing
+            || (issuance.state == .pending && issuance.nextAttemptAt <= Date()) {
+            _ = try? await checkDeferredIssuance(id: issuance.id, allowUntrustedSigner: false)
+        }
+    }
+
+    private func replace(
+        _ envelope: DeferredIssuance,
+        continuation: DeferredW3CCredential,
+        state: DeferredIssuanceState,
+        nextAttemptAt: Date? = nil,
+        signerWarning: EbsiTrustWarning? = nil,
+        incrementAttempts: Bool = true,
+        completion: DeferredCompletion? = nil
+    ) async throws {
+        let issuerUntrusted = try JSONDecoder().decode(
+            PersistedDeferredContinuation.self, from: envelope.continuation
+        ).issuerUntrusted
+        try await deferredRepository.replaceDeferredIssuance(DeferredIssuance(
+            id: envelope.id,
+            continuation: try encodeContinuation(
+                continuation, signerWarning: signerWarning, issuerUntrusted: issuerUntrusted,
+                completion: completion
+            ),
+            issuerIdentifier: envelope.issuerIdentifier,
+            configurationIDs: envelope.configurationIDs,
+            displayName: envelope.displayName,
+            display: envelope.display,
+            nextAttemptAt: nextAttemptAt ?? continuation.nextPollAt,
+            attempts: envelope.attempts + (incrementAttempts ? 1 : 0),
+            state: state,
+            createdAt: envelope.createdAt,
+            updatedAt: Date()
+        ))
+    }
+
+    private func encodeContinuation(
+        _ continuation: DeferredW3CCredential,
+        signerWarning: EbsiTrustWarning? = nil,
+        issuerUntrusted: Bool? = nil,
+        completion: DeferredCompletion? = nil
+    ) throws -> Data {
+        try JSONEncoder().encode(PersistedDeferredContinuation(
+            backend: continuation,
+            signerWarning: signerWarning.map(PersistedSignerWarning.init),
+            issuerUntrusted: issuerUntrusted ?? false,
+            completion: completion
+        ))
+    }
+
+    private func makeCompletion(
+        _ credentials: [IssuedW3CCredential], issuer: String, allowUntrusted: Bool
+    ) -> DeferredCompletion {
+        let now = Date()
+        let records = credentials.map { credential in
+            CredentialRecord(
+                configurationID: credential.configurationID,
+                backendID: W3CBackendComposition.backendID,
+                backendDocumentID: credential.id.uuidString,
+                displayName: credential.displayName,
+                format: credential.representation == .dcSdJwt || credential.representation == .vcdm2SdJwt
+                    ? .sdJWTVC : .jwtVC,
+                profileID: credential.profileID,
+                issuerIdentifier: credential.issuerIdentifier,
+                cryptographicValidity: .valid,
+                issuerTrust: allowUntrusted ? .untrusted : .trusted,
+                status: credential.hasStatusReference ? .notEvaluated : .notProvided,
+                legalClassification: .provisional,
+                createdAt: now,
+                displayClaims: credential.displayClaims,
+                display: credential.display
+            )
+        }
+        return DeferredCompletion(records: records, auditEvent: AuditEvent(
+            operation: .issuance,
+            outcome: .completed,
+            occurredAt: now,
+            counterpartyIdentifierDigest: .sha256(issuer),
+            credentialIDs: records.map(\.id),
+            policy: .development,
+            policyVersion: AuditPolicyVersion(rawValue: 1)
+        ))
+    }
+
+    private func finishDeferredCompletion(
+        envelope: DeferredIssuance, completion: DeferredCompletion
+    ) async throws -> OpenID4VCInteractionCompletion {
+        let existing = try await metadata.credentials()
+        let existingBackendIDs = Set(existing.compactMap(\.backendDocumentID))
+        for record in completion.records where !existingBackendIDs.contains(record.backendDocumentID ?? "") {
+            try await metadata.saveMetadata(record)
+        }
+        try await audit.append(completion.auditEvent)
+        try await deferredRepository.deleteDeferredIssuance(id: envelope.id)
+        return .completed("Issued and stored \(completion.records.count) W3C credential(s).")
+    }
+
+    static func backoff(after attempts: Int) -> TimeInterval {
+        min(900, 15 * pow(2, Double(min(max(attempts - 1, 0), 6))))
+    }
+
+    static func isTransient(_ error: Error) -> Bool {
+        if error is URLError { return true }
+        if case let OpenID4VCBackendError.remoteHTTPError(status, _) = error { return status >= 500 }
+        if let repositoryError = error as? WalletRepositoryError {
+            return repositoryError == .storageFailure || repositoryError == .userAuthenticationRequired
+        }
+        if let vaultError = error as? VaultError {
+            switch vaultError {
+            case .keychain, .storageFailure: return true
+            case .corruptCiphertext: return false
+            }
+        }
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain
+    }
+
+    private func saveIssuedCredentials(
+        _ credentials: [IssuedW3CCredential],
+        issuer: String,
+        allowUntrusted: Bool
+    ) async throws {
         var credentialIDs: [CredentialID] = []
         for credential in credentials {
             let record = CredentialRecord(
@@ -178,7 +479,6 @@ actor LiveOpenID4VCService: OpenID4VCOperating {
             policy: .development,
             policyVersion: AuditPolicyVersion(rawValue: 1)
         ))
-        return .completed("Issued and stored \(credentials.count) W3C credential(s).")
     }
 
     func cancelInteraction(id: UUID) async {

@@ -48,7 +48,6 @@ struct WalletRootView: View {
             .accessibilityHint("Opens the camera to scan a credential offer or presentation request")
             .accessibilityIdentifier("root.scan-camera")
             .padding(.trailing, OariSpacing.x5)
-            // Keep the 60pt action clear of the 49pt tab bar and home indicator.
             .padding(.bottom, 92)
         }
         .fullScreenCover(isPresented: $isCameraPresented) {

@@ -40,6 +40,7 @@ struct WalletVaultView: View {
     @ObservedObject var model: WalletAppModel
     @State private var searchText = ""
     @State private var filter: CredentialFilter = .all
+    @State private var deferredRemovalID: UUID?
 
     private enum CredentialFilter: String, CaseIterable, Identifiable {
         case all = "All"
@@ -60,7 +61,23 @@ struct WalletVaultView: View {
                     }
                     .accessibilityIdentifier("wallet.storage-error")
                 }
-                if model.credentials.isEmpty {
+                if !model.deferredIssuances.isEmpty {
+                    Section("Issuing credentials") {
+                        ForEach(model.deferredIssuances) { issuance in
+                            DeferredCredentialCard(
+                                issuance: issuance,
+                                isChecking: model.checkingDeferredIssuanceIDs.contains(issuance.id),
+                                onCheck: { Task { await model.checkDeferredIssuance(id: issuance.id) } },
+                                onRemove: { deferredRemovalID = issuance.id }
+                            )
+                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .accessibilityIdentifier("wallet.deferred.\(issuance.id.uuidString)")
+                        }
+                    }
+                }
+                if model.credentials.isEmpty && model.deferredIssuances.isEmpty {
                     ContentUnavailableView(
                         "Your wallet is empty",
                         systemImage: "wallet.pass",
@@ -74,6 +91,9 @@ struct WalletVaultView: View {
                                 CredentialListRow(credential: credential)
                             }
                             .buttonStyle(.plain)
+                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
                         }
                     } header: {
                         HStack {
@@ -104,6 +124,19 @@ struct WalletVaultView: View {
             CredentialDetailView(model: model, credential: credential)
                 .presentationDetents([.medium, .large])
         }
+        .alert("Remove pending transaction?", isPresented: Binding(
+            get: { deferredRemovalID != nil },
+            set: { if !$0 { deferredRemovalID = nil } }
+        )) {
+            Button("Remove locally", role: .destructive) {
+                guard let id = deferredRemovalID else { return }
+                deferredRemovalID = nil
+                Task { await model.removeDeferredIssuance(id: id) }
+            }
+            Button("Keep", role: .cancel) { deferredRemovalID = nil }
+        } message: {
+            Text("This removes only the wallet's local pending transaction. It does not cancel processing at the issuer.")
+        }
     }
 
     private var filteredCredentials: [CredentialRecord] {
@@ -118,6 +151,122 @@ struct WalletVaultView: View {
             case .warnings: matchesFilter = credential.issuerTrust != .trusted || credential.status == .indeterminate
             }
             return matchesSearch && matchesFilter
+        }
+    }
+
+}
+
+private struct DeferredCredentialCard: View {
+    @Environment(\.colorScheme) private var scheme
+    let issuance: DeferredIssuance
+    let isChecking: Bool
+    let onCheck: () -> Void
+    let onRemove: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: statusIcon)
+                    .font(.title2)
+                    .foregroundStyle(statusColor)
+                    .frame(width: 30)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(issuance.displayName)
+                        .font(.headline)
+                    Text(issuance.issuerIdentifier)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 8)
+                Menu {
+                    Button("Remove local transaction", role: .destructive, action: onRemove)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.title3)
+                }
+                .accessibilityLabel("More options for \(issuance.displayName)")
+            }
+
+            Text(statusText)
+                .font(.subheadline.weight(.semibold))
+            if let guidanceText {
+                Text(guidanceText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if showsCheckButton {
+                Button(action: onCheck) {
+                    HStack {
+                        if isChecking { ProgressView().controlSize(.small) }
+                        Text(isChecking ? "Checking…" : checkButtonTitle)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isChecking || !canCheck)
+                .accessibilityHint("Checks whether the issuer has finished creating this credential")
+            }
+        }
+        .padding(16)
+        .background(OariColor.surface(scheme), in: RoundedRectangle(cornerRadius: OariRadius.large, style: .continuous))
+    }
+
+    private var canCheck: Bool {
+        issuance.state == .signerTrustRequired || issuance.state == .completing
+            || (issuance.state == .pending && issuance.nextAttemptAt <= Date())
+    }
+
+    private var showsCheckButton: Bool {
+        isChecking || canCheck
+    }
+
+    private var checkButtonTitle: String {
+        issuance.state == .signerTrustRequired ? "Review issuer" : "Check now"
+    }
+
+    private var statusText: String {
+        if isChecking { return "Checking with the issuer…" }
+        switch issuance.state {
+        case .pending:
+            return issuance.nextAttemptAt > Date()
+                ? "We’ll check automatically after \(issuance.nextAttemptAt.formatted(date: .omitted, time: .shortened))"
+                : "Ready to check"
+        case .authorizationRequired: return "Authorization needed"
+        case .signerTrustRequired: return "Issuer review needed"
+        case .completing: return "Ready to finish secure storage"
+        case .failed: return "The credential could not be completed"
+        }
+    }
+
+    private var guidanceText: String? {
+        switch issuance.state {
+        case .authorizationRequired:
+            "Scan a new offer from the issuer to authorize this request again."
+        case .failed:
+            "Remove this request, then scan a new credential offer to try again."
+        case .pending where issuance.nextAttemptAt > Date():
+            "You can leave this screen. The wallet will continue while the app is active."
+        default: nil
+        }
+    }
+
+    private var statusIcon: String {
+        if isChecking { return "arrow.triangle.2.circlepath" }
+        return switch issuance.state {
+        case .pending: "clock.arrow.circlepath"
+        case .authorizationRequired: "person.badge.key"
+        case .signerTrustRequired: "checkmark.shield"
+        case .completing: "lock.open"
+        case .failed: "exclamationmark.triangle"
+        }
+    }
+
+    private var statusColor: Color {
+        switch issuance.state {
+        case .failed, .authorizationRequired: .orange
+        default: OariColor.action
         }
     }
 }
@@ -165,10 +314,6 @@ private struct CredentialListRow: View {
         }
         .foregroundStyle(cardTextColor)
         .clipShape(RoundedRectangle(cornerRadius: OariRadius.large, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: OariRadius.large, style: .continuous)
-                .stroke(.white.opacity(scheme == .dark ? 0.12 : 0.22))
-        }
         .padding(.vertical, 3)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(credential.displayName), \(statusText)")
@@ -466,6 +611,7 @@ struct WalletScannerView: View {
     @Environment(\.colorScheme) private var scheme
     @ObservedObject var model: WalletAppModel
     @State private var isCameraPresented = false
+    @State private var showsPasteEntry = false
     @FocusState private var inputFocused: Bool
 
     private var primaryActionTitle: String {
@@ -478,35 +624,47 @@ struct WalletScannerView: View {
             OariScreen {
                 OariCard {
                     VStack(alignment: .leading, spacing: OariSpacing.x4) {
-                        Label("Scan or paste a wallet code", systemImage: "qrcode.viewfinder")
+                        Label("Add or present a credential", systemImage: "qrcode.viewfinder")
                             .font(OariTypography.heading)
-                        TextField("Credential offer or presentation URL", text: $model.scanInput, axis: .vertical)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .keyboardType(.URL)
-                            .padding(OariSpacing.x4)
-                            .background(OariColor.surfaceInset(scheme))
-                            .clipShape(RoundedRectangle(cornerRadius: OariRadius.medium))
-                            .accessibilityLabel("Wallet code")
-                            .accessibilityIdentifier("scanner.input")
-                            .focused($inputFocused)
-                            .onSubmit { inputFocused = false }
-                        Button(primaryActionTitle) {
-                            inputFocused = false
-                            Task { await model.reviewScannedRequest() }
-                        }
-                        .buttonStyle(OariPrimaryButtonStyle())
-                        .disabled(model.scanInput.isEmpty)
-                        .accessibilityIdentifier("scanner.redeem")
+                        Text("Scan a QR code from an issuer or verifier.")
+                            .foregroundStyle(OariColor.textSecondary(scheme))
                         Button {
                             inputFocused = false
                             isCameraPresented = true
                         } label: {
-                            Label("Scan QR code", systemImage: "qrcode.viewfinder")
+                            Label("Scan QR code", systemImage: "camera.viewfinder")
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(OariSecondaryButtonStyle())
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
                         .accessibilityIdentifier("scanner.camera")
+
+                        DisclosureGroup("Paste code instead", isExpanded: $showsPasteEntry) {
+                            VStack(alignment: .leading, spacing: OariSpacing.x3) {
+                                TextField("Credential offer or presentation URL", text: $model.scanInput, axis: .vertical)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .keyboardType(.URL)
+                                    .padding(OariSpacing.x3)
+                                    .background(OariColor.surfaceInset(scheme))
+                                    .clipShape(RoundedRectangle(cornerRadius: OariRadius.medium))
+                                    .accessibilityLabel("Wallet code")
+                                    .accessibilityIdentifier("scanner.input")
+                                    .focused($inputFocused)
+                                    .onSubmit { inputFocused = false }
+                                Button(primaryActionTitle) {
+                                    inputFocused = false
+                                    Task { await model.reviewScannedRequest() }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.large)
+                                .disabled(model.scanInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                .accessibilityHint("Paste a credential offer or presentation URL first")
+                                .accessibilityIdentifier("scanner.redeem")
+                            }
+                            .padding(.top, OariSpacing.x3)
+                        }
+                        .tint(OariColor.action)
                     }
                 }
                 .onTapGesture { inputFocused = false }
@@ -587,15 +745,35 @@ struct WalletHistoryView: View {
 
     var body: some View {
         NavigationStack {
-            List(model.auditEvents) { event in
-                VStack(alignment: .leading, spacing: OariSpacing.x2) {
-                    Text(event.operation.rawValue.capitalized).font(OariTypography.action)
-                    Text(event.outcome.rawValue.capitalized)
-                    Text(event.occurredAt, style: .date)
-                        .font(OariTypography.technical)
-                        .foregroundStyle(OariColor.textSecondary(scheme))
+            List {
+                ForEach(historySections) { section in
+                    Section(section.title) {
+                        ForEach(section.events) { event in
+                            HStack(alignment: .top, spacing: OariSpacing.x3) {
+                                Image(systemName: event.operation.historyIcon)
+                                    .font(.body.weight(.semibold))
+                                    .foregroundStyle(event.outcome.historyColor)
+                                    .frame(width: 28, height: 28)
+                                    .background(event.outcome.historyColor.opacity(0.12), in: Circle())
+                                    .accessibilityHidden(true)
+                                VStack(alignment: .leading, spacing: OariSpacing.x1) {
+                                    Text(event.operation.historyTitle)
+                                        .font(.body.weight(.semibold))
+                                    Text(event.outcome.historyTitle)
+                                        .font(.subheadline)
+                                        .foregroundStyle(event.outcome.historyColor)
+                                    Text(event.occurredAt.formatted(date: .omitted, time: .shortened))
+                                        .font(.caption)
+                                        .foregroundStyle(OariColor.textSecondary(scheme))
+                                }
+                            }
+                            .padding(.vertical, OariSpacing.x1)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel("\(event.operation.historyTitle), \(event.outcome.historyTitle)")
+                            .accessibilityValue(event.occurredAt.formatted(date: .complete, time: .shortened))
+                        }
+                    }
                 }
-                .accessibilityElement(children: .combine)
             }
             .accessibilityIdentifier("history.list")
             .overlay {
@@ -611,6 +789,70 @@ struct WalletHistoryView: View {
             .navigationTitle("History")
         }
         .task { await model.loadAuditHistoryIfNeeded() }
+    }
+
+    private var historySections: [HistorySection] {
+        let calendar = Calendar.autoupdatingCurrent
+        let grouped = Dictionary(grouping: model.auditEvents) { calendar.startOfDay(for: $0.occurredAt) }
+        return grouped.keys.sorted(by: >).map { date in
+            HistorySection(
+                date: date,
+                title: sectionTitle(for: date, calendar: calendar),
+                events: grouped[date, default: []].sorted { $0.occurredAt > $1.occurredAt }
+            )
+        }
+    }
+
+    private func sectionTitle(for date: Date, calendar: Calendar) -> String {
+        if calendar.isDateInToday(date) { return "Today" }
+        if calendar.isDateInYesterday(date) { return "Yesterday" }
+        return date.formatted(date: .abbreviated, time: .omitted)
+    }
+}
+
+private struct HistorySection: Identifiable {
+    let date: Date
+    let title: String
+    let events: [AuditEvent]
+    var id: Date { date }
+}
+
+private extension AuditOperation {
+    var historyTitle: String {
+        switch self {
+        case .issuance: "Credential issued"
+        case .presentation: "Credential presented"
+        case .credentialDeletion: "Credential removed"
+        case .keyDeletion: "Wallet key removed"
+        }
+    }
+
+    var historyIcon: String {
+        switch self {
+        case .issuance: "person.text.rectangle"
+        case .presentation: "person.badge.shield.checkmark"
+        case .credentialDeletion: "trash"
+        case .keyDeletion: "key.slash"
+        }
+    }
+}
+
+private extension AuditOutcome {
+    var historyTitle: String {
+        switch self {
+        case .completed: "Completed"
+        case .cancelled: "Cancelled"
+        case .rejected: "Rejected"
+        case .failed: "Failed"
+        }
+    }
+
+    var historyColor: Color {
+        switch self {
+        case .completed: OariColor.action
+        case .cancelled: .secondary
+        case .rejected, .failed: .red
+        }
     }
 }
 

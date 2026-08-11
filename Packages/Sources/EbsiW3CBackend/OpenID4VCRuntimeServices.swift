@@ -464,33 +464,7 @@ public struct NativeW3CCredentialValidator: W3CCredentialValidating, Sendable {
         )
         let issuer = try Self.issuer(from: credential)
         try validateIssuerBinding(signedIssuer: issuer, expectedIssuer: expectedIssuer)
-        let document: DIDDocument
-        do {
-            document = try await resolver.resolve(issuer)
-        } catch {
-            throw EbsiCredentialError.issuerDIDUnresolved
-        }
-        let methods = try document.verificationMethod.map { method in
-            let x = try Self.decodeBase64URL(method.publicKeyJwk.x)
-            guard let encodedY = method.publicKeyJwk.y else {
-                throw EbsiCredentialError.algorithmNotAllowed
-            }
-            let y = try Self.decodeBase64URL(encodedY)
-            let key: EbsiVerificationKey = switch method.publicKeyJwk.crv {
-            case "P-256": .p256(x: x, y: y)
-            case "secp256k1": .secp256k1(x: x, y: y)
-            default: throw EbsiCredentialError.algorithmNotAllowed
-            }
-            var relationships: Set<EbsiVerificationRelationship> = []
-            if document.assertionMethod.contains(method.id) { relationships.insert(.assertionMethod) }
-            if document.authentication.contains(method.id) { relationships.insert(.authentication) }
-            return EbsiVerificationMethod(
-                id: method.id,
-                controller: method.controller,
-                key: key,
-                relationships: relationships
-            )
-        }
+        let methods = try await verificationMethods(for: issuer)
         do {
             _ = try EbsiJWSVerifier().verify(
                 compactJWS: compact,

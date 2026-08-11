@@ -9,6 +9,7 @@ struct EncryptedEbsiCredentialStoreTests {
     func restartAndDelete() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
         let keyStore = StaticVaultKeyStore(key: SymmetricKey(size: .bits256))
         let credential = StoredEbsiCredential(
             profileID: "ebsi-vcdm2-jwt-vc",
@@ -31,5 +32,27 @@ struct EncryptedEbsiCredentialStoreTests {
         #expect(try await store.credentials() == [credential])
         try await store.delete(id: credential.id)
         #expect(try await store.credentials().isEmpty)
+    }
+
+    @Test("Saving the same credential is idempotent")
+    func idempotentSave() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try EncryptedEbsiCredentialStore(
+            directory: directory,
+            keyStore: StaticVaultKeyStore(key: SymmetricKey(size: .bits256))
+        )
+        let credential = StoredEbsiCredential(
+            profileID: "ebsi-vcdm2-jwt-vc",
+            representation: .vcdm2Jwt,
+            rawCredential: Data("header.payload.signature".utf8),
+            holderKeyReference: "holder-key"
+        )
+
+        try await store.save(credential)
+        try await store.save(credential)
+
+        #expect(try await store.credentials() == [credential])
     }
 }

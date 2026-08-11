@@ -3,6 +3,12 @@ import Foundation
 import Testing
 
 struct OID4VCITransportProfilesTests {
+    @Test("Only the final profile supports deferred transaction responses")
+    func finalDeferredSupport() {
+        #expect(OID4VCITransportContract.final.supportsDeferredIssuance)
+        #expect(OID4VCITransportContract.final.responseEnvelopes.contains(.deferredTransaction))
+    }
+
     @Test("Production interoperability selects explicit HTTPS draft revision paths")
     func productionDraftCompatibility() throws {
         let registry = OID4VCITransportProfileRegistry.productionInteroperability
@@ -30,6 +36,7 @@ struct OID4VCITransportProfilesTests {
         #expect(!draft13.requiresDPoP)
         #expect(!draft13.requiresClientAttestation)
         #expect(draft13.requiresCredentialResponseEncryption)
+        #expect(!draft13.supportsDeferredIssuance)
         let draft18 = OID4VCITransportContract.resolve(
             selectedProfile: .draft18,
             authorizationMetadata: metadata
@@ -38,6 +45,7 @@ struct OID4VCITransportProfilesTests {
         #expect(!draft18.requiresDPoP)
         #expect(!draft18.requiresClientAttestation)
         #expect(draft18.requiresCredentialResponseEncryption)
+        #expect(!draft18.supportsDeferredIssuance)
         let draft17 = OID4VCITransportContract.resolve(
             selectedProfile: .draft17,
             authorizationMetadata: metadata
@@ -47,6 +55,7 @@ struct OID4VCITransportProfilesTests {
         #expect(draft17.credentialIdentifierField == .credentialIdentifier)
         #expect(!draft17.requiresDPoP)
         #expect(draft17.requiresCredentialResponseEncryption)
+        #expect(!draft17.supportsDeferredIssuance)
     }
 
     @Test("Attestation-only draft issuer requires client attestation")
@@ -118,7 +127,7 @@ struct OID4VCITransportProfilesTests {
 
     @Test("Native backend contracts do not advertise deferred or batch issuance")
     func unsupportedIssuanceModes() {
-        for profile in [OID4VCITransportContract.final, .draft13, .draft17, .draft18] {
+        for profile in [OID4VCITransportContract.draft13, .draft17, .draft18] {
             #expect(!profile.supportsDeferredIssuance)
             #expect(!profile.supportsBatchIssuance)
             #expect(!profile.responseEnvelopes.contains(.deferredTransaction))

@@ -96,11 +96,11 @@ public struct OID4VCITransportContract: Equatable, Sendable {
         profile: .final,
         proofShape: .finalProofsJWT,
         credentialIdentifierField: .credentialConfigurationID,
-        responseEnvelopes: [.jsonCredential, .jsonCredentials],
+        responseEnvelopes: [.jsonCredential, .jsonCredentials, .deferredTransaction],
         requiresDPoP: false,
         tokenEndpointAuthentication: .anonymous,
         requiresCredentialResponseEncryption: false,
-        supportsDeferredIssuance: false,
+        supportsDeferredIssuance: true,
         supportsBatchIssuance: false
     )
 
@@ -189,11 +189,11 @@ public struct OID4VCITransportContract: Equatable, Sendable {
             profile: .final,
             proofShape: .finalProofsJWT,
             credentialIdentifierField: .credentialConfigurationID,
-            responseEnvelopes: [.jsonCredential, .jsonCredentials],
+            responseEnvelopes: [.jsonCredential, .jsonCredentials, .deferredTransaction],
             requiresDPoP: false,
             tokenEndpointAuthentication: authentication,
             requiresCredentialResponseEncryption: false,
-            supportsDeferredIssuance: false,
+            supportsDeferredIssuance: true,
             supportsBatchIssuance: false
         )
     }

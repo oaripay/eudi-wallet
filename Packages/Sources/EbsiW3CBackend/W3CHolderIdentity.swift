@@ -2,7 +2,7 @@ import Foundation
 import IdentityDomain
 import WalletDomain
 
-public struct W3CHolderIdentity: Equatable, Sendable {
+public struct W3CHolderIdentity: Codable, Equatable, Sendable {
     public let keyID: KeyID
     public let did: String
     public let assertionMethod: String

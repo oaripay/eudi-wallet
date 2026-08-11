@@ -87,6 +87,8 @@ public protocol KeyProvider: Sendable {
 public enum WalletRepositoryError: Error, Equatable, Sendable {
     case duplicateCredential
     case credentialNotFound
+    case duplicateDeferredIssuance
+    case deferredIssuanceNotFound
     case keyNotFound
     case unsupportedAlgorithm
     case userAuthenticationRequired

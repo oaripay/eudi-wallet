@@ -163,6 +163,10 @@ struct WalletAppDependencies: Sendable {
             directory: root.appendingPathComponent("presentation-replay", isDirectory: true),
             keyStore: keyStore
         )
+        let deferredRepository = try EncryptedDeferredIssuanceRepository(
+            directory: root.appendingPathComponent("deferred-issuance", isDirectory: true),
+            keyStore: keyStore
+        )
         let backend = OpenID4VCW3CBackend(
             transport: transport,
             trustEvaluator: HTTPSCredentialIssuerServiceTrustEvaluator(),
@@ -191,7 +195,12 @@ struct WalletAppDependencies: Sendable {
             authorizationClientID: W3CBackendComposition.authorizationClientID,
             authorizationRedirectURI: W3CBackendComposition.authorizationRedirectURI
         )
-        return LiveOpenID4VCService(backend: backend, metadata: metadataRepository, audit: auditRepository)
+        return LiveOpenID4VCService(
+            backend: backend,
+            metadata: metadataRepository,
+            audit: auditRepository,
+            deferredRepository: deferredRepository
+        )
     }
 
 #if DEBUG

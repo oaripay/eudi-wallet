@@ -17,6 +17,9 @@ final class WalletAppModel: ObservableObject {
     }
 
     @Published private(set) var credentials: [CredentialRecord] = []
+    @Published private(set) var deferredIssuances: [DeferredIssuance] = []
+    @Published private(set) var checkingDeferredIssuanceIDs: Set<UUID> = []
+    @Published private(set) var deferredSchedulerDeadline: Date?
     @Published private(set) var auditEvents: [AuditEvent] = []
     @Published private(set) var pendingExternalURL: URL?
     @Published private(set) var isAuditHistoryLoading = false
@@ -57,6 +60,7 @@ final class WalletAppModel: ObservableObject {
     private var activeOpenID4VCInteraction: OpenID4VCResolvedInteraction?
     private var activeOpenID4VCAllowsUntrusted = false
     private var pendingOpenID4VCSignerTrustWarning = false
+    private var deferredSignerTrustWarningID: UUID?
     private var repositories: (credentials: any CredentialMetadataRepository, audit: any AuditRepository)?
     private var activePendingIssuanceID: UUID?
     private var activePendingIssuance: EudiPendingIssuance?
@@ -65,6 +69,7 @@ final class WalletAppModel: ObservableObject {
     private var appLockAuthenticator: (any AppLockAuthenticating)?
     private var backgroundGeneration = 0
     private var activeAuthenticationID: UUID?
+    private var deferredSchedulerTask: Task<Void, Never>?
     private let userDefaults: UserDefaults
 
     private static let themePreferenceKey = "oari.appearance.theme"
@@ -203,6 +208,8 @@ final class WalletAppModel: ObservableObject {
                 }
             }
             loadingState = .loaded
+            await refreshDeferredIssuances()
+            if canPollDeferredIssuances { await resumeDeferredIssuances() }
             if let initializer = dependencies.eudiInitializer {
                 startEudiInitialization(using: initializer)
             }
@@ -333,10 +340,12 @@ final class WalletAppModel: ObservableObject {
                 requiresForegroundUnlock = false
                 appLockState = .unlocked
                 showsAppLockSetup = false
+                await resumeDeferredIssuances()
             } catch {
                 guard activeAuthenticationID == requestID else { return }
                 activeAuthenticationID = nil
                 appLockState = .disabled
+                await resumeDeferredIssuances()
                 appLockSetupError = "Authentication was cancelled or failed. Try again to enable app lock."
             }
         } else if isAppLockEnabled {
@@ -356,6 +365,7 @@ final class WalletAppModel: ObservableObject {
                 userDefaults.set(true, forKey: Self.appLockSetupCompletedKey)
                 requiresForegroundUnlock = false
                 appLockState = .disabled
+                await resumeDeferredIssuances()
             } catch {
                 guard activeAuthenticationID == requestID else { return }
                 activeAuthenticationID = nil
@@ -371,6 +381,7 @@ final class WalletAppModel: ObservableObject {
         appLockState = .disabled
         appLockSetupError = nil
         showsAppLockSetup = false
+        scheduleDeferredIssuances()
     }
 
     func unlockApp() async {
@@ -406,6 +417,7 @@ final class WalletAppModel: ObservableObject {
             activeAuthenticationID = nil
             requiresForegroundUnlock = false
             appLockState = .unlocked
+            await resumeDeferredIssuances()
         } catch {
             guard activeAuthenticationID == requestID else { return }
             activeAuthenticationID = nil
@@ -422,6 +434,7 @@ final class WalletAppModel: ObservableObject {
             // Cover the snapshot, but do not create a new lock boundary.
             return
         case .background:
+            stopDeferredScheduler()
             backgroundGeneration += 1
             activeAuthenticationID = nil
             suppressesInactivePrivacyShield = false
@@ -432,6 +445,7 @@ final class WalletAppModel: ObservableObject {
             guard isAppLockEnabled else {
                 requiresForegroundUnlock = false
                 appLockState = .disabled
+                await resumeDeferredIssuances()
                 return
             }
             guard requiresForegroundUnlock, appLockState != .authenticating else { return }
@@ -571,8 +585,14 @@ final class WalletAppModel: ObservableObject {
     }
 
     func continueAfterOpenID4VCTrustWarning() async {
-        guard openID4VCTrustWarning != nil,
-              activeOpenID4VCInteractionID != nil else { return }
+        guard openID4VCTrustWarning != nil else { return }
+        if let id = deferredSignerTrustWarningID {
+            openID4VCTrustWarning = nil
+            deferredSignerTrustWarningID = nil
+            await checkDeferredIssuance(id: id, allowUntrustedSigner: true)
+            return
+        }
+        guard activeOpenID4VCInteractionID != nil else { return }
         openID4VCTrustWarning = nil
         if pendingOpenID4VCSignerTrustWarning {
             pendingOpenID4VCSignerTrustWarning = false
@@ -592,6 +612,11 @@ final class WalletAppModel: ObservableObject {
     }
 
     func cancelOpenID4VCTrustWarning() async {
+        if deferredSignerTrustWarningID != nil {
+            deferredSignerTrustWarningID = nil
+            openID4VCTrustWarning = nil
+            return
+        }
         let id = activeOpenID4VCInteractionID
         openID4VCTrustWarning = nil
         pendingOpenID4VCSignerTrustWarning = false
@@ -697,8 +722,12 @@ final class WalletAppModel: ObservableObject {
             activeOpenID4VCInteractionID = nil
             activeOpenID4VCInteraction = nil
             finishCredentialRedemption()
-        case let .pending(message):
-            eudiFlow = .completed(message)
+        case .pending:
+            activeOpenID4VCInteractionID = nil
+            activeOpenID4VCInteraction = nil
+            await refreshDeferredIssuances()
+            selectedTab = .wallet
+            eudiFlow = .idle
         case let .presentationRequired(challenge):
             eudiFlow = .openID4VPPresentationRequired(challenge)
         case let .credentialSignerTrustWarning(warning):
@@ -883,6 +912,85 @@ final class WalletAppModel: ObservableObject {
         eudiFlow = .idle
     }
 
+    func checkDeferredIssuance(id: UUID, allowUntrustedSigner: Bool = false) async {
+        guard canPollDeferredIssuances,
+              !checkingDeferredIssuanceIDs.contains(id),
+              let issuance = deferredIssuances.first(where: { $0.id == id }),
+              issuance.state == .signerTrustRequired || issuance.state == .completing
+                || (issuance.state == .pending && issuance.nextAttemptAt <= Date()),
+              let openID4VCWallet else { return }
+        checkingDeferredIssuanceIDs.insert(id)
+        defer { checkingDeferredIssuanceIDs.remove(id) }
+        do {
+            let result = try await openID4VCWallet.checkDeferredIssuance(
+                id: id, allowUntrustedSigner: allowUntrustedSigner
+            )
+            switch result {
+            case let .completed(message), let .pending(message):
+                eudiFlow = .completed(message)
+                try await refreshWalletState()
+            case let .credentialSignerTrustWarning(warning):
+                deferredSignerTrustWarningID = id
+                openID4VCTrustWarning = warning
+            case .presentationRequired:
+                eudiFlow = .failed("Issuer authorization is required. Start the credential offer again.")
+            }
+        } catch {
+            eudiFlow = .failed(Self.safeMessage(error))
+        }
+        await refreshDeferredIssuances()
+    }
+
+    func removeDeferredIssuance(id: UUID) async {
+        do {
+            try await openID4VCWallet?.removeDeferredIssuance(id: id)
+            await refreshDeferredIssuances()
+        } catch {
+            eudiFlow = .failed(Self.safeMessage(error))
+        }
+    }
+
+    private func resumeDeferredIssuances() async {
+        guard canPollDeferredIssuances, let openID4VCWallet else {
+            stopDeferredScheduler()
+            return
+        }
+        await openID4VCWallet.resumeEligibleDeferredIssuances()
+        await refreshDeferredIssuances()
+        try? await refreshWalletState()
+    }
+
+    private func refreshDeferredIssuances() async {
+        deferredIssuances = (try? await openID4VCWallet?.deferredIssuances()) ?? []
+        scheduleDeferredIssuances()
+    }
+
+    private var canPollDeferredIssuances: Bool {
+        lifecyclePhase == .active && (!isAppLockEnabled || (!requiresForegroundUnlock && appLockState == .unlocked))
+    }
+
+    private func scheduleDeferredIssuances() {
+        stopDeferredScheduler()
+        guard canPollDeferredIssuances,
+              let deadline = deferredIssuances
+                .filter({ $0.state == .pending })
+                .map(\.nextAttemptAt)
+                .min() else { return }
+        deferredSchedulerDeadline = deadline
+        deferredSchedulerTask = Task { [weak self] in
+            let delay = max(0, deadline.timeIntervalSinceNow)
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            await self.resumeDeferredIssuances()
+        }
+    }
+
+    private func stopDeferredScheduler() {
+        deferredSchedulerTask?.cancel()
+        deferredSchedulerTask = nil
+        deferredSchedulerDeadline = nil
+    }
+
     private func finishCredentialRedemption() {
         scanInput = ""
         scanResult = .idle
@@ -1043,6 +1151,7 @@ final class WalletAppModel: ObservableObject {
     private func refreshWalletState() async throws {
         guard let repositories else { return }
         try await load(credentials: repositories.credentials, audit: repositories.audit)
+        await refreshDeferredIssuances()
         if let eudiWallet {
             walletDocumentSummaries = Dictionary(
                 uniqueKeysWithValues: try await eudiWallet.loadDocumentSummaries().map { ($0.id, $0) }
@@ -1089,6 +1198,12 @@ final class WalletAppModel: ObservableObject {
             case .rejectedTrust: return "The issuer request failed trust or signature validation."
             case .credentialSignerTrustWarning:
                 return "The credential signer could not be resolved or accredited. Review the warning before storing the credential."
+            case .deferredCredentialPending:
+                return "Credential issuance is pending at the issuer."
+            case let .deferredCredentialNotReady(nextPollAt):
+                return "The credential can be checked after \(nextPollAt.formatted(date: .omitted, time: .shortened))."
+            case .deferredCredentialSignerTrustWarning:
+                return "The deferred credential signer requires your review before storage."
             case .invalidResponse: return "The issuer returned an invalid or incomplete OpenID4VCI response."
             case .missingCredentialNonce:
                 return "The issuer token response omitted the credential nonce required for a replay-protected proof. Create a new offer or correct the issuer configuration."

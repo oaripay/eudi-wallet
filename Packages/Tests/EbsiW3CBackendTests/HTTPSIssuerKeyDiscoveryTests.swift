@@ -34,6 +34,32 @@ struct HTTPSIssuerKeyDiscoveryTests {
         ])
     }
 
+    @Test("HTTPS VCDM 2 JWT issuer resolves ES256 key from OpenID metadata JWKS")
+    func resolvesVCDM2OpenIDJWKS() async throws {
+        let key = P256.Signing.PrivateKey()
+        let holder = "did:key:zDnaTestHolder"
+        let transport = HTTPSIssuerFixtureTransport(issuer: issuer, publicKey: key.publicKey)
+        let validator = NativeW3CCredentialValidator(
+            resolver: RejectingDIDResolver(),
+            transport: transport
+        )
+        let credential = try signedVCDM2JWT(key: key, kid: "igrant-signing-key", holder: holder)
+
+        let signedIssuer = try await validator.validate(
+            rawCredential: Data(credential.utf8),
+            profile: .vcdm2JWTVC(),
+            expectedIssuer: issuer,
+            expectedHolderDID: holder,
+            at: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+        #expect(signedIssuer == issuer)
+        #expect(await transport.requestPaths == [
+            "/.well-known/jwt-vc-issuer/organisation/test/service/draft-17",
+            "/.well-known/oauth-authorization-server/organisation/test/service/draft-17",
+            "/organisation/test/service/jwks",
+        ])
+    }
+
     @Test("HTTPS issuer metadata cannot substitute a different issuer")
     func rejectsIssuerSubstitution() async throws {
         let key = P256.Signing.PrivateKey()
@@ -173,6 +199,29 @@ struct HTTPSIssuerKeyDiscoveryTests {
         let input = Data("\(header).\(payload)".utf8)
         let signature = try key.signature(for: input).rawRepresentation
         return "\(header).\(payload).\(base64URL(signature))~"
+    }
+
+    private func signedVCDM2JWT(
+        key: P256.Signing.PrivateKey,
+        kid: String,
+        holder: String
+    ) throws -> String {
+        let header = try encoded(["alg": "ES256", "kid": kid, "typ": "vc+jwt"])
+        let payload = try base64URL(JSONSerialization.data(withJSONObject: [
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential", "TestCredential"],
+            "issuer": issuer,
+            "validFrom": "2027-01-15T08:00:00Z",
+            "validUntil": "2027-01-15T09:00:00Z",
+            "credentialSubject": ["id": holder, "name": "Test Holder"],
+            "iss": issuer,
+            "sub": holder,
+            "nbf": 1_800_000_000,
+            "exp": 1_800_003_600,
+        ], options: [.sortedKeys]))
+        let input = Data("\(header).\(payload)".utf8)
+        let signature = try key.signature(for: input).rawRepresentation
+        return "\(header).\(payload).\(base64URL(signature))"
     }
 
     private func encoded(_ value: [String: String]) throws -> String {

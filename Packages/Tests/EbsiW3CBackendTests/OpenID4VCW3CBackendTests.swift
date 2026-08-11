@@ -6,7 +6,262 @@ import Testing
 import TrustDomain
 import WalletDomain
 
+private final class DeferredTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var date: Date
+
+    init(_ date: Date) { self.date = date }
+
+    var value: Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return date
+    }
+
+    func advance(by interval: TimeInterval) {
+        lock.lock()
+        date = date.addingTimeInterval(interval)
+        lock.unlock()
+    }
+}
+
 struct OpenID4VCW3CBackendTests {
+    @Test("Final response is persisted and restored before local credential commit")
+    func finalDeferredIssuance() async throws {
+        let transport = FixtureOpenID4VCTransport(deferredInterval: 1)
+        let store = FixtureCredentialStore()
+        let clock = DeferredTestClock(Date(timeIntervalSince1970: 1_800_000_000))
+        let backend = OpenID4VCW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(),
+            credentialStore: store,
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .vcdm2JWTVC(),
+            now: { clock.value }
+        )
+        let offer = try await backend.resolveOffer("https://issuer.example/offer")
+        let initial = try await backend.issueOutcome(
+            id: offer.id, allowUntrusted: false, transactionCode: "123456"
+        )
+        guard case let .deferred(deferred) = initial else {
+            Issue.record("Expected a deferred outcome")
+            return
+        }
+        await #expect(throws: OpenID4VCBackendError.unknownTransaction) {
+            _ = try await backend.issueOutcome(
+                id: offer.id, allowUntrusted: false, transactionCode: "123456"
+            )
+        }
+        #expect(deferred.configurationIDs == ["example-vcdm2-jwt-vc"])
+        #expect(try await store.credentials().isEmpty)
+        let encodedState = try JSONEncoder().encode(deferred)
+        let restoredState = try JSONDecoder().decode(DeferredW3CCredential.self, from: encodedState)
+        clock.advance(by: 1)
+        let restoredBackend = OpenID4VCW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(),
+            credentialStore: store,
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .vcdm2JWTVC(),
+            now: { clock.value }
+        )
+        let finalResponse = try await restoredBackend.retrieveDeferredCredential(restoredState)
+        guard case let .deferred(finalCheckpoint) = finalResponse else {
+            Issue.record("Expected a final local-completion checkpoint")
+            return
+        }
+        #expect(finalCheckpoint.remoteTransactionIDs.isEmpty)
+        #expect(finalCheckpoint.stagedCredentials.count == 1)
+        #expect(finalCheckpoint.nextPollAt == clock.value)
+        #expect(try await store.credentials().isEmpty)
+        #expect(!(await transport.requests).contains { $0.url.path == "/notification" })
+
+        let persistedFinalCheckpoint = try JSONEncoder().encode(finalCheckpoint)
+        let restoredFinalCheckpoint = try JSONDecoder().decode(
+            DeferredW3CCredential.self, from: persistedFinalCheckpoint
+        )
+        let completionBackend = OpenID4VCW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(),
+            credentialStore: store,
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .vcdm2JWTVC(),
+            now: { clock.value }
+        )
+        let completed = try await completionBackend.retrieveDeferredCredential(restoredFinalCheckpoint)
+        guard case let .issued(credentials) = completed else {
+            Issue.record("Expected an issued outcome")
+            return
+        }
+        #expect(credentials.count == 1)
+        #expect(try await store.credentials().count == 1)
+        #expect((await transport.requests).contains { $0.url.path == "/notification" })
+        let request = try #require((await transport.requests).first { $0.url.path == "/deferred" })
+        #expect(request.method == "POST")
+        #expect(request.headers["Authorization"] == "Bearer access")
+        let body = try #require(request.body)
+        let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: String])
+        #expect(object == ["transaction_id": "transaction-1"])
+    }
+
+    @Test("Each retrieval checkpoints one ready transaction before requesting the next")
+    func deferredBatchCheckpointsEachTransaction() async throws {
+        let transport = FixtureOpenID4VCTransport(
+            deferredInterval: 1,
+            twoDeferredConfigurations: true,
+            secondDeferredFails: true
+        )
+        let store = FixtureCredentialStore()
+        let clock = DeferredTestClock(Date(timeIntervalSince1970: 1_800_000_000))
+        let backend = OpenID4VCW3CBackend(
+            transport: transport, trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(), credentialStore: store,
+            credentialValidator: FixtureCredentialValidator(), profile: try .vcdm2JWTVC(),
+            now: { clock.value }
+        )
+        let offer = try await backend.resolveOffer("https://issuer.example/offer")
+        let initial = try await backend.issueOutcome(
+            id: offer.id, allowUntrusted: false, transactionCode: "123456"
+        )
+        guard case let .deferred(state) = initial else {
+            Issue.record("Expected two deferred transactions")
+            return
+        }
+        clock.advance(by: 1)
+        let firstPoll = try await backend.retrieveDeferredCredential(state)
+        guard case let .deferred(checkpoint) = firstPoll else {
+            Issue.record("Expected a checkpoint after the first ready credential")
+            return
+        }
+        #expect(checkpoint.remoteTransactionIDs == ["second-vcdm2-jwt-vc": "transaction-2"])
+        #expect(checkpoint.stagedCredentials.count == 1)
+        #expect(checkpoint.stagedCredentials.first?.issued.configurationID == "example-vcdm2-jwt-vc")
+        #expect(try await store.credentials().isEmpty)
+
+        await #expect(throws: OpenID4VCBackendError.remoteHTTPError(status: 500, detail: "second failed")) {
+            _ = try await backend.retrieveDeferredCredential(checkpoint)
+        }
+        await #expect(throws: OpenID4VCBackendError.remoteHTTPError(status: 500, detail: "second failed")) {
+            _ = try await backend.retrieveDeferredCredential(checkpoint)
+        }
+        let deferredBodies = try (await transport.requests)
+            .filter { $0.url.path == "/deferred" }
+            .map { request -> String in
+                let body = try #require(request.body)
+                let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: String])
+                return try #require(object["transaction_id"])
+            }
+        #expect(deferredBodies.filter { $0 == "transaction-1" }.count == 1)
+        #expect(deferredBodies.filter { $0 == "transaction-2" }.count == 2)
+        #expect(try await store.credentials().isEmpty)
+    }
+
+    @Test("Deferred retrieval enforces the issuer interval before network access")
+    func deferredIntervalEnforced() async throws {
+        let transport = FixtureOpenID4VCTransport(deferredInterval: 30)
+        let instant = Date(timeIntervalSince1970: 1_800_000_000)
+        let backend = OpenID4VCW3CBackend(
+            transport: transport,
+            trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(),
+            credentialStore: FixtureCredentialStore(),
+            credentialValidator: FixtureCredentialValidator(),
+            profile: try .vcdm2JWTVC(),
+            now: { instant }
+        )
+        let offer = try await backend.resolveOffer("https://issuer.example/offer")
+        let outcome = try await backend.issueOutcome(
+            id: offer.id, allowUntrusted: false, transactionCode: "123456"
+        )
+        let deferred = try #require({
+            if case let .deferred(value) = outcome { return value }
+            return nil
+        }())
+        await #expect(throws: OpenID4VCBackendError.deferredCredentialNotReady(
+            nextPollAt: instant.addingTimeInterval(30)
+        )) {
+            _ = try await backend.retrieveDeferredCredential(deferred)
+        }
+        #expect(!(await transport.requests).contains { $0.url.path == "/deferred" })
+    }
+
+    @Test("Transaction responses require positive interval and HTTP 202")
+    func deferredInitialResponseRequirements() async throws {
+        for fixture in [
+            FixtureOpenID4VCTransport(deferredInterval: nil, emitsTransaction: true),
+            FixtureOpenID4VCTransport(deferredInterval: 0),
+            FixtureOpenID4VCTransport(deferredInterval: 10, initialTransactionID: nil),
+            FixtureOpenID4VCTransport(deferredInterval: 10, initialTransactionID: ""),
+            FixtureOpenID4VCTransport(deferredInterval: 10, initialCredentialStatus: 200),
+        ] {
+            let backend = OpenID4VCW3CBackend(
+                transport: fixture, trustEvaluator: TrustedIssuerEvaluator(),
+                keyProvider: FixtureKeyProvider(), credentialStore: FixtureCredentialStore(),
+                credentialValidator: FixtureCredentialValidator(), profile: try .vcdm2JWTVC()
+            )
+            let offer = try await backend.resolveOffer("https://issuer.example/offer")
+            await #expect(throws: OpenID4VCBackendError.invalidResponse) {
+                _ = try await backend.issueOutcome(
+                    id: offer.id, allowUntrusted: false, transactionCode: "123456"
+                )
+            }
+        }
+    }
+
+    @Test("Pending transaction must retain its ID, positive interval and HTTP 202")
+    func deferredPendingResponseRequirements() async throws {
+        for fixture in [
+            FixtureOpenID4VCTransport(deferredInterval: 1, pendingTransactionID: "other"),
+            FixtureOpenID4VCTransport(deferredInterval: 1, pendingTransactionID: "transaction-1"),
+            FixtureOpenID4VCTransport(deferredInterval: 1, pendingTransactionID: "transaction-1", pendingInterval: 0),
+            FixtureOpenID4VCTransport(deferredInterval: 1, pendingTransactionID: "transaction-1", pendingInterval: 1, deferredStatus: 200),
+            FixtureOpenID4VCTransport(deferredInterval: 1, completedCredentialStatus: 202),
+        ] {
+            let clock = DeferredTestClock(Date(timeIntervalSince1970: 1_800_000_000))
+            let backend = OpenID4VCW3CBackend(
+                transport: fixture, trustEvaluator: TrustedIssuerEvaluator(),
+                keyProvider: FixtureKeyProvider(), credentialStore: FixtureCredentialStore(),
+                credentialValidator: FixtureCredentialValidator(), profile: try .vcdm2JWTVC(),
+                now: { clock.value }
+            )
+            let offer = try await backend.resolveOffer("https://issuer.example/offer")
+            let outcome = try await backend.issueOutcome(
+                id: offer.id, allowUntrusted: false, transactionCode: "123456"
+            )
+            guard case let .deferred(state) = outcome else { continue }
+            clock.advance(by: 1)
+            await #expect(throws: OpenID4VCBackendError.invalidResponse) {
+                _ = try await backend.retrieveDeferredCredential(state)
+            }
+        }
+    }
+
+    @Test("Legacy issuance_pending error is not accepted by final deferred retrieval")
+    func deferredRejectsLegacyPendingError() async throws {
+        let fixture = FixtureOpenID4VCTransport(deferredInterval: 1, legacyPendingError: true)
+        let clock = DeferredTestClock(Date(timeIntervalSince1970: 1_800_000_000))
+        let backend = OpenID4VCW3CBackend(
+            transport: fixture, trustEvaluator: TrustedIssuerEvaluator(),
+            keyProvider: FixtureKeyProvider(), credentialStore: FixtureCredentialStore(),
+            credentialValidator: FixtureCredentialValidator(), profile: try .vcdm2JWTVC(),
+            now: { clock.value }
+        )
+        let offer = try await backend.resolveOffer("https://issuer.example/offer")
+        let outcome = try await backend.issueOutcome(
+            id: offer.id, allowUntrusted: false, transactionCode: "123456"
+        )
+        guard case let .deferred(state) = outcome else { return }
+        clock.advance(by: 1)
+        await #expect(throws: OpenID4VCBackendError.remoteOAuthError(
+            code: "issuance_pending", detail: nil
+        )) {
+            _ = try await backend.retrieveDeferredCredential(state)
+        }
+    }
+
     @Test("Draft 17 QESAC uses token identifier, proofs and response encryption")
     func draft17QESACRequest() async throws {
         let transport = Draft13OpenID4VCTransport()
@@ -1688,6 +1943,17 @@ private actor FixtureOpenID4VCTransport: OpenID4VCHTTPTransport {
     private let iGrantCompactPresentation: Bool
     private let omitAuthorizationResponseState: Bool
     private let authorizationResponseStateOverride: String?
+    private let deferredInterval: Int?
+    private let emitsTransaction: Bool
+    private let initialCredentialStatus: Int
+    private let initialTransactionID: String?
+    private let pendingTransactionID: String?
+    private let pendingInterval: Int?
+    private let deferredStatus: Int
+    private let legacyPendingError: Bool
+    private let completedCredentialStatus: Int
+    private let twoDeferredConfigurations: Bool
+    private let secondDeferredFails: Bool
     private var authorizationState: String?
 
     init(
@@ -1696,7 +1962,18 @@ private actor FixtureOpenID4VCTransport: OpenID4VCHTTPTransport {
         credentialResponse: String = "header.payload.signature",
         iGrantCompactPresentation: Bool = false,
         omitAuthorizationResponseState: Bool = false,
-        authorizationResponseStateOverride: String? = nil
+        authorizationResponseStateOverride: String? = nil,
+        deferredInterval: Int? = nil,
+        emitsTransaction: Bool = false,
+        initialCredentialStatus: Int = 202,
+        initialTransactionID: String? = "transaction-1",
+        pendingTransactionID: String? = nil,
+        pendingInterval: Int? = nil,
+        deferredStatus: Int = 202,
+        legacyPendingError: Bool = false,
+        completedCredentialStatus: Int = 200,
+        twoDeferredConfigurations: Bool = false,
+        secondDeferredFails: Bool = false
     ) {
         self.presentationFormat = presentationFormat
         self.credentialFormat = credentialFormat
@@ -1704,16 +1981,34 @@ private actor FixtureOpenID4VCTransport: OpenID4VCHTTPTransport {
         self.iGrantCompactPresentation = iGrantCompactPresentation
         self.omitAuthorizationResponseState = omitAuthorizationResponseState
         self.authorizationResponseStateOverride = authorizationResponseStateOverride
+        self.deferredInterval = deferredInterval
+        self.emitsTransaction = emitsTransaction || deferredInterval != nil
+        self.initialCredentialStatus = initialCredentialStatus
+        self.initialTransactionID = initialTransactionID
+        self.pendingTransactionID = pendingTransactionID
+        self.pendingInterval = pendingInterval
+        self.deferredStatus = deferredStatus
+        self.legacyPendingError = legacyPendingError
+        self.completedCredentialStatus = completedCredentialStatus
+        self.twoDeferredConfigurations = twoDeferredConfigurations
+        self.secondDeferredFails = secondDeferredFails
     }
     func send(url: URL, method: String, headers: [String: String], body: Data?) async throws -> OpenID4VCHTTPResponse {
         requests.append(Request(url: url, method: method, headers: headers, body: body))
         let response: String
+        var statusCode = 200
         switch url.path {
         case "/offer":
-            response = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":["example-vcdm2-jwt-vc"],"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":"pre-code","tx_code":{"input_mode":"numeric","length":6}}}}"#
+            let configurationIDs = twoDeferredConfigurations
+                ? #"["example-vcdm2-jwt-vc","second-vcdm2-jwt-vc"]"#
+                : #"["example-vcdm2-jwt-vc"]"#
+            response = #"{"credential_issuer":"https://issuer.example","credential_configuration_ids":\#(configurationIDs),"grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":"pre-code","tx_code":{"input_mode":"numeric","length":6}}}}"#
         case "/.well-known/openid-credential-issuer":
+            let secondConfiguration = twoDeferredConfigurations
+                ? #", "second-vcdm2-jwt-vc":{"format":"application/vc+jwt","display":[{"name":"Second Credential"}]}"#
+                : ""
             response = """
-            {"credential_endpoint":"https://issuer.example/credential","authorization_servers":["https://issuer.example"],"credential_configurations_supported":{"example-vcdm2-jwt-vc":{"format":"\(credentialFormat)","display":[{"name":"Legal Person ID","locale":"en","description":"Legal person credential","background_color":"#003366","text_color":"#ffffff","logo":{"uri":"https://assets.example/logo.png","alt_text":"Issuer mark"},"background_image":{"uri":"https://assets.example/background.png"}}]}}}
+            {"credential_endpoint":"https://issuer.example/credential","deferred_credential_endpoint":"https://issuer.example/deferred","notification_endpoint":"https://issuer.example/notification","authorization_servers":["https://issuer.example"],"credential_configurations_supported":{"example-vcdm2-jwt-vc":{"format":"\(credentialFormat)","display":[{"name":"Legal Person ID","locale":"en","description":"Legal person credential","background_color":"#003366","text_color":"#ffffff","logo":{"uri":"https://assets.example/logo.png","alt_text":"Issuer mark"},"background_image":{"uri":"https://assets.example/background.png"}}]}\(secondConfiguration)}}
             """
         case "/.well-known/oauth-authorization-server":
             response = #"{"authorization_challenge_endpoint":"https://issuer.example/authorize-challenge","token_endpoint":"https://issuer.example/token"}"#
@@ -1756,9 +2051,51 @@ private actor FixtureOpenID4VCTransport: OpenID4VCHTTPTransport {
             }
             response = String(decoding: try JSONSerialization.data(withJSONObject: authorizationResponse), as: UTF8.self)
         case "/credential":
-            response = """
-            {"credentials":[{"credential":"\(credentialResponse)"}]}
-            """
+            if emitsTransaction {
+                statusCode = initialCredentialStatus
+                let request = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                let configurationID = request?["credential_configuration_id"] as? String
+                let effectiveTransactionID = configurationID == "second-vcdm2-jwt-vc"
+                    ? "transaction-2"
+                    : initialTransactionID
+                if let deferredInterval, let effectiveTransactionID {
+                    response = #"{"transaction_id":"\#(effectiveTransactionID)","interval":\#(deferredInterval)}"#
+                } else if let deferredInterval {
+                    response = #"{"interval":\#(deferredInterval)}"#
+                } else if let effectiveTransactionID {
+                    response = #"{"transaction_id":"\#(effectiveTransactionID)"}"#
+                } else {
+                    response = #"{}"#
+                }
+            } else {
+                response = """
+                {"credentials":[{"credential":"\(credentialResponse)"}]}
+                """
+            }
+        case "/deferred":
+            let deferredRequest = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }
+            if secondDeferredFails, deferredRequest?["transaction_id"] == "transaction-2" {
+                statusCode = 500
+                response = #"{"detail":"second failed"}"#
+            } else if legacyPendingError {
+                statusCode = 400
+                response = #"{"error":"issuance_pending"}"#
+            } else if let pendingTransactionID {
+                statusCode = deferredStatus
+                if let pendingInterval {
+                    response = #"{"transaction_id":"\#(pendingTransactionID)","interval":\#(pendingInterval)}"#
+                } else {
+                    response = #"{"transaction_id":"\#(pendingTransactionID)"}"#
+                }
+            } else {
+                statusCode = completedCredentialStatus
+                response = """
+                {"credentials":[{"credential":"\(credentialResponse)"}],"notification_id":"deferred-notification"}
+                """
+            }
+        case "/notification":
+            statusCode = 204
+            response = ""
         case "/openid4vp/request":
             return OpenID4VCHTTPResponse(
                 statusCode: 200,
@@ -1779,7 +2116,7 @@ private actor FixtureOpenID4VCTransport: OpenID4VCHTTPTransport {
             )
         default: throw OpenID4VCBackendError.invalidResponse
         }
-        return OpenID4VCHTTPResponse(statusCode: 200, body: Data(response.utf8))
+        return OpenID4VCHTTPResponse(statusCode: statusCode, body: Data(response.utf8))
     }
 
     private static func signedPresentationRequest(format: String) -> String {
