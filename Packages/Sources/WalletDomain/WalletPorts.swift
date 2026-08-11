@@ -68,7 +68,18 @@ public protocol WalletOperationRecoveryStore: Sendable {
 public protocol AuditRepository: Sendable {
     func events() async throws -> [AuditEvent]
     func append(_ event: AuditEvent) async throws
+    func delete(id: AuditEventID) async throws
     func deleteAll() async throws
+}
+
+public extension AuditRepository {
+    func delete(id: AuditEventID) async throws {
+        let remaining = try await events().filter { $0.id != id }
+        try await deleteAll()
+        for event in remaining {
+            try await append(event)
+        }
+    }
 }
 
 public protocol KeyProvider: Sendable {

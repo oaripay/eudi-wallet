@@ -403,7 +403,9 @@ private struct CredentialDetailView: View {
                         }
                         .disabled(model.credentialActionIsWorking || !model.isEudiOperational)
                     }
-                    Button("Remove credential", role: .destructive) { confirmsDeletion = true }
+                    Button(role: .destructive) { confirmsDeletion = true } label: {
+                        Label("Remove credential", systemImage: "minus.circle")
+                    }
                         .disabled(model.credentialActionIsWorking || !model.canDeleteCredential(credential))
                     if !model.canDeleteCredential(credential) {
                         Label(deletionUnavailableMessage, systemImage: "lock.shield")
@@ -742,6 +744,8 @@ private struct ScanResultView: View {
 struct WalletHistoryView: View {
     @Environment(\.colorScheme) private var scheme
     @ObservedObject var model: WalletAppModel
+    @State private var selectedEvent: AuditEvent?
+    @State private var confirmsClearAllActivity = false
 
     var body: some View {
         NavigationStack {
@@ -749,30 +753,47 @@ struct WalletHistoryView: View {
                 ForEach(historySections) { section in
                     Section(section.title) {
                         ForEach(section.events) { event in
-                            HStack(alignment: .top, spacing: OariSpacing.x3) {
-                                Image(systemName: event.operation.historyIcon)
-                                    .font(.body.weight(.semibold))
-                                    .foregroundStyle(event.outcome.historyColor)
-                                    .frame(width: 28, height: 28)
-                                    .background(event.outcome.historyColor.opacity(0.12), in: Circle())
-                                    .accessibilityHidden(true)
-                                VStack(alignment: .leading, spacing: OariSpacing.x1) {
-                                    Text(event.operation.historyTitle)
+                            Button { selectedEvent = event } label: {
+                                HStack(alignment: .center, spacing: OariSpacing.x3) {
+                                    Image(systemName: event.operation.historyIcon)
                                         .font(.body.weight(.semibold))
-                                    Text(event.outcome.historyTitle)
-                                        .font(.subheadline)
                                         .foregroundStyle(event.outcome.historyColor)
+                                        .frame(width: 28, height: 28)
+                                        .background(event.outcome.historyColor.opacity(0.12), in: Circle())
+                                        .accessibilityHidden(true)
+                                    VStack(alignment: .leading, spacing: OariSpacing.x1) {
+                                        Text(event.operation.historyTitle)
+                                            .font(.body.weight(.semibold))
+                                            .foregroundStyle(.primary)
+                                        if event.outcome.showsHistoryLabel {
+                                            Text(event.outcome.historyTitle)
+                                                .font(.subheadline)
+                                                .foregroundStyle(event.outcome.historyColor)
+                                        }
+                                    }
+                                    Spacer(minLength: OariSpacing.x2)
                                     Text(event.occurredAt.formatted(date: .omitted, time: .shortened))
                                         .font(.caption)
                                         .foregroundStyle(OariColor.textSecondary(scheme))
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.tertiary)
+                                        .accessibilityHidden(true)
                                 }
                             }
+                            .buttonStyle(.plain)
                             .padding(.vertical, OariSpacing.x1)
                             .accessibilityElement(children: .combine)
                             .accessibilityLabel("\(event.operation.historyTitle), \(event.outcome.historyTitle)")
                             .accessibilityValue(event.occurredAt.formatted(date: .complete, time: .shortened))
+                            .disabled(model.deletingAuditEventIDs.contains(event.id) || model.isClearingAuditHistory)
                         }
                     }
+                }
+                Section {
+                    Text("Activity stays on this device and does not include credential values.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             .accessibilityIdentifier("history.list")
@@ -787,6 +808,52 @@ struct WalletHistoryView: View {
             .scrollContentBackground(.hidden)
             .background(OariColor.background(scheme))
             .navigationTitle("History")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button("Clear All Activity", systemImage: "trash", role: .destructive) {
+                            confirmsClearAllActivity = true
+                        }
+                        .disabled(model.auditEvents.isEmpty || model.isClearingAuditHistory)
+                    } label: {
+                        if model.isClearingAuditHistory {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                    }
+                    .accessibilityLabel("History options")
+                }
+            }
+            .alert(
+                "Clear All Activity?",
+                isPresented: $confirmsClearAllActivity,
+            ) {
+                Button("Clear All Activity", role: .destructive) {
+                    Task { await model.clearAllActivity() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This removes activity history from this device. Credentials and wallet keys are not removed.")
+            }
+            .alert(
+                "History Error",
+                isPresented: Binding(
+                    get: { model.auditHistoryError != nil },
+                    set: { if !$0 { model.dismissAuditHistoryError() } }
+                )
+            ) {
+                Button("OK") { model.dismissAuditHistoryError() }
+            } message: {
+                Text(model.auditHistoryError ?? "The activity history could not be updated.")
+            }
+            .sheet(item: $selectedEvent) { event in
+                HistoryEventDetailView(
+                    model: model,
+                    event: event,
+                    credentialName: credentialName(for: event)
+                )
+            }
         }
         .task { await model.loadAuditHistoryIfNeeded() }
     }
@@ -808,6 +875,104 @@ struct WalletHistoryView: View {
         if calendar.isDateInYesterday(date) { return "Yesterday" }
         return date.formatted(date: .abbreviated, time: .omitted)
     }
+
+    private func credentialName(for event: AuditEvent) -> String? {
+        if event.credentialIDs.count > 1 {
+            return "\(event.credentialIDs.count) credentials"
+        }
+        guard let credentialID = event.credentialIDs.first else { return nil }
+        return model.credentials.first(where: { $0.id == credentialID })?.displayName
+            ?? "Credential no longer in wallet"
+    }
+}
+
+private struct HistoryEventDetailView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var model: WalletAppModel
+    let event: AuditEvent
+    let credentialName: String?
+    @State private var confirmsRemoval = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Activity") {
+                    LabeledContent("Action", value: event.operation.historyTitle)
+                    LabeledContent("Result", value: event.outcome.historyTitle)
+                    LabeledContent("Date", value: event.occurredAt.formatted(date: .long, time: .shortened))
+                }
+                if let credentialName {
+                    Section("Credential") {
+                        Text(credentialName)
+                    }
+                }
+                if event.operation.isPresentation, !event.disclosedClaimDigests.isEmpty {
+                    Section("Disclosure") {
+                        LabeledContent("Attributes shared", value: "\(event.disclosedClaimDigests.count)")
+                        Text("Credential values are not stored in activity history.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let reasonCode = event.reasonCode {
+                    Section("Reason") {
+                        Text(reasonCode.historyDescription)
+                    }
+                }
+                Section {
+                    Text("This activity record contains operational metadata only. It does not include credential values, tokens, or cryptographic material.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Section("Actions") {
+                    Button(role: .destructive) { confirmsRemoval = true } label: {
+                        if model.deletingAuditEventIDs.contains(event.id) {
+                            HStack {
+                                ProgressView()
+                                Text("Removing Activity…")
+                            }
+                        } else {
+                            Label("Remove Activity", systemImage: "trash")
+                        }
+                    }
+                    .disabled(model.deletingAuditEventIDs.contains(event.id) || model.isClearingAuditHistory)
+                }
+            }
+            .navigationTitle("Activity details")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .alert(
+                "Remove Activity?",
+                isPresented: $confirmsRemoval,
+            ) {
+                Button("Remove Activity", role: .destructive) {
+                    Task {
+                        if await model.deleteAuditEvent(id: event.id) {
+                            dismiss()
+                        }
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This removes only this activity record. Credentials and wallet keys are not removed.")
+            }
+            .alert(
+                "History Error",
+                isPresented: Binding(
+                    get: { model.auditHistoryError != nil },
+                    set: { if !$0 { model.dismissAuditHistoryError() } }
+                )
+            ) {
+                Button("OK") { model.dismissAuditHistoryError() }
+            } message: {
+                Text(model.auditHistoryError ?? "The activity could not be removed.")
+            }
+        }
+    }
 }
 
 private struct HistorySection: Identifiable {
@@ -818,6 +983,11 @@ private struct HistorySection: Identifiable {
 }
 
 private extension AuditOperation {
+    var isPresentation: Bool {
+        if case .presentation = self { return true }
+        return false
+    }
+
     var historyTitle: String {
         switch self {
         case .issuance: "Credential issued"
@@ -838,6 +1008,11 @@ private extension AuditOperation {
 }
 
 private extension AuditOutcome {
+    var showsHistoryLabel: Bool {
+        if case .completed = self { return false }
+        return true
+    }
+
     var historyTitle: String {
         switch self {
         case .completed: "Completed"
@@ -852,6 +1027,22 @@ private extension AuditOutcome {
         case .completed: OariColor.action
         case .cancelled: .secondary
         case .rejected, .failed: .red
+        }
+    }
+}
+
+private extension AuditReasonCode {
+    var historyDescription: String {
+        switch self {
+        case .userCancelled: "Cancelled by the user."
+        case .userRejected: "Rejected by the user."
+        case .trustRejected: "The issuer or verifier could not be trusted."
+        case .unsupportedProfile: "The credential or request format is not supported."
+        case .expired: "The credential or request expired."
+        case .replayDetected: "The wallet blocked a repeated request."
+        case .localAuthenticationFailed: "Device authentication was not completed."
+        case .deliveryFailed: "The wallet could not deliver the response."
+        case .storageFailed: "The wallet could not store the credential securely."
         }
     }
 }

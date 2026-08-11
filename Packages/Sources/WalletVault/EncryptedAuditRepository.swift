@@ -34,10 +34,25 @@ public actor EncryptedAuditRepository: AuditRepository {
         var current = try await events()
         guard !current.contains(where: { $0.id == event.id }) else { return }
         current.append(event)
+        try write(current)
+    }
+
+    public func delete(id: AuditEventID) async throws {
+        let current = try await events()
+        let remaining = current.filter { $0.id != id }
+        guard remaining.count != current.count else { return }
+        if remaining.isEmpty {
+            try await deleteAll()
+        } else {
+            try write(remaining)
+        }
+    }
+
+    private func write(_ events: [AuditEvent]) throws {
         do {
             try files.write(
                 cipher.seal(
-                    encoder.encode(current),
+                    encoder.encode(events),
                     authenticating: Self.authenticatedContext
                 ),
                 to: file

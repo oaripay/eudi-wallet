@@ -24,6 +24,9 @@ final class WalletAppModel: ObservableObject {
     @Published private(set) var pendingExternalURL: URL?
     @Published private(set) var isAuditHistoryLoading = false
     @Published private(set) var hasLoadedAuditHistory = false
+    @Published private(set) var deletingAuditEventIDs: Set<AuditEventID> = []
+    @Published private(set) var isClearingAuditHistory = false
+    @Published private(set) var auditHistoryError: String?
     @Published var theme: OariTheme {
         didSet { userDefaults.set(theme.rawValue, forKey: Self.themePreferenceKey) }
     }
@@ -463,6 +466,54 @@ final class WalletAppModel: ObservableObject {
             hasLoadedAuditHistory = true
         } catch {
             auditEvents = []
+        }
+    }
+
+    @discardableResult
+    func deleteAuditEvent(id: AuditEventID) async -> Bool {
+        guard !deletingAuditEventIDs.contains(id), !isClearingAuditHistory, let repositories else { return false }
+        deletingAuditEventIDs.insert(id)
+        defer { deletingAuditEventIDs.remove(id) }
+        do {
+            try await authenticateForActivityDeletion(reason: "Remove this activity from Oari Wallet")
+            try await repositories.audit.delete(id: id)
+            auditEvents.removeAll { $0.id == id }
+            return true
+        } catch {
+            auditHistoryError = "The activity could not be removed."
+            return false
+        }
+    }
+
+    func clearAllActivity() async {
+        guard !isClearingAuditHistory, deletingAuditEventIDs.isEmpty, let repositories else { return }
+        isClearingAuditHistory = true
+        defer { isClearingAuditHistory = false }
+        do {
+            try await authenticateForActivityDeletion(reason: "Clear all activity from Oari Wallet")
+            try await repositories.audit.deleteAll()
+            auditEvents = []
+        } catch {
+            auditHistoryError = "Activity could not be cleared."
+        }
+    }
+
+    func dismissAuditHistoryError() {
+        auditHistoryError = nil
+    }
+
+    private func authenticateForActivityDeletion(reason: String) async throws {
+        guard isAppLockEnabled else { return }
+        guard let appLockAuthenticator,
+              appLockAuthenticator.availability() != .unavailable else {
+            throw WalletRepositoryError.storageFailure
+        }
+        let generation = backgroundGeneration
+        suppressesInactivePrivacyShield = true
+        defer { suppressesInactivePrivacyShield = false }
+        try await appLockAuthenticator.authenticateAppLock(reason: reason)
+        guard generation == backgroundGeneration, lifecyclePhase != .background else {
+            throw CancellationError()
         }
     }
 
@@ -1079,6 +1130,7 @@ final class WalletAppModel: ObservableObject {
         credentialActionState = .working("Authenticating…")
         let deletionGeneration = backgroundGeneration
         suppressesInactivePrivacyShield = true
+        defer { suppressesInactivePrivacyShield = false }
         do {
             try await appLockAuthenticator.authenticateAppLock(
                 reason: "Remove this credential from Oari Wallet"
