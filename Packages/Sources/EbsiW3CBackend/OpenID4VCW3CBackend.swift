@@ -2897,7 +2897,8 @@ public actor OpenID4VCW3CBackend {
         }
         guard (200..<300).contains(response.statusCode) else {
             if let error = try? JSONDecoder().decode(RemoteOAuthError.self, from: response.body) {
-                throw OpenID4VCBackendError.remoteOAuthError(code: error.error, detail: error.errorDetail)
+                throw OpenID4VCBackendError.remoteOAuthError(code: error.error,
+                detail: error.errorDescription)
             }
             let detail = (try? JSONDecoder().decode(RemoteHTTPError.self, from: response.body))?.detail
                 ?? String(data: response.body, encoding: .utf8)
@@ -3297,10 +3298,10 @@ private struct AuthorizationMetadata: Decodable {
 
 private struct RemoteOAuthError: Decodable {
     let error: String
-    let errorDetail: String?
+    let errorDescription: String?
     enum CodingKeys: String, CodingKey {
         case error
-        case errorDetail = "error_detail"
+        case errorDescription= "error_description"
     }
 }
 

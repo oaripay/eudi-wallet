@@ -2224,7 +2224,8 @@ private actor Draft13OpenID4VCTransport: OpenID4VCHTTPTransport {
         } else if url.path.hasSuffix("/credential") {
             let bodyObject = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
             if bodyObject?["credential_identifier"] as? String == rejectedCredentialIdentifier {
-                response = #"{"error":"invalid_credential_request","error_detail":"identifier rejected"}"#
+                response =
+                #"{"error":"invalid_credential_request","error_description":"identifier rejected"}"#
                 statusCode = 400
             } else {
                 response = plaintextCredentialResponse
