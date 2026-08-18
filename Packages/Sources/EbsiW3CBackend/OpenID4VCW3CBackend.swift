@@ -1602,19 +1602,41 @@ public actor OpenID4VCW3CBackend {
             for (index, candidate) in identifierCandidates.enumerated() {
                 // A proof is a single-use assertion. In particular, identifier fallback
                 // must not replay the proof accepted or rejected for a prior identifier.
+                let proofNonce: String?
+                if let nonceEndpointValue = issuerMetadata.nonceEndpoint {
+                    guard let nonceEndpoint = URL(string: nonceEndpointValue) else {
+                        throw OpenID4VCBackendError.unsafeEndpoint
+                    }
+                    let nonceData = try await successfulRequest(
+                        nonceEndpoint,
+                        method: "POST",
+                        headers: ["Accept": "application/json"],
+                        body: nil,
+                        allowedOrigins: [try Self.origin(of: transaction.issuer)]
+                    )
+                    let response = try Self.decode(
+                        CredentialNonceResponse.self,
+                        from: nonceData,
+                        stage: "credential nonce response"
+                    )
+                    guard !response.nonce.isEmpty else {
+                        throw OpenID4VCBackendError.invalidResponse
+                    }
+                    proofNonce = response.nonce
+                } else {
+                    proofNonce = token.nonce
+                }
                 let proof = try await proofJWT(
                     keyID: holderIdentity.keyID,
                     kid: method,
                     issuer: holderDID,
                     audience: transaction.issuer.absoluteString,
-                    nonce: token.nonce
+                    nonce: proofNonce
                 )
                 let request = CredentialRequest(
                     credentialConfigurationId: transportContract.credentialIdentifierField == .credentialConfigurationID ? configurationID : nil,
                     credentialIdentifier: candidate,
-                    format: transportContract.credentialIdentifierField == .credentialIdentifier
-                        ? nil
-                        : transaction.issuerMetadata.credentialConfigurations[configurationID]?.format,
+                    format: nil,
                     proof: transportContract.proofShape == .draftProof
                         ? ProofValue(proofType: "jwt", jwt: proof)
                         : nil,
@@ -3153,6 +3175,7 @@ private struct IssuerMetadata: Decodable {
     let authorizationServers: [String]?
     let display: [Display]?
     let credentialConfigurations: [String: SupportedConfiguration]
+    let nonceEndpoint: String?
     let notificationEndpoint: String?
     let deferredCredentialEndpoint: String?
     let interactiveAuthorizationEndpoint: String?
@@ -3161,6 +3184,7 @@ private struct IssuerMetadata: Decodable {
         case authorizationServers = "authorization_servers"
         case display
         case credentialConfigurations = "credential_configurations_supported"
+        case nonceEndpoint = "nonce_endpoint"
         case notificationEndpoint = "notification_endpoint"
         case deferredCredentialEndpoint = "deferred_credential_endpoint"
         case interactiveAuthorizationEndpoint = "interactive_authorization_endpoint"
@@ -3175,6 +3199,7 @@ private struct IssuerMetadata: Decodable {
             [String: SupportedConfiguration].self,
             forKey: .credentialConfigurations
         ) ?? [:]
+        nonceEndpoint = try values.decodeIfPresent(String.self, forKey: .nonceEndpoint)
         notificationEndpoint = try values.decodeIfPresent(String.self, forKey: .notificationEndpoint)
         deferredCredentialEndpoint = try values.decodeIfPresent(String.self, forKey: .deferredCredentialEndpoint)
         interactiveAuthorizationEndpoint = try values.decodeIfPresent(String.self, forKey: .interactiveAuthorizationEndpoint)
@@ -3301,11 +3326,16 @@ private struct RemoteOAuthError: Decodable {
     let errorDescription: String?
     enum CodingKeys: String, CodingKey {
         case error
-        case errorDescription= "error_description"
+        case errorDescription = "error_description"
     }
 }
 
 private struct RemoteHTTPError: Decodable { let detail: String? }
+
+private struct CredentialNonceResponse: Decodable {
+    let nonce: String
+    enum CodingKeys: String, CodingKey { case nonce = "c_nonce" }
+}
 
 private struct TokenResponse: Decodable {
     struct AuthorizationDetail: Decodable {

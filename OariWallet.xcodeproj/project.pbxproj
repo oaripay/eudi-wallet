@@ -56,7 +56,6 @@
 
 /* Begin PBXFileReference section */
 		06ABCD0EEEA385B44E0E33E3 /* EudiFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EudiFlowView.swift; sourceTree = "<group>"; };
-		07421C4B64D228DC046D3FC5 /* eudi-wallet */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "eudi-wallet"; path = .; sourceTree = SOURCE_ROOT; };
 		224B56402382ABFCD8039AA8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		23A185124BFC23810801CEC1 /* OariWalletApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OariWalletApp.swift; sourceTree = "<group>"; };
 		286031545802A58CB1A31335 /* WalletUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletUITests.swift; sourceTree = "<group>"; };
@@ -77,6 +76,7 @@
 		AF4CC319F9004EBC89FABAFF /* WalletScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletScreens.swift; sourceTree = "<group>"; };
 		BBDE0CBAB3548D875B281AA6 /* WalletKitIOSIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletKitIOSIntegrationTests.swift; sourceTree = "<group>"; };
 		BC4372382A01471E0DA73729 /* CameraQRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraQRScannerView.swift; sourceTree = "<group>"; };
+		D05DB91852A9414277DCB1E8 /* ios-wallet */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "ios-wallet"; path = .; sourceTree = SOURCE_ROOT; };
 		D2089D4672839DD02C215BFA /* EudiReferenceDemoConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EudiReferenceDemoConfiguration.swift; sourceTree = "<group>"; };
 		D762A0C443533ADDF34A33F6 /* WalletAppDependencies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletAppDependencies.swift; sourceTree = "<group>"; };
 		E7D538593C4F633BF3F4A85A /* EudiReferenceDemoConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EudiReferenceDemoConfigurationTests.swift; sourceTree = "<group>"; };
@@ -196,7 +196,7 @@
 		D071192DCCBFDD3B93B30C32 /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				07421C4B64D228DC046D3FC5 /* eudi-wallet */,
+				D05DB91852A9414277DCB1E8 /* ios-wallet */,
 			);
 			path = Packages;
 			sourceTree = "<group>";

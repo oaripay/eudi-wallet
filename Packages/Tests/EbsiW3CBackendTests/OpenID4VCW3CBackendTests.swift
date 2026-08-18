@@ -707,7 +707,7 @@ struct OpenID4VCW3CBackendTests {
 
     @Test("HTTPS service trust is origin-bound and issuance reaches the credential response")
     func preauthorizedIssuance() async throws {
-        let transport = FixtureOpenID4VCTransport()
+        let transport = FixtureOpenID4VCTransport(advertisesNonceEndpoint: true)
         let keys = FixtureKeyProvider()
         let store = FixtureCredentialStore()
         let validator = FixtureCredentialValidator()
@@ -752,7 +752,17 @@ struct OpenID4VCW3CBackendTests {
         #expect(await validator.calls == 1)
         let requests = await transport.requests
         #expect(requests.contains { $0.url.path == "/token" && String(decoding: $0.body ?? Data(), as: UTF8.self).contains("tx_code=123456") })
-        #expect(requests.contains { $0.url.path == "/credential" && String(decoding: $0.body ?? Data(), as: UTF8.self).contains("proofs") })
+        #expect(requests.contains { $0.url.path == "/nonce" && $0.method == "POST" })
+        let credentialRequest = try #require(requests.last { $0.url.path == "/credential" })
+        let credentialRequestBody = try #require(credentialRequest.body)
+        let body = try #require(
+            JSONSerialization.jsonObject(with: credentialRequestBody) as? [String: Any]
+        )
+        #expect(body["credential_configuration_id"] as? String == "example-vcdm2-jwt-vc")
+        #expect(body["format"] == nil)
+        let proofs = try #require(body["proofs"] as? [String: [String]])
+        let proof = try #require(proofs["jwt"]?.first)
+        #expect(try Self.jwtPayload(proof)["nonce"] as? String == "nonce-from-endpoint")
     }
 
     @Test("Production does not send an HTTPS credential_issuer service identity to signer trust")
@@ -1954,6 +1964,7 @@ private actor FixtureOpenID4VCTransport: OpenID4VCHTTPTransport {
     private let completedCredentialStatus: Int
     private let twoDeferredConfigurations: Bool
     private let secondDeferredFails: Bool
+    private let advertisesNonceEndpoint: Bool
     private var authorizationState: String?
 
     init(
@@ -1973,7 +1984,8 @@ private actor FixtureOpenID4VCTransport: OpenID4VCHTTPTransport {
         legacyPendingError: Bool = false,
         completedCredentialStatus: Int = 200,
         twoDeferredConfigurations: Bool = false,
-        secondDeferredFails: Bool = false
+        secondDeferredFails: Bool = false,
+        advertisesNonceEndpoint: Bool = false
     ) {
         self.presentationFormat = presentationFormat
         self.credentialFormat = credentialFormat
@@ -1992,6 +2004,7 @@ private actor FixtureOpenID4VCTransport: OpenID4VCHTTPTransport {
         self.completedCredentialStatus = completedCredentialStatus
         self.twoDeferredConfigurations = twoDeferredConfigurations
         self.secondDeferredFails = secondDeferredFails
+        self.advertisesNonceEndpoint = advertisesNonceEndpoint
     }
     func send(url: URL, method: String, headers: [String: String], body: Data?) async throws -> OpenID4VCHTTPResponse {
         requests.append(Request(url: url, method: method, headers: headers, body: body))
@@ -2007,13 +2020,18 @@ private actor FixtureOpenID4VCTransport: OpenID4VCHTTPTransport {
             let secondConfiguration = twoDeferredConfigurations
                 ? #", "second-vcdm2-jwt-vc":{"format":"application/vc+jwt","display":[{"name":"Second Credential"}]}"#
                 : ""
+            let nonceEndpoint = advertisesNonceEndpoint
+                ? #""nonce_endpoint":"https://issuer.example/nonce","#
+                : ""
             response = """
-            {"credential_endpoint":"https://issuer.example/credential","deferred_credential_endpoint":"https://issuer.example/deferred","notification_endpoint":"https://issuer.example/notification","authorization_servers":["https://issuer.example"],"credential_configurations_supported":{"example-vcdm2-jwt-vc":{"format":"\(credentialFormat)","display":[{"name":"Legal Person ID","locale":"en","description":"Legal person credential","background_color":"#003366","text_color":"#ffffff","logo":{"uri":"https://assets.example/logo.png","alt_text":"Issuer mark"},"background_image":{"uri":"https://assets.example/background.png"}}]}\(secondConfiguration)}}
+            {"credential_endpoint":"https://issuer.example/credential",\(nonceEndpoint)"deferred_credential_endpoint":"https://issuer.example/deferred","notification_endpoint":"https://issuer.example/notification","authorization_servers":["https://issuer.example"],"credential_configurations_supported":{"example-vcdm2-jwt-vc":{"format":"\(credentialFormat)","display":[{"name":"Legal Person ID","locale":"en","description":"Legal person credential","background_color":"#003366","text_color":"#ffffff","logo":{"uri":"https://assets.example/logo.png","alt_text":"Issuer mark"},"background_image":{"uri":"https://assets.example/background.png"}}]}\(secondConfiguration)}}
             """
         case "/.well-known/oauth-authorization-server":
             response = #"{"authorization_challenge_endpoint":"https://issuer.example/authorize-challenge","token_endpoint":"https://issuer.example/token"}"#
         case "/token":
             response = #"{"access_token":"access","token_type":"Bearer","c_nonce":"nonce-1"}"#
+        case "/nonce":
+            response = #"{"c_nonce":"nonce-from-endpoint"}"#
         case "/authorize-challenge", "/authorize":
             if String(decoding: body ?? Data(), as: UTF8.self).contains("issuer_state") ||
                 (url.query?.contains("issuer_state") == true) {
