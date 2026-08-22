@@ -154,7 +154,7 @@ struct EudiFlowView: View {
             }
 
         case let .openID4VPPresentationRequired(challenge):
-            Label("Present your PID", systemImage: "person.badge.shield.checkmark")
+            Label("Present your Credential", systemImage: "person.badge.shield.checkmark")
                 .font(OariTypography.heading)
             Text("The issuer requires an OpenID4VP presentation before it can issue this W3C credential.")
             Text("DCQL request: \(challenge.dcqlQuery.keys.sorted().joined(separator: ", "))")
